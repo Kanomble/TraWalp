@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "trading-system"
+version = "0.1.0"
+description = "Point-in-time quality/value/opportunity/momentum stock research system"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "alpaca-py>=0.43,<1",
+  "pandas>=2.2,<4",
+  "numpy>=2,<3",
+  "pydantic>=2.10,<3",
+  "python-dotenv>=1,<2",
+  "PyYAML>=6,<7",
+  "requests>=2.32,<3",
+  "exchange-calendars>=4.13,<5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "pytest-cov>=5,<8", "ruff>=0.11,<1"]
+
+[project.scripts]
+trading-system = "trading_system.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/trading_system"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

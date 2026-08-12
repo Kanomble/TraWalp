@@ -206,6 +206,11 @@ tempCodeRunnerFile.py
 # Ruff stuff:
 .ruff_cache/
 
+# Trading-system runtime artifacts
+data/*.sqlite3*
+reports/*.csv
+reports/*.json
+
 # PyPI configuration file
 .pypirc
 

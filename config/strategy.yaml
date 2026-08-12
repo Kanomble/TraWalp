@@ -1,0 +1,146 @@
+universe:
+  min_price: 5.0
+  min_market_cap: 1000000000
+  min_avg_dollar_volume_20d: 10000000
+  exclude_financials: true
+  exclude_reits: true
+  market_data_days: 320
+  market_data_feed: iex
+  market_data_adjustment: all
+peers:
+  min_peer_count: 8
+scores:
+  total:
+    quality: 0.40
+    valuation: 0.30
+    opportunity: 0.20
+    timing: 0.10
+  quality:
+    revenue_growth: 0.20
+    eps_growth: 0.20
+    operating_cash_flow: 0.10
+    operating_margin: 0.15
+    roic: 0.25
+    debt_to_ebitda: 0.10
+  valuation:
+    relative_pe: 0.35
+    relative_ev_ebitda: 0.30
+    fcf_yield: 0.35
+  opportunity:
+    drawdown_52w: 0.50
+    medium_term_weakness: 0.30
+    volatility: 0.20
+  timing:
+    rsi_recovery: 0.30
+    moving_average_recovery: 0.25
+    momentum: 0.25
+    relative_volume: 0.20
+  winsor_lower_quantile: 0.05
+  winsor_upper_quantile: 0.95
+  drawdown_curve:
+    - [-0.80, 0]
+    - [-0.50, 30]
+    - [-0.35, 100]
+    - [-0.20, 90]
+    - [-0.10, 30]
+    - [0.00, 0]
+  operating_margin_curve:
+    - [-0.10, 0]
+    - [0.00, 25]
+    - [0.10, 60]
+    - [0.20, 85]
+    - [0.35, 100]
+  revenue_growth_curve:
+    - [-0.20, 0]
+    - [0.00, 35]
+    - [0.05, 55]
+    - [0.15, 80]
+    - [0.30, 100]
+  eps_growth_curve:
+    - [-0.30, 0]
+    - [0.00, 35]
+    - [0.10, 60]
+    - [0.25, 85]
+    - [0.50, 100]
+  operating_cash_flow_growth_curve:
+    - [-0.20, 0]
+    - [0.00, 40]
+    - [0.10, 65]
+    - [0.25, 85]
+    - [0.50, 100]
+  roic_curve:
+    - [-0.10, 0]
+    - [0.00, 20]
+    - [0.10, 60]
+    - [0.20, 85]
+    - [0.35, 100]
+  relative_multiple_curve:
+    - [0.40, 100]
+    - [0.75, 80]
+    - [1.00, 55]
+    - [1.50, 20]
+    - [2.00, 0]
+  fcf_yield_curve:
+    - [-0.05, 0]
+    - [0.00, 25]
+    - [0.04, 60]
+    - [0.08, 85]
+    - [0.15, 100]
+  debt_to_ebitda_curve:
+    - [0.0, 100]
+    - [1.0, 90]
+    - [2.0, 70]
+    - [3.0, 45]
+    - [5.0, 10]
+    - [8.0, 0]
+  medium_term_weakness_curve:
+    - [-0.60, 0]
+    - [-0.25, 90]
+    - [-0.10, 100]
+    - [0.00, 30]
+    - [0.20, 0]
+  volatility_curve:
+    - [0.00, 25]
+    - [0.15, 75]
+    - [0.30, 100]
+    - [0.50, 50]
+    - [1.00, 0]
+  relative_volume_curve:
+    - [0.50, 0]
+    - [1.00, 40]
+    - [1.20, 70]
+    - [1.50, 100]
+    - [3.00, 100]
+filters:
+  min_quality_score: 65
+  min_valuation_score: 55
+  min_total_score: 70
+  require_positive_ocf: true
+data_quality:
+  min_available_quality_metrics: 4
+  min_available_valuation_metrics: 2
+  min_market_history_days: 300
+technical:
+  rsi_oversold: 30
+  rsi_recovery_min: 35
+  rsi_recovery_max: 60
+  rsi_recovery_lookback: 10
+  sma_slope_lookback: 5
+portfolio:
+  max_positions: 5
+  max_position_pct: 0.20
+  max_sector_positions: 2
+risk:
+  risk_per_trade: 0.01
+  atr_stop_multiple: 2.0
+  max_stop_loss_pct: 0.10
+backtest:
+  slippage_bps: 5
+  commission_bps: 0
+storage:
+  database_path: data/trading_system.sqlite3
+  reports_path: reports
+sec:
+  request_interval_seconds: 0.11
+  timeout_seconds: 30
+  max_retries: 4
