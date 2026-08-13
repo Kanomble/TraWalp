@@ -44,6 +44,7 @@ def calculate_metrics(
     losses = [trade for trade in trades if trade.pnl < 0]
     gross_profit = sum(trade.pnl for trade in wins)
     gross_loss = abs(sum(trade.pnl for trade in losses))
+    elapsed_months = elapsed_days / (365.25 / 12) if elapsed_days > 0 else None
     average_equity = float(equities.mean()) if len(equities) else initial_capital
     traded_notional = sum(
         trade.position_value + trade.exit_price * trade.quantity for trade in trades
@@ -55,6 +56,7 @@ def calculate_metrics(
         sharpe_ratio=sharpe,
         sortino_ratio=sortino,
         win_rate=len(wins) / len(trades) if trades else None,
+        loss_rate=len(losses) / len(trades) if trades else None,
         average_win=(sum(trade.return_pct for trade in wins) / len(wins) if wins else None),
         average_loss=(sum(trade.return_pct for trade in losses) / len(losses) if losses else None),
         profit_factor=(gross_profit / gross_loss if gross_loss > 0 else None),
@@ -63,7 +65,15 @@ def calculate_metrics(
         average_holding_period=(
             sum(trade.holding_days for trade in trades) / len(trades) if trades else None
         ),
+        median_holding_period=(
+            float(np.median([trade.holding_days for trade in trades])) if trades else None
+        ),
+        trades_per_month=(len(trades) / elapsed_months if elapsed_months else None),
         portfolio_turnover=(traded_notional / average_equity if average_equity > 0 else None),
+        trading_costs=sum(trade.transaction_cost for trade in trades),
+        slippage_costs=sum(trade.slippage for trade in trades),
+        best_trade=max((trade.return_pct for trade in trades), default=None),
+        worst_trade=min((trade.return_pct for trade in trades), default=None),
         exposure=(
             sum(point.exposure for point in equity_curve) / len(equity_curve)
             if equity_curve

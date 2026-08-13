@@ -12,7 +12,11 @@ from pathlib import Path
 from alpaca.data.enums import Adjustment, DataFeed
 
 from trading_system.ai.export import NoAICandidatesError, export_ai_candidates
-from trading_system.backtest.engine import BacktestEngine, compare_strategies
+from trading_system.backtest.engine import (
+    BacktestEngine,
+    compare_position_management,
+    compare_strategies,
+)
 from trading_system.backtest.report import (
     export_backtest,
     export_comparison,
@@ -26,7 +30,7 @@ from trading_system.data.market_sessions import effective_trading_session
 from trading_system.data.sec_client import SecClient
 from trading_system.data.sync import DataSynchronizer
 from trading_system.fundamentals.debug import debug_fundamentals
-from trading_system.models.backtest import StrategyVariant
+from trading_system.models.backtest import PositionManagementPreset, StrategyVariant
 from trading_system.strategy.reporting import (
     export_report,
     format_explanation,
@@ -102,11 +106,22 @@ def _parser() -> argparse.ArgumentParser:
         choices=[variant.value for variant in StrategyVariant],
         default=StrategyVariant.FULL.value,
     )
+    backtest.add_argument(
+        "--strategy",
+        choices=[preset.value for preset in PositionManagementPreset],
+        default=PositionManagementPreset.CONFIGURED.value,
+        help="Position-management preset (configured uses position_management from YAML)",
+    )
     comparison = commands.add_parser(
         "compare-strategies", help="Compare strategy variants A/B/C on shared historical screens"
     )
     comparison.add_argument("--start", type=date.fromisoformat, required=True)
     comparison.add_argument("--end", type=date.fromisoformat, required=True)
+    position_comparison = commands.add_parser(
+        "backtest-compare", help="Compare the daily position-management presets"
+    )
+    position_comparison.add_argument("--start", type=date.fromisoformat, required=True)
+    position_comparison.add_argument("--end", type=date.fromisoformat, required=True)
     export_ai = commands.add_parser(
         "export-ai", help="Export ranked screen candidates for manual AI analysis"
     )
@@ -210,12 +225,25 @@ def main(argv: list[str] | None = None) -> int:
                 args.start,
                 args.end,
                 variant=StrategyVariant(args.variant),
+                preset=PositionManagementPreset(args.strategy),
             )
         except ValueError as exc:
             print(f"Backtest refused: {exc}", file=sys.stderr)
             return 1
         paths = export_backtest(result, settings.strategy.storage.reports_path)
         print(format_backtest_summary(result))
+        print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
+        return 0
+    if args.command == "backtest-compare":
+        try:
+            comparison_result = compare_position_management(
+                database, settings.strategy, args.start, args.end
+            )
+        except ValueError as exc:
+            print(f"Position-management comparison refused: {exc}", file=sys.stderr)
+            return 1
+        paths = export_comparison(comparison_result, settings.strategy.storage.reports_path)
+        print(format_comparison_table(comparison_result))
         print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
         return 0
     if args.command == "compare-strategies":

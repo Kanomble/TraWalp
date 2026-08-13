@@ -65,7 +65,9 @@ def test_explain_cli_reports_unknown_local_symbol(tmp_path, monkeypatch, capsys)
     assert "MISSING" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("command", ["backtest", "compare-strategies"])
+@pytest.mark.parametrize(
+    "command", ["backtest", "compare-strategies", "backtest-compare"]
+)
 def test_backtest_cli_rejects_invalid_period_clearly(
     tmp_path, monkeypatch, capsys, command
 ) -> None:

@@ -14,6 +14,16 @@ class StrategyVariant(StrEnum):
     FULL = "C"
 
 
+class PositionManagementPreset(StrEnum):
+    CONFIGURED = "configured"
+    LEGACY = "legacy"
+    DYNAMIC_HOLD = "dynamic-hold"
+    TAKE_PROFIT = "take-profit"
+    ATR_TRAILING = "atr-trailing"
+    PARTIAL_PROFIT = "partial-profit"
+    INTRADAY_DYNAMIC = "intraday-dynamic"
+
+
 class BacktestTrade(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -27,8 +37,8 @@ class BacktestTrade(BaseModel):
     exit_price: float = Field(gt=0)
     quantity: float = Field(gt=0)
     position_value: float = Field(gt=0)
-    stop_price: float = Field(gt=0)
-    target_price: float = Field(gt=0)
+    stop_price: float | None = Field(default=None, gt=0)
+    target_price: float | None = Field(default=None, gt=0)
     quality_score: float
     valuation_score: float
     opportunity_score: float | None = None
@@ -41,6 +51,18 @@ class BacktestTrade(BaseModel):
     transaction_cost: float = Field(ge=0)
     holding_days: int = Field(ge=1)
     strategy_variant: StrategyVariant
+    entry_score: float | None = None
+    exit_score: float | None = None
+    gross_pnl: float | None = None
+    net_pnl: float | None = None
+    highest_price_during_trade: float | None = Field(default=None, gt=0)
+    lowest_price_during_trade: float | None = Field(default=None, gt=0)
+    maximum_favorable_excursion: float | None = None
+    maximum_adverse_excursion: float | None = None
+    fees: float | None = Field(default=None, ge=0)
+    slippage_cost: float | None = Field(default=None, ge=0)
+    is_partial_exit: bool = False
+    partial_level: int | None = Field(default=None, ge=0)
 
 
 class EquityPoint(BaseModel):
@@ -67,13 +89,20 @@ class PerformanceMetrics(BaseModel):
     sharpe_ratio: float | None = None
     sortino_ratio: float | None = None
     win_rate: float | None = None
+    loss_rate: float | None = None
     average_win: float | None = None
     average_loss: float | None = None
     profit_factor: float | None = None
     expectancy_per_trade: float | None = None
     number_of_trades: int = Field(ge=0)
     average_holding_period: float | None = None
+    median_holding_period: float | None = None
+    trades_per_month: float | None = None
     portfolio_turnover: float | None = None
+    trading_costs: float = Field(default=0, ge=0)
+    slippage_costs: float = Field(default=0, ge=0)
+    best_trade: float | None = None
+    worst_trade: float | None = None
     exposure: float | None = None
     end_of_day_exposure: float | None = None
 
@@ -100,6 +129,7 @@ class BacktestResult(BaseModel):
     actual_end: date
     generated_at: str
     strategy_variant: StrategyVariant
+    position_management_preset: PositionManagementPreset = PositionManagementPreset.LEGACY
     initial_capital: float
     configuration: dict
     metrics: PerformanceMetrics
@@ -111,6 +141,7 @@ class BacktestResult(BaseModel):
     performance_diagnostics: dict = Field(default_factory=dict)
     annualized_metrics_reliable: bool = False
     warnings: tuple[str, ...] = ()
+    exits_by_reason: dict[str, int] = Field(default_factory=dict)
 
 
 class StrategyComparison(BaseModel):
@@ -123,4 +154,5 @@ class StrategyComparison(BaseModel):
     generated_at: str
     variants: tuple[BacktestResult, ...]
     shared_screen_sessions: int = Field(ge=0)
+    comparison_kind: str = "score_variants"
     warnings: tuple[str, ...] = ()

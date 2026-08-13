@@ -9,14 +9,19 @@ import tempfile
 from contextlib import suppress
 from pathlib import Path
 
-from trading_system.models.backtest import BacktestResult, PerformanceMetrics, StrategyComparison
+from trading_system.models.backtest import (
+    BacktestResult,
+    BacktestTrade,
+    PerformanceMetrics,
+    StrategyComparison,
+)
 
 
 def export_backtest(result: BacktestResult, output_directory: Path) -> dict[str, Path]:
     output_directory.mkdir(parents=True, exist_ok=True)
     stem = (
         f"backtest_{result.requested_start.isoformat()}_{result.requested_end.isoformat()}_"
-        f"{result.strategy_variant.value}"
+        f"{result.strategy_variant.value}_{result.position_management_preset.value}"
     )
     paths = {
         "json": output_directory / f"{stem}.json",
@@ -33,14 +38,22 @@ def export_backtest(result: BacktestResult, output_directory: Path) -> dict[str,
 
 def export_comparison(comparison: StrategyComparison, output_directory: Path) -> dict[str, Path]:
     output_directory.mkdir(parents=True, exist_ok=True)
-    stem = f"strategy_comparison_{comparison.requested_start}_{comparison.requested_end}"
+    stem = (
+        f"{comparison.comparison_kind}_comparison_"
+        f"{comparison.requested_start}_{comparison.requested_end}"
+    )
     paths = {"json": output_directory / f"{stem}.json", "csv": output_directory / f"{stem}.csv"}
     _atomic_text(paths["json"], json.dumps(comparison.model_dump(mode="json"), indent=2))
     rows = []
     for result in comparison.variants:
         metrics = result.metrics.model_dump(mode="json")
-        rows.append({"variant": result.strategy_variant.value, **metrics})
-    _atomic_csv(paths["csv"], rows, ["variant", *PerformanceMetrics.model_fields])
+        label = (
+            result.position_management_preset.value
+            if comparison.comparison_kind == "position_management"
+            else result.strategy_variant.value
+        )
+        rows.append({"strategy": label, **metrics})
+    _atomic_csv(paths["csv"], rows, ["strategy", *PerformanceMetrics.model_fields])
     return paths
 
 
@@ -50,7 +63,8 @@ def format_backtest_summary(result: BacktestResult) -> str:
         _percent(result.benchmark.total_return) if result.benchmark.available else "unavailable"
     )
     lines = [
-        f"TraWalp backtest variant {result.strategy_variant.value}",
+        f"TraWalp backtest variant {result.strategy_variant.value} "
+        f"/ position management {result.position_management_preset.value}",
         f"Period: {result.actual_start} through {result.actual_end}",
         f"Sessions: {len(result.equity_curve)} | Trades: {metrics.number_of_trades}",
         f"Return: {_percent(metrics.total_return)} | CAGR: {_percent(metrics.cagr)}",
@@ -59,6 +73,11 @@ def format_backtest_summary(result: BacktestResult) -> str:
         f"Win rate: {_percent(metrics.win_rate)} | Profit factor: {_number(metrics.profit_factor)}",
         f"SPY return: {benchmark}",
     ]
+    if result.exits_by_reason:
+        lines.append("Exit summary:")
+        lines.extend(
+            f"  {reason:<24} {count}" for reason, count in result.exits_by_reason.items()
+        )
     if result.warnings:
         lines.append("Warnings:")
         lines.extend(f"  - {warning}" for warning in result.warnings)
@@ -66,12 +85,17 @@ def format_backtest_summary(result: BacktestResult) -> str:
 
 
 def format_comparison_table(comparison: StrategyComparison) -> str:
-    header = "Variant  Return    CAGR      Sharpe   MaxDD     WinRate   Trades  PF"
+    header = "Strategy          Return    CAGR      Sharpe   MaxDD     WinRate   Trades  PF"
     rows = [header]
     for result in comparison.variants:
         metric = result.metrics
+        label = (
+            result.position_management_preset.value
+            if comparison.comparison_kind == "position_management"
+            else result.strategy_variant.value
+        )
         rows.append(
-            f"{result.strategy_variant.value:<8} "
+            f"{label:<17} "
             f"{_percent(metric.total_return):<9} "
             f"{_percent(metric.cagr):<9} "
             f"{_number(metric.sharpe_ratio):<8} "
@@ -114,32 +138,7 @@ def _atomic_csv(path: Path, rows: list[dict], fields: list[str]) -> None:
 
 
 def _trade_fields() -> list[str]:
-    return [
-        "symbol",
-        "signal_date",
-        "entry_date",
-        "entry_reference_price",
-        "entry_price",
-        "exit_date",
-        "exit_reference_price",
-        "exit_price",
-        "quantity",
-        "position_value",
-        "stop_price",
-        "target_price",
-        "quality_score",
-        "valuation_score",
-        "opportunity_score",
-        "timing_score",
-        "total_score",
-        "exit_reason",
-        "pnl",
-        "return_pct",
-        "slippage",
-        "transaction_cost",
-        "holding_days",
-        "strategy_variant",
-    ]
+    return list(BacktestTrade.model_fields)
 
 
 def _equity_fields() -> list[str]:

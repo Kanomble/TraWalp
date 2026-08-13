@@ -6,7 +6,16 @@ import pytest
 from trading_system.backtest import engine as engine_module
 from trading_system.backtest.engine import BacktestEngine, HistoricalScreenSource
 from trading_system.backtest.report import export_backtest, export_comparison
-from trading_system.config import load_settings
+from trading_system.config import (
+    MaxHoldConfig,
+    PartialTakeProfitConfig,
+    PartialTakeProfitLevel,
+    PositionManagementConfig,
+    SignalDecayConfig,
+    StopLossConfig,
+    TakeProfitConfig,
+    load_settings,
+)
 from trading_system.data.database import Database
 from trading_system.models.backtest import StrategyVariant
 from trading_system.models.fundamentals import CompanyIdentity, FundamentalFact, FundamentalMetrics
@@ -397,3 +406,109 @@ def test_backtest_reports_export_structured_json_trades_and_equity(tmp_path) -> 
     assert '"strategy"' in paths["json"].read_text(encoding="utf-8")
     assert "entry_reference_price" in paths["trades"].read_text(encoding="utf-8")
     assert "portfolio_equity" in paths["equity"].read_text(encoding="utf-8")
+
+
+def test_dynamic_hold_can_remain_open_beyond_ten_sessions(tmp_path) -> None:
+    sessions = [
+        date(2024, 1, 2),
+        date(2024, 1, 3),
+        date(2024, 1, 4),
+        date(2024, 1, 5),
+        date(2024, 1, 8),
+        date(2024, 1, 9),
+        date(2024, 1, 10),
+        date(2024, 1, 11),
+        date(2024, 1, 12),
+        date(2024, 1, 16),
+        date(2024, 1, 17),
+        date(2024, 1, 18),
+    ]
+    database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
+    strategy = _config(max_holding_days=10).model_copy(
+        update={
+            "position_management": PositionManagementConfig(
+                stop_loss=StopLossConfig(enabled=False),
+                take_profit=TakeProfitConfig(enabled=False),
+                max_hold=MaxHoldConfig(enabled=False, days=10, mode="disabled"),
+            )
+        }
+    )
+    result = BacktestEngine(
+        database, strategy, screen_source=FixtureScreens({sessions[0]: (_record(),)})
+    ).run(sessions[0], sessions[-1])
+
+    assert result.trades[0].holding_days > 10
+    assert result.trades[0].exit_reason == "end_of_backtest"
+
+
+def test_signal_exit_can_reenter_only_through_fresh_ranking(tmp_path) -> None:
+    sessions = [date(2024, 1, day) for day in (2, 3, 4, 5)]
+    database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
+    weak = _record(quality=40, valuation=40, opportunity=40, timing=40)
+    weak = weak.model_copy(
+        update={
+            "technical": weak.technical.model_copy(
+                update={"price": 90, "sma20": 100, "rsi_recovery": False, "momentum5": -0.1}
+            )
+        }
+    )
+    strategy = _config().model_copy(
+        update={
+            "position_management": PositionManagementConfig(
+                stop_loss=StopLossConfig(enabled=False),
+                take_profit=TakeProfitConfig(enabled=False),
+                signal_decay=SignalDecayConfig(enabled=True, minimum_score_ratio=0.75),
+                max_hold=MaxHoldConfig(enabled=False, days=10, mode="disabled"),
+            )
+        }
+    )
+    source = FixtureScreens(
+        {
+            sessions[0]: (_record(),),
+            sessions[1]: (weak,),
+            sessions[2]: (_record(),),
+        }
+    )
+
+    result = BacktestEngine(database, strategy, screen_source=source).run(
+        sessions[0], sessions[-1]
+    )
+
+    assert [trade.symbol for trade in result.trades] == ["AAA", "AAA"]
+    assert result.trades[0].exit_reason == "signal_decay"
+    assert result.trades[1].entry_date == sessions[-1]
+
+
+def test_partial_exit_applies_cost_model_once_per_fill_and_leaves_remainder(tmp_path) -> None:
+    sessions = [date(2024, 1, day) for day in (2, 3, 4)]
+    database = _database(
+        tmp_path,
+        [
+            _bar("AAA", sessions[0]),
+            _bar("AAA", sessions[1], high="102", low="99", close="101"),
+            _bar("AAA", sessions[2], close="101"),
+        ],
+    )
+    strategy = _config(slippage_bps=5, commission_bps=10).model_copy(
+        update={
+            "position_management": PositionManagementConfig(
+                stop_loss=StopLossConfig(enabled=False),
+                take_profit=TakeProfitConfig(enabled=False),
+                partial_take_profit=PartialTakeProfitConfig(
+                    enabled=True,
+                    levels=[PartialTakeProfitLevel(profit=0.015, sell_fraction=0.5)],
+                ),
+                max_hold=MaxHoldConfig(enabled=False, days=10, mode="disabled"),
+            )
+        }
+    )
+    result = BacktestEngine(
+        database, strategy, screen_source=FixtureScreens({sessions[0]: (_record(),)})
+    ).run(sessions[0], sessions[-1])
+
+    assert len(result.trades) == 2
+    partial, remainder = result.trades
+    assert partial.is_partial_exit is True
+    assert partial.quantity == pytest.approx(remainder.quantity)
+    assert partial.exit_reason == "partial_take_profit"
+    assert partial.transaction_cost > 0 and remainder.transaction_cost > 0

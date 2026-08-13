@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Protocol
 
+import pandas as pd
+
 from trading_system.backtest.features import HistoricalFeatureScreenSource
 from trading_system.backtest.metrics import calculate_metrics, maximum_drawdown
-from trading_system.config import StrategyConfig
+from trading_system.backtest.position_manager import (
+    ExitReason,
+    PositionAction,
+    PositionDecision,
+    PositionManager,
+    PositionState,
+)
+from trading_system.backtest.presets import position_management_preset
+from trading_system.config import PositionManagementConfig, StrategyConfig
 from trading_system.data.database import Database
 from trading_system.data.market_sessions import trading_sessions_between
 from trading_system.models.backtest import (
@@ -18,12 +29,16 @@ from trading_system.models.backtest import (
     BacktestTrade,
     BenchmarkResult,
     EquityPoint,
+    PositionManagementPreset,
     StrategyComparison,
     StrategyVariant,
 )
 from trading_system.models.market_data import DailyBar
 from trading_system.models.screening import ScreenRecord, ScreenReport
 from trading_system.strategy.screener import Screener
+from trading_system.technical.indicators import atr as calculate_atr
+
+LOGGER = logging.getLogger(__name__)
 
 SCORE_FILTER_EXCLUSIONS = {
     "quality_score_unavailable",
@@ -38,7 +53,8 @@ BACKTEST_WARNINGS = (
     "results may have survivorship bias",
     "unresolved ticker identity conflicts are conservatively excluded for every historical date",
     "daily bars are provider-adjusted; no additional split adjustment is applied",
-    "daily OHLC cannot order an intraday stop and target; the stop is assumed first",
+    "daily OHLC cannot order intrabar events; pre-bar stops are evaluated first and "
+    "new trailing highs affect only the next bar",
 )
 
 
@@ -81,30 +97,6 @@ class _PendingEntry:
     variant: StrategyVariant
 
 
-@dataclass
-class _Position:
-    symbol: str
-    signal_date: date
-    entry_date: date
-    entry_reference_price: float
-    entry_price: float
-    quantity: float
-    position_value: float
-    stop_price: float
-    target_price: float
-    entry_commission: float
-    entry_slippage: float
-    quality_score: float
-    valuation_score: float
-    opportunity_score: float | None
-    timing_score: float | None
-    total_score: float
-    sector: str
-    variant: StrategyVariant
-    last_price: float
-    holding_days: int = 0
-
-
 class BacktestEngine:
     def __init__(
         self,
@@ -118,6 +110,13 @@ class BacktestEngine:
         self.config = config
         self.screen_source = screen_source
         self.clock = clock
+        self.position_management = config.position_management
+        self.position_manager = PositionManager(
+            self.position_management,
+            slippage_bps=config.backtest.slippage_bps,
+            commission_bps=config.backtest.commission_bps,
+        )
+        self._legacy_reason_compat = False
 
     def run(
         self,
@@ -125,9 +124,31 @@ class BacktestEngine:
         end: date,
         *,
         variant: StrategyVariant = StrategyVariant.FULL,
+        preset: PositionManagementPreset = PositionManagementPreset.CONFIGURED,
     ) -> BacktestResult:
         if start > end:
             raise ValueError("Backtest start must not be after end")
+        self.position_management = position_management_preset(
+            self.config.position_management,
+            preset,
+            legacy_max_holding_days=self.config.backtest.max_holding_days,
+        )
+        if self.position_management.bar_timeframe != "1d":
+            raise ValueError(
+                f"Position timeframe {self.position_management.bar_timeframe!r} requires "
+                "historical intraday storage; this database currently contains DailyBar data only"
+            )
+        self.position_manager = PositionManager(
+            self.position_management,
+            slippage_bps=self.config.backtest.slippage_bps,
+            commission_bps=self.config.backtest.commission_bps,
+        )
+        self._legacy_reason_compat = (
+            preset is PositionManagementPreset.CONFIGURED
+            and _uses_legacy_position_defaults(
+                self.config.position_management, self.config.backtest.max_holding_days
+            )
+        )
         official_sessions = set(trading_sessions_between(start, end))
         sessions = [
             session
@@ -142,11 +163,12 @@ class BacktestEngine:
             )
 
         cash = float(self.config.backtest.initial_capital)
-        positions: dict[str, _Position] = {}
+        positions: dict[str, PositionState] = {}
         pending: list[_PendingEntry] = []
         trades: list[BacktestTrade] = []
         curve: list[EquityPoint] = []
         skipped: Counter[str] = Counter()
+        closed_dates: dict[str, date] = {}
         screen_source = self.screen_source or HistoricalFeatureScreenSource(
             self.database, self.config, sessions[0], sessions[-2]
         )
@@ -169,17 +191,21 @@ class BacktestEngine:
             for position in positions.values():
                 position.holding_days += 1
 
-            # 1. Existing positions can gap through a stop/target at the session open.
+            # 1. Existing positions can gap through levels fixed before this session.
             for symbol in list(positions):
                 bar = bars.get(symbol)
                 if bar is None:
                     continue
                 position = positions[symbol]
-                reference, reason = _open_exit(position, bar)
-                if reference is not None:
-                    cash, trade = self._close(position, session, reference, reason, cash)
+                decision = self.position_manager.evaluate_open(position, bar)
+                if decision.action is not PositionAction.HOLD:
+                    cash, trade, closed = self._execute_decision(
+                        position, session, decision, cash, bar=bar
+                    )
                     trades.append(trade)
-                    del positions[symbol]
+                    if closed:
+                        closed_dates[symbol] = session
+                        del positions[symbol]
 
             # 2. Signals from the prior close execute only now, at this session's open.
             for order in sorted(
@@ -203,31 +229,59 @@ class BacktestEngine:
                 )
             pending = []
 
-            # 3. Intraday stops/targets use daily OHLC; simultaneous hits are stop-first.
+            # 3. Daily OHLC monitoring uses stop-first priority and pre-bar trail levels.
             for symbol in list(positions):
                 bar = bars.get(symbol)
                 if bar is None:
                     continue
                 position = positions[symbol]
                 position.last_price = float(bar.close)
-                reference, reason = _intraday_exit(position, bar)
-                if reference is not None:
-                    cash, trade = self._close(position, session, reference, reason, cash)
+                while True:
+                    decision = self.position_manager.evaluate_intrabar(position, bar)
+                    if decision.action is PositionAction.HOLD:
+                        break
+                    cash, trade, closed = self._execute_decision(
+                        position, session, decision, cash, bar=bar
+                    )
                     trades.append(trade)
-                    del positions[symbol]
+                    if closed:
+                        closed_dates[symbol] = session
+                        del positions[symbol]
+                        break
+                if symbol in positions:
+                    next_atr = self._atr_as_of(
+                        symbol, session, self.position_management.atr_trailing_stop.atr_period
+                    )
+                    self.position_manager.update_after_bar(
+                        position, bar, next_atr=next_atr
+                    )
 
-            # 4. Time exits occur at this completed session's close.
+            # 4. Close-based score, rotation and time rules use this completed session only.
+            report = None if final_session else screen_source.screen(session)
+            records = {record.symbol: record for record in report.records} if report else {}
+            best_symbol, best_score = self._best_candidate(report, variant, positions)
             for symbol in list(positions):
                 position = positions[symbol]
                 bar = bars.get(symbol)
-                if (
-                    bar is not None
-                    and position.holding_days >= self.config.backtest.max_holding_days
-                ):
-                    cash, trade = self._close(
-                        position, session, float(bar.close), "time_exit", cash
+                if bar is None:
+                    continue
+                record = records.get(symbol)
+                current_score = (
+                    _variant_score_value(record, variant, self.config) if record else None
+                )
+                decision = self.position_manager.evaluate_close(
+                    position,
+                    float(bar.close),
+                    current_score=current_score,
+                    best_candidate_symbol=best_symbol,
+                    best_candidate_score=best_score,
+                )
+                if decision.action is PositionAction.SELL:
+                    cash, trade, _ = self._execute_decision(
+                        position, session, decision, cash, bar=bar, exit_score=current_score
                     )
                     trades.append(trade)
+                    closed_dates[symbol] = session
                     del positions[symbol]
 
             # 5. The last session liquidates at its close; no new signal is queued.
@@ -241,19 +295,26 @@ class BacktestEngine:
                             skipped["missing_final_exit_bar"] += 1
                             continue
                         bar = history[-1]
-                    cash, trade = self._close(
+                    decision = PositionDecision(
+                        action=PositionAction.SELL,
+                        reason=ExitReason.END_OF_BACKTEST,
+                        reference_price=float(bar.close),
+                    )
+                    cash, trade, _ = self._execute_decision(
                         position,
                         bar.timestamp.date(),
-                        float(bar.close),
-                        "end_of_backtest",
+                        decision,
                         cash,
+                        bar=bar,
                     )
                     trades.append(trade)
                     del positions[symbol]
             else:
-                # 6. The point-in-time screen is calculated only after the close.
-                report = screen_source.screen(session)
-                pending = self._entry_orders(report, variant, positions, skipped)
+                # 6. Exited symbols re-enter only by winning this normal PIT ranking.
+                assert report is not None
+                pending = self._entry_orders(
+                    report, variant, positions, skipped, closed_dates=closed_dates
+                )
 
             market_value = sum(
                 position.quantity * position.last_price for position in positions.values()
@@ -310,8 +371,9 @@ class BacktestEngine:
             actual_end=sessions[-1],
             generated_at=self.clock().isoformat(),
             strategy_variant=variant,
+            position_management_preset=preset,
             initial_capital=float(self.config.backtest.initial_capital),
-            configuration=self._configuration_snapshot(variant),
+            configuration=self._configuration_snapshot(variant, preset),
             metrics=calculate_metrics(curve, trades, float(self.config.backtest.initial_capital)),
             benchmark=benchmark,
             trades=tuple(trades),
@@ -331,14 +393,17 @@ class BacktestEngine:
             performance_diagnostics=performance_diagnostics,
             annualized_metrics_reliable=annualized_reliable,
             warnings=tuple(warnings),
+            exits_by_reason=dict(sorted(Counter(trade.exit_reason for trade in trades).items())),
         )
 
     def _entry_orders(
         self,
         report: ScreenReport,
         variant: StrategyVariant,
-        positions: dict[str, _Position],
+        positions: dict[str, PositionState],
         skipped: Counter[str],
+        *,
+        closed_dates: dict[str, date] | None = None,
     ) -> list[_PendingEntry]:
         capacity = self.config.portfolio.max_positions - len(positions)
         if capacity <= 0:
@@ -347,6 +412,9 @@ class BacktestEngine:
         candidates: list[_PendingEntry] = []
         for record in report.records:
             if record.symbol in occupied:
+                continue
+            if not self._reentry_allowed(record.symbol, report.as_of, closed_dates or {}):
+                skipped["reentry_cooldown"] += 1
                 continue
             score, reason = _variant_entry_score(record, variant, self.config)
             if score is None:
@@ -374,14 +442,46 @@ class BacktestEngine:
                 break
         return orders
 
+    def _best_candidate(
+        self,
+        report: ScreenReport | None,
+        variant: StrategyVariant,
+        positions: dict[str, PositionState],
+    ) -> tuple[str | None, float | None]:
+        if report is None:
+            return None, None
+        ranked: list[tuple[float, str]] = []
+        for record in report.records:
+            if record.symbol in positions:
+                continue
+            score, _ = _variant_entry_score(record, variant, self.config)
+            if score is not None:
+                ranked.append((score, record.symbol))
+        if not ranked:
+            return None, None
+        ranked.sort(key=lambda item: (-item[0], item[1]))
+        score, symbol = ranked[0]
+        return symbol, score
+
+    def _reentry_allowed(
+        self, symbol: str, signal_date: date, closed_dates: dict[str, date]
+    ) -> bool:
+        previous_exit = closed_dates.get(symbol)
+        if previous_exit is None:
+            return True
+        rule = self.position_management.reentry
+        if not rule.enabled:
+            return False
+        return (signal_date - previous_exit).days >= rule.cooldown_days
+
     def _open_position(
         self,
         order: _PendingEntry,
         bar: DailyBar,
         session_bars: dict[str, DailyBar],
-        positions: dict[str, _Position],
+        positions: dict[str, PositionState],
         cash: float,
-    ) -> tuple[_Position | None, float, str | None]:
+    ) -> tuple[PositionState | None, float, str | None]:
         if len(positions) >= self.config.portfolio.max_positions:
             return None, cash, "max_positions"
         record = order.record
@@ -389,15 +489,24 @@ class BacktestEngine:
         sector_count = sum(position.sector == sector for position in positions.values())
         if sector_count >= self.config.portfolio.max_sector_positions:
             return None, cash, "max_sector_positions"
-        atr = record.technical.atr14
-        if atr is None or atr <= 0:
-            return None, cash, "invalid_atr"
+        atr_period = self.position_management.atr_trailing_stop.atr_period
+        atr = (
+            record.technical.atr14
+            if atr_period == 14
+            else self._atr_as_of(record.symbol, order.signal_date, atr_period)
+        )
         reference = float(bar.open)
         fill = _buy_fill(reference, self.config.backtest.slippage_bps)
-        stop_distance = min(
-            atr * self.config.risk.atr_stop_multiple,
-            fill * self.config.risk.max_stop_loss_pct,
-        )
+        fixed_stop_percent = self.position_management.stop_loss.percent
+        if self.position_management.stop_loss.enabled and fixed_stop_percent is not None:
+            stop_distance = fill * fixed_stop_percent
+        elif atr is not None and atr > 0:
+            stop_distance = min(
+                atr * self.config.risk.atr_stop_multiple,
+                fill * self.config.risk.max_stop_loss_pct,
+            )
+        else:
+            return None, cash, "invalid_atr"
         if stop_distance <= 0 or stop_distance >= fill:
             return None, cash, "invalid_stop_distance"
         open_equity = cash + sum(
@@ -421,44 +530,103 @@ class BacktestEngine:
         cost = notional + commission
         if cost > cash + 1e-8:
             return None, cash, "insufficient_cash"
-        position = _Position(
+        take_profit_percent = (
+            self.position_management.take_profit.percent
+            if self.position_management.take_profit.percent is not None
+            else self.config.backtest.profit_target_pct
+        )
+        position = PositionState(
             symbol=record.symbol,
             signal_date=order.signal_date,
             entry_date=bar.timestamp.date(),
             entry_reference_price=reference,
             entry_price=fill,
             quantity=quantity,
+            initial_quantity=quantity,
             position_value=notional,
-            stop_price=fill - stop_distance,
-            target_price=fill * (1 + self.config.backtest.profit_target_pct),
+            stop_price=(
+                fill - stop_distance if self.position_management.stop_loss.enabled else None
+            ),
+            target_price=(
+                fill * (1 + take_profit_percent)
+                if self.position_management.take_profit.enabled
+                else None
+            ),
             entry_commission=commission,
             entry_slippage=(fill - reference) * quantity,
             quality_score=float(record.scores.quality.score),  # validated by entry filter
             valuation_score=float(record.scores.valuation.score),
             opportunity_score=record.scores.opportunity.score,
             timing_score=record.scores.timing.score,
-            total_score=order.variant_score,
+            entry_score=order.variant_score,
             sector=sector,
             variant=order.variant,
             last_price=fill,
+            current_atr=atr,
             holding_days=1,
         )
+        self.position_manager.activate_at_open(position, fill)
         return position, cash - cost, None
 
-    def _close(
+    def _execute_decision(
         self,
-        position: _Position,
+        position: PositionState,
         exit_date: date,
-        reference: float,
-        reason: str,
+        decision: PositionDecision,
         cash: float,
-    ) -> tuple[float, BacktestTrade]:
+        *,
+        bar: DailyBar | None = None,
+        exit_score: float | None = None,
+    ) -> tuple[float, BacktestTrade, bool]:
+        if decision.reason is None or decision.reference_price is None:
+            raise ValueError("Sell decision requires reason and reference price")
+        reference = decision.reference_price
+        quantity = min(decision.quantity or position.quantity, position.quantity)
+        if quantity <= 0:
+            raise ValueError("Sell quantity must be positive")
+        before_quantity = position.quantity
+        fraction = quantity / before_quantity
+        allocated_value = position.position_value * fraction
+        allocated_entry_commission = position.entry_commission * fraction
+        allocated_entry_slippage = position.entry_slippage * fraction
+
+        if bar is not None and decision.reason in {
+            ExitReason.STOP_LOSS,
+            ExitReason.TRAILING_STOP,
+            ExitReason.ATR_TRAILING_STOP,
+        }:
+            position.highest_price_since_entry = max(
+                position.highest_price_since_entry, float(bar.open), reference
+            )
+            position.lowest_price_since_entry = min(
+                position.lowest_price_since_entry, float(bar.open), reference
+            )
+        elif bar is not None and decision.reason in {
+            ExitReason.TAKE_PROFIT,
+            ExitReason.PARTIAL_TAKE_PROFIT,
+        }:
+            position.highest_price_since_entry = max(
+                position.highest_price_since_entry, reference
+            )
+            position.lowest_price_since_entry = min(
+                position.lowest_price_since_entry, float(bar.low)
+            )
+
         fill = _sell_fill(reference, self.config.backtest.slippage_bps)
-        proceeds = fill * position.quantity
+        proceeds = fill * quantity
         exit_commission = proceeds * self.config.backtest.commission_bps / 10_000
         cash += proceeds - exit_commission
-        pnl = proceeds - exit_commission - position.position_value - position.entry_commission
-        slippage = position.entry_slippage + (reference - fill) * position.quantity
+        gross_pnl = proceeds - allocated_value
+        pnl = gross_pnl - exit_commission - allocated_entry_commission
+        slippage = allocated_entry_slippage + (reference - fill) * quantity
+        transaction_cost = allocated_entry_commission + exit_commission
+        reason = decision.reason.value
+        if decision.reason is ExitReason.MAX_HOLD and self._legacy_reason_compat:
+            reason = "time_exit"
+        elif decision.reason is ExitReason.TAKE_PROFIT and self._legacy_reason_compat:
+            reason = "profit_target"
+        denominator = allocated_value + allocated_entry_commission
+        closed = quantity >= before_quantity - 1e-12
         trade = BacktestTrade(
             symbol=position.symbol,
             signal_date=position.signal_date,
@@ -468,24 +636,73 @@ class BacktestEngine:
             exit_date=exit_date,
             exit_reference_price=reference,
             exit_price=fill,
-            quantity=position.quantity,
-            position_value=position.position_value,
+            quantity=quantity,
+            position_value=allocated_value,
             stop_price=position.stop_price,
             target_price=position.target_price,
             quality_score=position.quality_score,
             valuation_score=position.valuation_score,
             opportunity_score=position.opportunity_score,
             timing_score=position.timing_score,
-            total_score=position.total_score,
+            total_score=position.entry_score,
             exit_reason=reason,
             pnl=pnl,
-            return_pct=pnl / (position.position_value + position.entry_commission),
+            return_pct=pnl / denominator,
             slippage=slippage,
-            transaction_cost=position.entry_commission + exit_commission,
+            transaction_cost=transaction_cost,
             holding_days=max(position.holding_days, 1),
             strategy_variant=position.variant,
+            entry_score=position.entry_score,
+            exit_score=exit_score if exit_score is not None else position.current_score,
+            gross_pnl=gross_pnl,
+            net_pnl=pnl,
+            highest_price_during_trade=position.highest_price_since_entry,
+            lowest_price_during_trade=position.lowest_price_since_entry,
+            maximum_favorable_excursion=(
+                position.highest_price_since_entry / position.entry_price - 1
+            ),
+            maximum_adverse_excursion=(
+                position.lowest_price_since_entry / position.entry_price - 1
+            ),
+            fees=transaction_cost,
+            slippage_cost=slippage,
+            is_partial_exit=not closed,
+            partial_level=decision.partial_level,
         )
-        return cash, trade
+        position.realized_profit += pnl
+        if decision.partial_level is not None:
+            position.partial_exit_levels_triggered.add(decision.partial_level)
+        if not closed:
+            position.quantity -= quantity
+            position.position_value -= allocated_value
+            position.entry_commission -= allocated_entry_commission
+            position.entry_slippage -= allocated_entry_slippage
+        LOGGER.info(
+            "POSITION EXIT symbol=%s reason=%s entry=%.4f exit=%.4f return=%.2f%% "
+            "holding_days=%d quantity=%.6f partial=%s",
+            position.symbol,
+            reason,
+            position.entry_price,
+            fill,
+            trade.return_pct * 100,
+            trade.holding_days,
+            quantity,
+            not closed,
+        )
+        return cash, trade, closed
+
+    def _atr_as_of(self, symbol: str, session: date, period: int) -> float | None:
+        bars = self.database.bars_available_as_of(symbol, session)
+        if len(bars) < period:
+            return None
+        values = calculate_atr(
+            pd.Series([float(bar.high) for bar in bars]),
+            pd.Series([float(bar.low) for bar in bars]),
+            pd.Series([float(bar.close) for bar in bars]),
+            period,
+        )
+        latest = values.iloc[-1]
+        return float(latest) if pd.notna(latest) and float(latest) > 0 else None
 
     def _benchmark(self, start: date, end: date) -> BenchmarkResult:
         bars = [
@@ -513,19 +730,23 @@ class BacktestEngine:
             maximum_drawdown=maximum_drawdown(values),
         )
 
-    def _configuration_snapshot(self, variant: StrategyVariant) -> dict:
+    def _configuration_snapshot(
+        self, variant: StrategyVariant, preset: PositionManagementPreset
+    ) -> dict:
         return {
             "variant": variant.value,
             "strategy": self.config.model_dump(mode="json"),
             "portfolio": self.config.portfolio.model_dump(mode="json"),
             "risk": self.config.risk.model_dump(mode="json"),
             "backtest": self.config.backtest.model_dump(mode="json"),
+            "position_management_preset": preset.value,
+            "position_management": self.position_management.model_dump(mode="json"),
             "score_weights": self.config.scores.total.model_dump(mode="json"),
             "market_data_adjustment": self.config.universe.market_data_adjustment,
             "execution": {
                 "entry": "next available portfolio session open",
-                "stop_target_ambiguity": "stop_first",
-                "time_exit": "close",
+                "intrabar_ambiguity": "pre_bar_stops_first; new trails apply next bar",
+                "close_rules": "signal_decay, portfolio_rotation, max_hold",
                 "end_of_backtest": "last available close",
             },
             "variant_definition": {
@@ -575,6 +796,49 @@ def compare_strategies(
         variants=results,
         shared_screen_sessions=len(shared.cache),
         warnings=first.warnings,
+        comparison_kind="score_variants",
+    )
+
+
+def compare_position_management(
+    database: Database,
+    config: StrategyConfig,
+    start: date,
+    end: date,
+    *,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> StrategyComparison:
+    """Compare daily-compatible position presets on identical cached PIT screens."""
+
+    shared = CachedScreenSource(HistoricalFeatureScreenSource(database, config, start, end))
+    generated_at = clock().isoformat()
+    presets = (
+        PositionManagementPreset.LEGACY,
+        PositionManagementPreset.DYNAMIC_HOLD,
+        PositionManagementPreset.TAKE_PROFIT,
+        PositionManagementPreset.ATR_TRAILING,
+        PositionManagementPreset.PARTIAL_PROFIT,
+    )
+    results = tuple(
+        BacktestEngine(
+            database,
+            config,
+            screen_source=shared,
+            clock=lambda: datetime.fromisoformat(generated_at),
+        ).run(start, end, variant=StrategyVariant.FULL, preset=preset)
+        for preset in presets
+    )
+    first = results[0]
+    return StrategyComparison(
+        requested_start=start,
+        requested_end=end,
+        actual_start=first.actual_start,
+        actual_end=first.actual_end,
+        generated_at=generated_at,
+        variants=results,
+        shared_screen_sessions=len(shared.cache),
+        warnings=first.warnings,
+        comparison_kind="position_management",
     )
 
 
@@ -625,28 +889,58 @@ def _variant_entry_score(
     return score, None
 
 
+def _variant_score_value(
+    record: ScreenRecord, variant: StrategyVariant, config: StrategyConfig
+) -> float | None:
+    """Comparable 0..100 score without applying entry gates to an open position."""
+
+    components: list[tuple[float, float]] = []
+    values = (
+        (record.scores.quality.score, config.scores.total.quality),
+        (record.scores.valuation.score, config.scores.total.valuation),
+    )
+    if any(value is None for value, _ in values):
+        return None
+    components.extend((float(value), weight) for value, weight in values if value is not None)
+    if variant in {StrategyVariant.QUALITY_VALUE_OPPORTUNITY, StrategyVariant.FULL}:
+        opportunity = record.scores.opportunity.score
+        if opportunity is None:
+            return None
+        components.append((opportunity, config.scores.total.opportunity))
+    if variant is StrategyVariant.FULL:
+        timing = record.scores.timing.score
+        if timing is None:
+            return None
+        components.append((timing, config.scores.total.timing))
+    denominator = sum(weight for _, weight in components)
+    return sum(value * weight for value, weight in components) / denominator
+
+
+def _uses_legacy_position_defaults(
+    config: PositionManagementConfig, legacy_max_holding_days: int
+) -> bool:
+    return (
+        config.bar_timeframe == "1d"
+        and config.stop_loss.enabled
+        and config.stop_loss.percent is None
+        and config.take_profit.enabled
+        and config.take_profit.percent is None
+        and not config.trailing_stop.enabled
+        and not config.atr_trailing_stop.enabled
+        and not config.signal_decay.enabled
+        and not config.partial_take_profit.enabled
+        and config.max_hold.enabled
+        and config.max_hold.mode == "hard"
+        and config.max_hold.days in {None, legacy_max_holding_days}
+        and not config.portfolio_rotation.enabled
+        and config.reentry.enabled
+        and config.reentry.cooldown_days == 0
+    )
+
+
 def _buy_fill(reference: float, slippage_bps: float) -> float:
     return reference * (1 + slippage_bps / 10_000)
 
 
 def _sell_fill(reference: float, slippage_bps: float) -> float:
     return reference * (1 - slippage_bps / 10_000)
-
-
-def _open_exit(position: _Position, bar: DailyBar) -> tuple[float | None, str]:
-    opening = float(bar.open)
-    if opening <= position.stop_price:
-        return opening, "stop_loss"
-    if opening >= position.target_price:
-        return opening, "profit_target"
-    return None, ""
-
-
-def _intraday_exit(position: _Position, bar: DailyBar) -> tuple[float | None, str]:
-    stop_hit = float(bar.low) <= position.stop_price
-    target_hit = float(bar.high) >= position.target_price
-    if stop_hit:
-        return position.stop_price, "stop_loss"
-    if target_hit:
-        return position.target_price, "profit_target"
-    return None, ""

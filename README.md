@@ -387,6 +387,13 @@ am Valuation-Datenqualitätsfilter scheitern.
 
 ## Backtest und Strategie-Vergleich
 
+Das Backtesting unterstützt zusätzlich ein konfigurierbares dynamisches Position Management mit
+Stop Loss, Take/Partial Profit, profit- und ATR-basierten Trailing Stops, Signal Decay, optionalem
+Max-Hold-Review, Re-Entry und Portfolio Rotation. Presets werden mit `backtest --strategy ...`
+gewählt; `backtest-compare` vergleicht die Daily-fähigen Position-Presets auf identischen
+Point-in-Time-Screens. Details, Exit-Prioritäten und Lookahead-Regeln stehen in
+[`docs/position-management.md`](docs/position-management.md).
+
 Ein Backtest läuft ausschließlich auf den lokal gespeicherten, adjustierten Daily Bars und
 Fundamentaldaten. Er erzeugt keine Netzwerkaufrufe:
 

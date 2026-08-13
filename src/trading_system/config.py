@@ -79,6 +79,90 @@ class BacktestConfig(BaseModel):
     min_relative_volume: float = Field(1.2, gt=0)
 
 
+class StopLossConfig(BaseModel):
+    """Fixed stop; ``percent=None`` retains the legacy ATR-sized entry stop."""
+
+    enabled: bool = True
+    percent: float | None = Field(default=None, gt=0, lt=1)
+
+
+class TakeProfitConfig(BaseModel):
+    """Fixed target; ``percent=None`` retains ``backtest.profit_target_pct``."""
+
+    enabled: bool = True
+    percent: float | None = Field(default=None, gt=0)
+
+
+class TrailingStopConfig(BaseModel):
+    enabled: bool = False
+    activation_profit: float = Field(0.01, ge=0)
+    trailing_distance: float = Field(0.006, gt=0, lt=1)
+
+
+class AtrTrailingStopConfig(BaseModel):
+    enabled: bool = False
+    atr_period: int = Field(14, ge=2)
+    atr_multiplier: float = Field(1.0, gt=0)
+    activation_profit: float = Field(0.0, ge=0)
+
+
+class SignalDecayConfig(BaseModel):
+    enabled: bool = False
+    minimum_score_ratio: float = Field(0.75, gt=0, le=1)
+
+
+class PartialTakeProfitLevel(BaseModel):
+    profit: float = Field(gt=0)
+    sell_fraction: float = Field(gt=0, le=1)
+
+
+class PartialTakeProfitConfig(BaseModel):
+    enabled: bool = False
+    levels: list[PartialTakeProfitLevel] = Field(
+        default_factory=lambda: [PartialTakeProfitLevel(profit=0.015, sell_fraction=0.5)]
+    )
+
+    @model_validator(mode="after")
+    def validate_levels(self) -> PartialTakeProfitConfig:
+        profits = [level.profit for level in self.levels]
+        if len(profits) != len(set(profits)) or profits != sorted(profits):
+            raise ValueError("Partial take-profit levels must be unique and sorted by profit")
+        return self
+
+
+class MaxHoldConfig(BaseModel):
+    enabled: bool = True
+    days: int | None = Field(default=None, ge=1)
+    mode: Literal["hard", "review", "disabled"] = "hard"
+    review_minimum_score_ratio: float = Field(0.75, gt=0, le=1)
+
+
+class PortfolioRotationConfig(BaseModel):
+    enabled: bool = False
+    minimum_score_improvement: float = Field(0.15, gt=0)
+    minimum_holding_days: int = Field(1, ge=0)
+
+
+class ReentryConfig(BaseModel):
+    enabled: bool = True
+    cooldown_days: int = Field(0, ge=0)
+
+
+class PositionManagementConfig(BaseModel):
+    """Composable position rules. Defaults reproduce the original backtester."""
+
+    bar_timeframe: Literal["5m", "15m", "1h", "1d"] = "1d"
+    stop_loss: StopLossConfig = StopLossConfig()
+    take_profit: TakeProfitConfig = TakeProfitConfig()
+    trailing_stop: TrailingStopConfig = TrailingStopConfig()
+    atr_trailing_stop: AtrTrailingStopConfig = AtrTrailingStopConfig()
+    signal_decay: SignalDecayConfig = SignalDecayConfig()
+    partial_take_profit: PartialTakeProfitConfig = PartialTakeProfitConfig()
+    max_hold: MaxHoldConfig = MaxHoldConfig()
+    portfolio_rotation: PortfolioRotationConfig = PortfolioRotationConfig()
+    reentry: ReentryConfig = ReentryConfig()
+
+
 class TechnicalConfig(BaseModel):
     rsi_oversold: float = Field(30, ge=0, le=100)
     rsi_recovery_min: float = Field(35, ge=0, le=100)
@@ -265,6 +349,7 @@ class StrategyConfig(BaseModel):
     portfolio: PortfolioConfig = PortfolioConfig()
     risk: RiskConfig = RiskConfig()
     backtest: BacktestConfig = BacktestConfig()
+    position_management: PositionManagementConfig = PositionManagementConfig()
 
 
 class Settings(BaseModel):
