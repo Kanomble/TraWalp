@@ -1,7 +1,7 @@
 import pytest
 import requests
 
-from trading_system.data.sec_client import SecClient
+from trading_system.data.sec_client import SecClient, SecResourceNotFound
 
 
 class Response:
@@ -16,15 +16,21 @@ class Response:
     def json(self) -> dict:
         return self.payload
 
+    @property
+    def text(self) -> str:
+        return str(self.payload.get("text", ""))
+
 
 class Session:
     def __init__(self, responses: list[Response]) -> None:
         self.headers = {}
         self.responses = iter(responses)
         self.calls = 0
+        self.urls: list[str] = []
 
-    def get(self, *_args, **_kwargs) -> Response:
+    def get(self, url: str, **_kwargs) -> Response:
         self.calls += 1
+        self.urls.append(url)
         return next(self.responses)
 
 
@@ -52,9 +58,41 @@ def test_sec_client_does_not_retry_not_found_response() -> None:
         request_interval_seconds=0,
     )
 
-    with pytest.raises(requests.HTTPError) as error:
+    with pytest.raises(SecResourceNotFound) as error:
         client.company_facts(1)
 
-    assert error.value.response.status_code == 404
+    assert error.value.resource_type == "companyfacts"
+    assert error.value.cik == "0000000001"
     assert session.calls == 1
     assert sleeps == []
+    assert client.request_counts == {"companyfacts": 1}
+
+
+def test_not_found_distinguishes_submissions_resource() -> None:
+    client = SecClient(
+        "Researcher research@example.com",
+        session=Session([Response(404, {})]),  # type: ignore[arg-type]
+        request_interval_seconds=0,
+    )
+
+    with pytest.raises(SecResourceNotFound) as error:
+        client.submissions(1234)
+
+    assert error.value.resource_type == "submissions"
+    assert error.value.cik == "0000001234"
+
+
+def test_filing_index_uses_official_xbrl_current_and_archive_paths() -> None:
+    session = Session([Response(200, {"text": "current"}), Response(200, {"text": "old"})])
+    client = SecClient(
+        "Researcher research@example.com",
+        session=session,  # type: ignore[arg-type]
+        request_interval_seconds=0,
+    )
+
+    assert client.filing_index(2026, 3, current=True) == "current"
+    assert client.filing_index(2025, 4, current=False) == "old"
+    assert session.urls == [
+        "https://www.sec.gov/Archives/edgar/full-index/xbrl.idx",
+        "https://www.sec.gov/Archives/edgar/full-index/2025/QTR4/xbrl.idx",
+    ]

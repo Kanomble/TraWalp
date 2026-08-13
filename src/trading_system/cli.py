@@ -253,6 +253,7 @@ def _synchronizer(
             adjustment=Adjustment(universe.market_data_adjustment),
         )
     sec = None
+    companyfacts_unavailable_ttl = timedelta(days=7)
     if with_sec:
         sec_config = settings.strategy.sec
         sec = SecClient(
@@ -261,6 +262,7 @@ def _synchronizer(
             timeout_seconds=sec_config.timeout_seconds,
             max_retries=sec_config.max_retries,
         )
+        companyfacts_unavailable_ttl = timedelta(days=sec_config.companyfacts_unavailable_ttl_days)
     return DataSynchronizer(
         database,
         alpaca,
@@ -268,6 +270,7 @@ def _synchronizer(
         market_data_days=universe.market_data_days,
         exclude_financials=universe.exclude_financials,
         exclude_reits=universe.exclude_reits,
+        companyfacts_unavailable_ttl=companyfacts_unavailable_ttl,
     )
 
 
@@ -292,12 +295,45 @@ def _format_data_status(states: dict[str, dict]) -> str:
         for key in (
             "mode",
             "records_updated",
+            "universe_symbols",
+            "sec_mapped_symbols",
+            "sec_mapped_ciks",
+            "sec_ticker_alias_symbols",
+            "sec_unmapped_symbols",
             "companies_checked",
             "companies_updated",
             "facts_processed",
+            "change_candidates",
+            "companyfacts_unavailable",
+            "submissions_unavailable",
+            "negative_cache_hits",
             "missing_cik_mappings",
+            "unmapped_etf_or_fund",
+            "unmapped_warrant",
+            "unmapped_unit",
+            "unmapped_rights",
+            "unmapped_preferred",
+            "unmapped_depositary_or_foreign",
+            "unmapped_otc_exchange",
+            "unmapped_unclassified",
+            "sec_requests_total",
+            "ticker_map_requests",
+            "change_detection_requests",
+            "submissions_requests",
+            "companyfacts_requests",
+            "change_detection_seconds",
             "submissions_seconds",
             "companyfacts_seconds",
+            "parse_and_persist_seconds",
+            "request_failures",
+            "rate_limit_failures",
+            "server_failures",
+            "timeout_failures",
+            "connection_failures",
+            "json_failures",
+            "parse_failures",
+            "database_failures",
+            "other_failures",
             "symbols_requested",
             "symbols_updated",
             "bars_updated",
@@ -368,8 +404,7 @@ def _format_cleanup_report(result: dict) -> str:
         "",
         f"Structured fact rows:      {result['fundamental_fact_rows']:,} (preserved)",
         f"Daily bar rows:            {result['daily_bar_rows']:,} (preserved)",
-        "Estimated reclaimable after VACUUM: "
-        + _format_bytes(result["safe_payload_bytes"]),
+        "Estimated reclaimable after VACUUM: " + _format_bytes(result["safe_payload_bytes"]),
     ]
     if result["dry_run"]:
         lines.extend(["", "No changes made (--dry-run)."])
@@ -383,9 +418,7 @@ def _format_cleanup_report(result: dict) -> str:
             ]
         )
     if result["blocked_rows"]:
-        lines.append(
-            "Blocked rows were retained because no normalized fact exists for their CIK."
-        )
+        lines.append("Blocked rows were retained because no normalized fact exists for their CIK.")
     return "\n".join(lines)
 
 

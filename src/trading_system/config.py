@@ -33,6 +33,7 @@ class SecConfig(BaseModel):
     request_interval_seconds: float = Field(0.11, ge=0.1)
     timeout_seconds: float = Field(30, gt=0)
     max_retries: int = Field(4, ge=0)
+    companyfacts_unavailable_ttl_days: int = Field(7, ge=1, le=90)
 
 
 class PeerConfig(BaseModel):

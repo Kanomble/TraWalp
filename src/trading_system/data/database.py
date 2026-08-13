@@ -110,6 +110,24 @@ class Database:
             ).fetchall()
         return [str(row["symbol"]) for row in rows]
 
+    def list_tradable_assets(self) -> list[TradableAsset]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """SELECT symbol,name,exchange,tradable,fractionable,shortable
+                FROM assets WHERE tradable=1 ORDER BY symbol"""
+            ).fetchall()
+        return [
+            TradableAsset(
+                symbol=row["symbol"],
+                name=row["name"],
+                exchange=row["exchange"],
+                tradable=bool(row["tradable"]),
+                fractionable=bool(row["fractionable"]),
+                shortable=bool(row["shortable"]),
+            )
+            for row in rows
+        ]
+
     def upsert_company(self, company: CompanyIdentity) -> None:
         with self.connect() as connection:
             connection.execute(
@@ -200,6 +218,20 @@ class Database:
             except (json.JSONDecodeError, TypeError):
                 output[str(row["key"])] = row["value"]
         return output
+
+    def delete_sync_value(
+        self,
+        source: str,
+        key: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> None:
+        query = "DELETE FROM sync_state WHERE source=? AND key=?"
+        if connection is None:
+            with self.connect() as owned_connection:
+                owned_connection.execute(query, (source, key))
+        else:
+            connection.execute(query, (source, key))
 
     def dataset_states(self) -> dict[str, dict[str, Any]]:
         with self.connect() as connection:
@@ -568,6 +600,7 @@ class Database:
         finally:
             connection.close()
 
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -595,9 +628,7 @@ def _fact_rows(facts: Iterable[FundamentalFact]) -> list[tuple[Any, ...]]:
     ]
 
 
-def _execute_fact_upsert(
-    connection: sqlite3.Connection, rows: list[tuple[Any, ...]]
-) -> None:
+def _execute_fact_upsert(connection: sqlite3.Connection, rows: list[tuple[Any, ...]]) -> None:
     connection.executemany(
         """INSERT INTO fundamental_facts
         (cik,symbol,metric,taxonomy,tag,value,unit,period_start,period_end,filed,
@@ -643,11 +674,13 @@ def _execute_sec_company_update(
             json.dumps(sorted(set(accessions)), separators=(",", ":")),
         ),
     )
+    connection.execute(
+        "DELETE FROM sync_state WHERE source='sec_companyfacts_status' AND key=?",
+        (company.cik,),
+    )
 
 
-def _raw_sec_cleanup_plan(
-    connection: sqlite3.Connection, endpoint: str
-) -> dict[str, Any]:
+def _raw_sec_cleanup_plan(connection: sqlite3.Connection, endpoint: str) -> dict[str, Any]:
     row = connection.execute(
         """WITH candidates AS MATERIALIZED (
             SELECT length(CAST(cache.payload AS BLOB)) AS payload_bytes,

@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping
-from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
+from pathlib import PurePosixPath
 from typing import Any
+
+import requests
 
 from trading_system.data.alpaca_client import AlpacaDataClient
 from trading_system.data.database import Database
@@ -15,13 +20,145 @@ from trading_system.data.market_sessions import (
     full_history_request_window,
     latest_completed_trading_session,
 )
-from trading_system.data.sec_client import SecClient
+from trading_system.data.sec_client import SecClient, SecResourceNotFound
 from trading_system.data.universe import is_financial_or_reit, is_reit
 from trading_system.data.xbrl_parser import VALID_FORMS, parse_company_facts
 from trading_system.models.fundamentals import CompanyIdentity
+from trading_system.models.market_data import TradableAsset
 
 LOGGER = logging.getLogger(__name__)
+# The change detector must match the forms that parse_company_facts can persist.
+# XBRL 8-K/6-K filings are intentionally ignored until the parser supports them;
+# treating them as candidates would trigger thousands of no-op Company Facts reads.
 RELEVANT_SEC_FORMS = VALID_FORMS
+UNMAPPED_CATEGORIES = (
+    "etf_or_fund",
+    "warrant",
+    "unit",
+    "rights",
+    "preferred",
+    "depositary_or_foreign",
+    "unclassified",
+)
+
+
+@dataclass(frozen=True)
+class FilingIndexSnapshot:
+    last_data_received: date
+    accessions_by_cik: dict[str, set[str]]
+
+
+class SecCompanySyncError(Exception):
+    def __init__(self, phase: str, resource: str, elapsed: float, cause: Exception) -> None:
+        self.phase = phase
+        self.resource = resource
+        self.elapsed = elapsed
+        self.cause = cause
+        super().__init__(f"{phase} failure for {resource}: {cause}")
+
+
+def parse_filing_index(payload: str) -> FilingIndexSnapshot:
+    """Parse an official EDGAR XBRL index and reject incomplete/malformed input."""
+
+    header = re.search(r"^Last Data Received:\s+(.+?)\s*$", payload, flags=re.MULTILINE)
+    if header is None or "CIK|Company Name|Form Type|Date Filed|Filename" not in payload:
+        raise ValueError("SEC XBRL index is missing required headers")
+    try:
+        last_data_received = datetime.strptime(header.group(1), "%B %d, %Y").date()
+    except ValueError as exc:
+        raise ValueError("SEC XBRL index has an invalid Last Data Received date") from exc
+    accessions_by_cik: dict[str, set[str]] = defaultdict(set)
+    for line in payload.splitlines():
+        fields = line.split("|")
+        if len(fields) != 5 or not fields[0].isdigit():
+            continue
+        cik, _name, form, _filed, filename = fields
+        if form not in RELEVANT_SEC_FORMS:
+            continue
+        accession = PurePosixPath(filename).stem
+        if accession:
+            accessions_by_cik[cik.zfill(10)].add(accession)
+    return FilingIndexSnapshot(last_data_received, dict(accessions_by_cik))
+
+
+def classify_unmapped_asset(asset: TradableAsset) -> str:
+    """Classify only when local Alpaca symbol/name evidence is explicit."""
+
+    symbol = asset.symbol.upper()
+    name = asset.name.upper()
+    if re.search(r"\b(ETF|ETN|FUND|PORTFOLIO)\b", name) or any(
+        marker in name
+        for marker in (
+            "ISHARES",
+            "PROSHARES",
+            "DIREXION",
+            "SPDR ",
+            "WISDOMTREE",
+            "VANECK",
+            "GLOBAL X ",
+            "FIRST TRUST ",
+        )
+    ):
+        return "etf_or_fund"
+    if symbol.endswith(".WS") or re.search(r"\bWARRANTS?\b", name):
+        return "warrant"
+    if symbol.endswith(".U") or re.search(r"\bUNITS?\b", name):
+        return "unit"
+    if symbol.endswith(".RT") or re.search(r"\bRIGHTS?\b", name):
+        return "rights"
+    if ".PR" in symbol or re.search(r"\b(PREFERRED|PREFERENCE|PFD)\b", name):
+        return "preferred"
+    if re.search(r"\b(ADR|ADS|DEPOSITARY|DEPOSITORY|COMMON SHARES)\b", name):
+        return "depositary_or_foreign"
+    return "unclassified"
+
+
+def _quarters_between(start: date, end: date) -> list[tuple[int, int]]:
+    year, quarter = start.year, (start.month - 1) // 3 + 1
+    end_key = (end.year, (end.month - 1) // 3 + 1)
+    output = []
+    while (year, quarter) <= end_key:
+        output.append((year, quarter))
+        if quarter == 4:
+            year, quarter = year + 1, 1
+        else:
+            quarter += 1
+    return output
+
+
+def _security_symbol_priority(symbol: str) -> tuple[int, str]:
+    structural = (".WS", ".RT", ".U", ".PR")
+    return (int(any(marker in symbol for marker in structural)), symbol)
+
+
+def _classify_sync_failure(counts: dict[str, Any], error: SecCompanySyncError) -> None:
+    if error.phase == "parse":
+        counts["parse_failures"] += 1
+        return
+    if error.phase == "database":
+        counts["database_failures"] += 1
+        return
+    if error.phase != "request":
+        counts["other_failures"] += 1
+        return
+    counts["request_failures"] += 1
+    cause = error.cause
+    if isinstance(cause, requests.Timeout):
+        counts["timeout_failures"] += 1
+    elif isinstance(cause, requests.ConnectionError):
+        counts["connection_failures"] += 1
+    elif isinstance(cause, requests.HTTPError) and cause.response is not None:
+        status = cause.response.status_code
+        if status == 429:
+            counts["rate_limit_failures"] += 1
+        elif status >= 500:
+            counts["server_failures"] += 1
+        else:
+            counts["other_failures"] += 1
+    elif isinstance(cause, (requests.JSONDecodeError, ValueError)):
+        counts["json_failures"] += 1
+    else:
+        counts["other_failures"] += 1
 
 
 def _chunks(items: list[str], size: int) -> Iterable[list[str]]:
@@ -55,11 +192,14 @@ class DataSynchronizer:
         market_data_batch_size: int = 200,
         exclude_financials: bool = False,
         exclude_reits: bool = False,
+        companyfacts_unavailable_ttl: timedelta = timedelta(days=7),
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         timer: Callable[[], float] = time.perf_counter,
     ) -> None:
         if market_data_batch_size <= 0:
             raise ValueError("market_data_batch_size must be positive")
+        if companyfacts_unavailable_ttl <= timedelta(0):
+            raise ValueError("companyfacts_unavailable_ttl must be positive")
         self.database = database
         self.alpaca = alpaca
         self.sec = sec
@@ -67,6 +207,7 @@ class DataSynchronizer:
         self.market_data_batch_size = market_data_batch_size
         self.exclude_financials = exclude_financials
         self.exclude_reits = exclude_reits
+        self.companyfacts_unavailable_ttl = companyfacts_unavailable_ttl
         self.clock = clock
         self.timer = timer
 
@@ -113,66 +254,195 @@ class DataSynchronizer:
     def _sync_sec(self, requested_symbols: list[str] | None, *, full: bool) -> dict[str, Any]:
         if self.sec is None:
             raise ValueError("SEC client is required for SEC synchronization")
-        available = set(self.database.list_tradable_asset_symbols())
-        if not available:
+        assets = self.database.list_tradable_assets()
+        if not assets:
             raise RuntimeError("Asset universe is empty; run sync-assets or sync --full first")
-        symbols = sorted(available if not requested_symbols else available & set(requested_symbols))
-        ticker_map = self.database.company_symbol_to_cik()
-        missing_mappings = set(symbols) - ticker_map.keys()
-        cached_ticker_map = self.database.sync_value("sec_reference", "ticker_to_cik")
-        if full or not isinstance(cached_ticker_map, dict):
-            remote_map = self.sec.ticker_to_cik()
-            self.database.set_sync_value("sec_reference", "ticker_to_cik", remote_map)
-        else:
-            remote_map = {str(symbol): str(cik) for symbol, cik in cached_ticker_map.items()}
-        ticker_map.update(
-            remote_map
-            if full
-            else {
-                symbol: remote_map[symbol]
-                for symbol in missing_mappings
-                if symbol in remote_map
-            }
-        )
+        requested = {symbol.upper() for symbol in requested_symbols or []}
+        selected_assets = [asset for asset in assets if not requested or asset.symbol in requested]
+        symbols = {asset.symbol for asset in selected_assets}
+        request_counts_before = self._sec_request_counts()
+        remote_map = {
+            str(symbol).upper(): str(cik).zfill(10)
+            for symbol, cik in self.sec.ticker_to_cik().items()
+        }
+        self.database.set_sync_value("sec_reference", "ticker_to_cik", remote_map)
+        local_map = self.database.company_symbol_to_cik()
+        ticker_map = {**local_map, **remote_map}
+        alias_mappings = {
+            symbol: remote_map[symbol.replace(".", "-")]
+            for symbol in symbols - ticker_map.keys()
+            if "." in symbol and symbol.replace(".", "-") in remote_map
+        }
+        ticker_map.update(alias_mappings)
+        unmapped = [asset for asset in selected_assets if asset.symbol not in ticker_map]
+        classification = defaultdict(int)
+        for asset in unmapped:
+            classification[classify_unmapped_asset(asset)] += 1
+        cik_symbols: dict[str, list[str]] = defaultdict(list)
+        for symbol in sorted(symbols):
+            cik = ticker_map.get(symbol)
+            if cik is not None:
+                cik_symbols[str(cik).zfill(10)].append(symbol)
+        existing_by_cik = {cik: symbol for symbol, cik in local_map.items()}
+        canonical_symbols = {
+            cik: (
+                existing_by_cik[cik]
+                if existing_by_cik.get(cik) in candidates
+                else min(candidates, key=_security_symbol_priority)
+            )
+            for cik, candidates in cik_symbols.items()
+        }
         accession_states = self.database.sync_values("sec_accessions")
+        companyfacts_statuses = self.database.sync_values("sec_companyfacts_status")
+        submissions_statuses = self.database.sync_values("sec_submissions_status")
+        change_accessions: dict[str, set[str]] = defaultdict(set)
+        change_detection_seconds = 0.0
+        change_detection_requests = 0
+        index_through: date | None = None
+        negative_cache_hits = 0
+        if full:
+            candidate_ciks = set(canonical_symbols)
+        else:
+            detection_started = self.timer()
+            snapshots = self._filing_index_snapshots()
+            change_detection_seconds = self.timer() - detection_started
+            change_detection_requests = len(snapshots)
+            index_through = max(snapshot.last_data_received for snapshot in snapshots)
+            for snapshot in snapshots:
+                for cik, accessions in snapshot.accessions_by_cik.items():
+                    if cik in canonical_symbols:
+                        change_accessions[cik].update(accessions)
+            candidate_ciks = {
+                cik
+                for cik in canonical_symbols
+                if change_accessions.get(cik, set()) - set(accession_states.get(cik, []))
+                or cik not in accession_states
+                or self._negative_cache_expired(companyfacts_statuses.get(cik))
+                or self._negative_cache_expired(submissions_statuses.get(cik))
+            }
+            suppressed = {
+                cik
+                for cik in canonical_symbols
+                if not (change_accessions.get(cik, set()) - set(accession_states.get(cik, [])))
+                and (
+                    self._negative_cache_fresh(companyfacts_statuses.get(cik))
+                    or self._negative_cache_fresh(submissions_statuses.get(cik))
+                )
+            }
+            candidate_ciks -= suppressed
+            negative_cache_hits = len(suppressed)
         counts = {
             "mode": "full" if full else "incremental",
+            "universe_symbols": len(selected_assets),
+            "sec_mapped_symbols": len(selected_assets) - len(unmapped),
+            "sec_mapped_ciks": len(canonical_symbols),
+            "sec_ticker_alias_symbols": len(alias_mappings),
+            "sec_unmapped_symbols": len(unmapped),
+            "missing_cik_mappings": len(unmapped),
+            "unmapped_otc_exchange": sum(asset.exchange == "OTC" for asset in unmapped),
+            **{
+                f"unmapped_{category}": classification[category] for category in UNMAPPED_CATEGORIES
+            },
+            "change_candidates": len(candidate_ciks),
             "companies_checked": 0,
             "companies_updated": 0,
             "facts_processed": 0,
-            "missing_cik_mappings": 0,
+            "companyfacts_unavailable": 0,
+            "submissions_unavailable": 0,
+            "negative_cache_hits": negative_cache_hits,
+            "request_failures": 0,
+            "rate_limit_failures": 0,
+            "server_failures": 0,
+            "timeout_failures": 0,
+            "connection_failures": 0,
+            "json_failures": 0,
+            "parse_failures": 0,
+            "database_failures": 0,
+            "other_failures": 0,
             "errors": 0,
         }
         submissions_seconds = 0.0
         companyfacts_seconds = 0.0
+        parse_and_persist_seconds = 0.0
+        logical_requests = {
+            "ticker_map": 1,
+            "filing_index": change_detection_requests,
+            "submissions": 0,
+            "companyfacts": 0,
+        }
         with self.database.connect() as write_connection:
-            for symbol in symbols:
-                cik = ticker_map.get(symbol)
-                if cik is None:
-                    counts["missing_cik_mappings"] += 1
-                    continue
+            for cik in sorted(candidate_ciks):
+                symbol = canonical_symbols[cik]
+                detected = change_accessions.get(cik, set())
+                unavailable_status = companyfacts_statuses.get(cik)
+                submissions_status = submissions_statuses.get(cik)
                 counts["companies_checked"] += 1
+                logical_requests["submissions"] += 1
                 try:
                     outcome = self._sync_sec_company(
                         symbol,
                         cik,
                         full=full,
                         stored_accessions=accession_states.get(cik),
+                        detected_accessions=detected,
+                        retry_unavailable=(
+                            self._negative_cache_expired(unavailable_status)
+                            or self._negative_cache_expired(submissions_status)
+                        ),
                         write_connection=write_connection,
                     )
                     write_connection.commit()
                     counts["facts_processed"] += outcome["facts_processed"]
                     counts["companies_updated"] += outcome["companies_updated"]
+                    counts["companyfacts_unavailable"] += outcome["companyfacts_unavailable"]
+                    counts["submissions_unavailable"] += outcome["submissions_unavailable"]
                     submissions_seconds += outcome["submissions_seconds"]
                     companyfacts_seconds += outcome["companyfacts_seconds"]
+                    parse_and_persist_seconds += outcome["parse_and_persist_seconds"]
+                    logical_requests["companyfacts"] += outcome["companyfacts_requests"]
                     if outcome["accessions"] is not None:
                         accession_states[cik] = outcome["accessions"]
-                except Exception:
+                except SecCompanySyncError as exc:
                     write_connection.rollback()
+                    if exc.phase in {"parse", "database"}:
+                        parse_and_persist_seconds += exc.elapsed
+                    elif exc.resource == "submissions":
+                        submissions_seconds += exc.elapsed
+                    elif exc.resource == "companyfacts":
+                        companyfacts_seconds += exc.elapsed
+                        logical_requests["companyfacts"] += 1
+                    _classify_sync_failure(counts, exc)
                     counts["errors"] += 1
-                    LOGGER.exception("Failed SEC update symbol=%s cik=%s", symbol, cik)
+                    LOGGER.exception(
+                        "SEC update failed symbol=%s cik=%s phase=%s resource=%s",
+                        symbol,
+                        cik,
+                        exc.phase,
+                        exc.resource,
+                        exc_info=exc.cause,
+                    )
+            if not full and counts["errors"] == 0 and index_through is not None:
+                self.database.set_sync_value(
+                    "sec_change_detection",
+                    "xbrl_index",
+                    {"last_data_received": index_through.isoformat()},
+                    connection=write_connection,
+                )
+                write_connection.commit()
         counts["submissions_seconds"] = round(submissions_seconds, 3)
         counts["companyfacts_seconds"] = round(companyfacts_seconds, 3)
+        counts["change_detection_seconds"] = round(change_detection_seconds, 3)
+        counts["parse_and_persist_seconds"] = round(parse_and_persist_seconds, 3)
+        request_counts = self._request_count_delta(request_counts_before, logical_requests)
+        counts.update(
+            {
+                "sec_requests_total": sum(request_counts.values()),
+                "ticker_map_requests": request_counts.get("ticker_map", 0),
+                "change_detection_requests": request_counts.get("filing_index", 0),
+                "submissions_requests": request_counts.get("submissions", 0),
+                "companyfacts_requests": request_counts.get("companyfacts", 0),
+            }
+        )
         return counts
 
     def _sync_sec_company(
@@ -182,12 +452,35 @@ class DataSynchronizer:
         *,
         full: bool,
         stored_accessions: Any,
+        detected_accessions: set[str],
+        retry_unavailable: bool,
         write_connection: Any,
     ) -> dict[str, Any]:
         if self.sec is None:  # Narrowed by _sync_sec; retained for direct testability.
             raise ValueError("SEC client is required for SEC synchronization")
         request_started = self.timer()
-        submissions = self.sec.submissions(cik)
+        try:
+            submissions = self.sec.submissions(cik)
+        except SecResourceNotFound:
+            elapsed = self.timer() - request_started
+            accessions = sorted(set(stored_accessions or []) | detected_accessions)
+            self._record_unavailable("sec_submissions_status", cik, accessions, write_connection)
+            LOGGER.info("SEC submissions unavailable symbol=%s cik=%s", symbol, cik)
+            return {
+                "facts_processed": 0,
+                "companies_updated": 0,
+                "companyfacts_unavailable": 0,
+                "submissions_unavailable": 1,
+                "submissions_seconds": elapsed,
+                "companyfacts_seconds": 0.0,
+                "parse_and_persist_seconds": 0.0,
+                "companyfacts_requests": 0,
+                "accessions": accessions,
+            }
+        except Exception as exc:
+            raise SecCompanySyncError(
+                "request", "submissions", self.timer() - request_started, exc
+            ) from exc
         submissions_seconds = self.timer() - request_started
         current_accessions = _recent_accessions(submissions)
         initializing_state = stored_accessions is None
@@ -206,10 +499,11 @@ class DataSynchronizer:
         )
         needs_facts = (
             full
+            or retry_unavailable
             or (initializing_state and not self.database.has_fundamental_facts(cik))
-            or bool(current_accessions - previous_accessions)
+            or bool((current_accessions | detected_accessions) - previous_accessions)
         )
-        new_state = sorted(previous_accessions | current_accessions)
+        new_state = sorted(previous_accessions | current_accessions | detected_accessions)
         facts_processed = 0
         companyfacts_seconds = 0.0
         if needs_facts:
@@ -221,15 +515,55 @@ class DataSynchronizer:
                 sic_description=submissions.get("sicDescription"),
             )
             request_started = self.timer()
-            payload = self.sec.company_facts(cik)
+            try:
+                payload = self.sec.company_facts(cik)
+            except SecResourceNotFound:
+                companyfacts_seconds = self.timer() - request_started
+                self._record_unavailable(
+                    "sec_companyfacts_status", cik, new_state, write_connection
+                )
+                self.database.delete_sync_value(
+                    "sec_submissions_status", cik, connection=write_connection
+                )
+                LOGGER.info("SEC companyfacts unavailable symbol=%s cik=%s", symbol, cik)
+                return {
+                    "facts_processed": 0,
+                    "companies_updated": 0,
+                    "companyfacts_unavailable": 1,
+                    "submissions_unavailable": 0,
+                    "submissions_seconds": submissions_seconds,
+                    "companyfacts_seconds": companyfacts_seconds,
+                    "parse_and_persist_seconds": 0.0,
+                    "companyfacts_requests": 1,
+                    "accessions": new_state,
+                }
+            except Exception as exc:
+                raise SecCompanySyncError(
+                    "request", "companyfacts", self.timer() - request_started, exc
+                ) from exc
             companyfacts_seconds = self.timer() - request_started
-            facts = parse_company_facts(payload, symbol)
-            facts_processed = self.database.upsert_sec_company_update(
-                company,
-                facts,
-                new_state,
-                connection=write_connection,
-            )
+            processing_started = self.timer()
+            try:
+                facts = parse_company_facts(payload, symbol)
+            except Exception as exc:
+                raise SecCompanySyncError(
+                    "parse", "companyfacts", self.timer() - processing_started, exc
+                ) from exc
+            try:
+                self.database.delete_sync_value(
+                    "sec_submissions_status", cik, connection=write_connection
+                )
+                facts_processed = self.database.upsert_sec_company_update(
+                    company,
+                    facts,
+                    new_state,
+                    connection=write_connection,
+                )
+            except Exception as exc:
+                raise SecCompanySyncError(
+                    "database", "structured_facts", self.timer() - processing_started, exc
+                ) from exc
+            parse_and_persist_seconds = self.timer() - processing_started
         elif initializing_state:
             self.database.set_sync_value(
                 "sec_accessions", cik, new_state, connection=write_connection
@@ -237,10 +571,89 @@ class DataSynchronizer:
         return {
             "facts_processed": facts_processed,
             "companies_updated": int(needs_facts),
+            "companyfacts_unavailable": 0,
+            "submissions_unavailable": 0,
             "submissions_seconds": submissions_seconds,
             "companyfacts_seconds": companyfacts_seconds,
+            "parse_and_persist_seconds": parse_and_persist_seconds if needs_facts else 0.0,
+            "companyfacts_requests": int(needs_facts),
             "accessions": new_state if needs_facts or initializing_state else None,
         }
+
+    def _filing_index_snapshots(self) -> list[FilingIndexSnapshot]:
+        if self.sec is None:
+            raise ValueError("SEC client is required for SEC synchronization")
+        today = self.clock().date()
+        raw_cursor = self.database.sync_value("sec_change_detection", "xbrl_index")
+        cursor: date | None = None
+        if isinstance(raw_cursor, dict) and raw_cursor.get("last_data_received"):
+            try:
+                cursor = date.fromisoformat(str(raw_cursor["last_data_received"]))
+            except ValueError as exc:
+                raise ValueError("Invalid SEC XBRL-index cursor") from exc
+            if cursor > today:
+                raise ValueError("SEC XBRL-index cursor is in the future")
+        quarters = _quarters_between(cursor or today, today)
+        current_key = (today.year, (today.month - 1) // 3 + 1)
+        snapshots = [
+            parse_filing_index(
+                self.sec.filing_index(year, quarter, current=(year, quarter) == current_key)
+            )
+            for year, quarter in quarters
+        ]
+        if cursor is not None and max(item.last_data_received for item in snapshots) < cursor:
+            raise ValueError("SEC XBRL index regressed behind the saved cursor")
+        return snapshots
+
+    def _negative_cache_fresh(self, status: Any) -> bool:
+        if not isinstance(status, dict) or status.get("status") != "unavailable":
+            return False
+        try:
+            checked = datetime.fromisoformat(str(status["last_checked_at"]))
+        except (KeyError, TypeError, ValueError):
+            return False
+        if checked.tzinfo is None:
+            checked = checked.replace(tzinfo=UTC)
+        return self.clock() - checked.astimezone(UTC) < self.companyfacts_unavailable_ttl
+
+    def _negative_cache_expired(self, status: Any) -> bool:
+        return (
+            isinstance(status, dict)
+            and status.get("status") == "unavailable"
+            and not self._negative_cache_fresh(status)
+        )
+
+    def _record_unavailable(
+        self,
+        source: str,
+        cik: str,
+        accessions: list[str],
+        connection: Any,
+    ) -> None:
+        self.database.set_sync_value("sec_accessions", cik, accessions, connection=connection)
+        self.database.set_sync_value(
+            source,
+            cik,
+            {
+                "status": "unavailable",
+                "last_checked_at": self.clock().isoformat(),
+                "last_submission_accession": accessions[-1] if accessions else None,
+                "last_http_status": 404,
+            },
+            connection=connection,
+        )
+
+    def _sec_request_counts(self) -> dict[str, int] | None:
+        counts = getattr(self.sec, "request_counts", None)
+        return dict(counts) if isinstance(counts, Mapping) else None
+
+    def _request_count_delta(
+        self, before: dict[str, int] | None, logical: dict[str, int]
+    ) -> dict[str, int]:
+        after = self._sec_request_counts()
+        if before is None or after is None:
+            return logical
+        return {key: after.get(key, 0) - before.get(key, 0) for key in set(before) | set(after)}
 
     def sync_historical_bars(self, requested_symbols: list[str] | None = None) -> dict[str, Any]:
         return self._run_stage(
@@ -277,9 +690,7 @@ class DataSynchronizer:
         return counts
 
     def refresh_market(self, requested_symbols: list[str] | None = None) -> dict[str, Any]:
-        return self._run_stage(
-            "market_snapshot", lambda: self._refresh_market(requested_symbols)
-        )
+        return self._run_stage("market_snapshot", lambda: self._refresh_market(requested_symbols))
 
     def _refresh_market(self, requested_symbols: list[str] | None) -> dict[str, Any]:
         if self.alpaca is None:

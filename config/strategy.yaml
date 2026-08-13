@@ -144,3 +144,4 @@ sec:
   request_interval_seconds: 0.11
   timeout_seconds: 30
   max_retries: 4
+  companyfacts_unavailable_ttl_days: 7

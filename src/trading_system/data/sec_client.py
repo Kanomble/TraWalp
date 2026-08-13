@@ -4,12 +4,26 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
 import requests
 
 LOGGER = logging.getLogger(__name__)
+
+
+class SecResourceNotFound(Exception):
+    """An expected absence of one specific SEC resource, not an infrastructure failure."""
+
+    def __init__(self, resource_type: str, cik: str | None, url: str) -> None:
+        self.resource_type = resource_type
+        self.cik = cik
+        self.url = url
+        super().__init__(
+            f"SEC {resource_type} resource not found"
+            + (f" for CIK {cik}" if cik is not None else "")
+        )
 
 
 class SecClient:
@@ -35,48 +49,88 @@ class SecClient:
         self.max_retries = max_retries
         self.sleeper = sleeper
         self._last_request_at = 0.0
+        self._request_counts: Counter[str] = Counter()
 
-    def _get_json(self, url: str) -> dict[str, Any]:
+    @property
+    def request_counts(self) -> dict[str, int]:
+        """Return actual HTTP attempts, including retries, grouped by resource."""
+
+        return dict(self._request_counts)
+
+    def _get(self, url: str, *, resource_type: str, cik: str | None = None) -> requests.Response:
         for attempt in range(self.max_retries + 1):
             wait = self.interval - (time.monotonic() - self._last_request_at)
             if wait > 0:
                 self.sleeper(wait)
             try:
+                self._request_counts[resource_type] += 1
                 response = self.session.get(url, timeout=self.timeout)
                 self._last_request_at = time.monotonic()
+                if response.status_code == 404:
+                    raise SecResourceNotFound(resource_type, cik, url)
                 if response.status_code in {429, 500, 502, 503, 504}:
                     raise requests.HTTPError(
                         f"retryable SEC status {response.status_code}", response=response
                     )
                 response.raise_for_status()
-                payload = response.json()
-                if not isinstance(payload, dict):
-                    raise ValueError("SEC response was not a JSON object")
-                return payload
-            except (requests.RequestException, ValueError) as exc:
-                if (
-                    isinstance(exc, requests.HTTPError)
-                    and exc.response is not None
-                    and exc.response.status_code == 404
-                ):
-                    LOGGER.warning("SEC resource not found url=%s; not retrying", url)
-                    raise
+                return response
+            except SecResourceNotFound:
+                raise
+            except requests.RequestException as exc:
                 if attempt >= self.max_retries:
-                    LOGGER.error("SEC request failed url=%s attempts=%d", url, attempt + 1)
                     raise
                 delay = min(2**attempt, 16)
-                LOGGER.warning("SEC request retry url=%s delay=%s error=%s", url, delay, exc)
+                LOGGER.warning(
+                    "SEC request retry resource=%s url=%s delay=%s error=%s",
+                    resource_type,
+                    url,
+                    delay,
+                    exc,
+                )
                 self.sleeper(delay)
         raise RuntimeError("unreachable")
 
+    def _get_json(self, url: str, *, resource_type: str, cik: str | None = None) -> dict[str, Any]:
+        response = self._get(url, resource_type=resource_type, cik=cik)
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("SEC response was not a JSON object")
+        return payload
+
+    def _get_text(self, url: str, *, resource_type: str) -> str:
+        return self._get(url, resource_type=resource_type).text
+
     def company_facts(self, cik: str | int) -> dict[str, Any]:
-        return self._get_json(f"{self.DATA_BASE}/api/xbrl/companyfacts/CIK{int(cik):010d}.json")
+        normalized = f"{int(cik):010d}"
+        return self._get_json(
+            f"{self.DATA_BASE}/api/xbrl/companyfacts/CIK{normalized}.json",
+            resource_type="companyfacts",
+            cik=normalized,
+        )
 
     def submissions(self, cik: str | int) -> dict[str, Any]:
-        return self._get_json(f"{self.DATA_BASE}/submissions/CIK{int(cik):010d}.json")
+        normalized = f"{int(cik):010d}"
+        return self._get_json(
+            f"{self.DATA_BASE}/submissions/CIK{normalized}.json",
+            resource_type="submissions",
+            cik=normalized,
+        )
 
     def company_tickers(self) -> dict[str, Any]:
-        return self._get_json(f"{self.ARCHIVES_BASE}/files/company_tickers.json")
+        return self._get_json(
+            f"{self.ARCHIVES_BASE}/files/company_tickers.json",
+            resource_type="ticker_map",
+        )
+
+    def filing_index(self, year: int, quarter: int, *, current: bool) -> str:
+        if quarter not in {1, 2, 3, 4}:
+            raise ValueError("quarter must be within 1..4")
+        path = (
+            "edgar/full-index/xbrl.idx"
+            if current
+            else f"edgar/full-index/{year}/QTR{quarter}/xbrl.idx"
+        )
+        return self._get_text(f"{self.ARCHIVES_BASE}/Archives/{path}", resource_type="filing_index")
 
     def ticker_to_cik(self) -> dict[str, str]:
         result: dict[str, str] = {}

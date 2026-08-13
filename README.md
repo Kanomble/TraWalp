@@ -129,14 +129,19 @@ python -m trading_system.cli sync --full
 python -m trading_system.cli sync --full --symbols ORCL AAPL MSFT
 ```
 
-Die SEC-Ticker-/CIK-Referenz wird dabei aktualisiert und anschließend lokal wiederverwendet, statt
-bei jedem inkrementellen Lauf neu aufgebaut zu werden.
+Die SEC-Ticker-/CIK-Referenz wird bei jedem Lauf mit einem einzelnen Request aktualisiert. Dadurch
+werden neue Listings sichtbar, ohne tausende Unternehmensendpunkte abzufragen. Sichere
+Class-Share-Aliase wie `BRK.B` → `BRK-B` werden normalisiert; unsichere Namens- oder
+Ähnlichkeits-Matches finden nicht statt.
 
-Der tägliche SEC-Lauf prüft dagegen nur die aktuellen Submissions. Company Facts werden nur dann
-geladen und neu geparst, wenn eine neue relevante 10-K-/10-Q-/20-F-/40-F-/Amendment-Accession
-vorliegt oder lokal noch keine Facts existieren. 8-K-Filings lösen keinen Download aus, weil der
-Parser daraus keine Screening-Facts übernimmt. Der Zustand stammt aus SEC-Accessions, nicht nur aus
-einer lokalen Uhrzeit; Upserts machen wiederholte Läufe idempotent:
+Der tägliche SEC-Lauf lädt zunächst den offiziellen, ungefähr 2–3 MiB großen XBRL-Index des
+aktuellen Quartals. Er vergleicht dessen Accessions mit dem lokalen Zustand und ruft Submissions und
+Company Facts nur für neue, vom Parser unterstützte 10-K-/10-Q-/20-F-/40-F-/Amendment-Filings ab.
+8-K-/6-K-Filings lösen weiterhin keinen Download aus, weil der Parser daraus keine
+Screening-Facts übernimmt. Verpasste Läufe werden über archivierte Quartalsindizes aufgeholt. Der
+globale Cursor wird nur nach einem fehlerfreien Lauf vorgeschoben; ein unvollständiger oder
+fehlerhafter Index bricht sicher ab. Der aktuelle SEC-Index kann bis zum nächsten Geschäftstag
+hinter einem gerade eingereichten Filing liegen, verliert das Filing aber nicht:
 
 ```bash
 python -m trading_system.cli sync --incremental
@@ -181,10 +186,24 @@ Filings und müssen daher nicht unmittelbar vor jedem Screen aktualisiert werden
 neueste abgeschlossene Daily Bar sind zeitkritischer. `screen` startet niemals automatisch einen
 Sync; fehlende oder alte Freshness-Metadaten erzeugen lediglich Warnungen.
 
+SEC-Ergebnisse unterscheiden erwartete Quellenlücken von echten Fehlern. Ein HTTP 404 für Company
+Facts erhöht `companyfacts_unavailable`, nicht `errors`, und erzeugt genau eine kurze INFO-Meldung.
+Der kompakte negative Zustand wird standardmäßig sieben Tage gespeichert
+(`sec.companyfacts_unavailable_ttl_days`). Eine neue unterstützte Accession, ein abgelaufener
+Eintrag oder `sync --full` erzwingt einen erneuten Versuch. Request- und Laufzeitmetriken umfassen
+Change Detection, Submissions, Company Facts sowie Parse/Persist; 429/5xx, Timeouts,
+Verbindungs-, JSON-, Parser- und Datenbankfehler werden getrennt gezählt.
+
+Nicht gemappte Alpaca-Symbole werden beobachtbar als ETF/Fund, Warrant, Unit, Right, Preferred,
+Depositary/Foreign oder `unclassified` zusammengefasst. Diese Diagnose schließt keine gemappten
+Aktien aus dem SEC-Sync aus. Insbesondere bleibt `unclassified` bewusst bestehen, wenn lokale
+Metadaten keine zuverlässige Aussage erlauben.
+
 Normalisierte SEC-Facts, kompakter SEC-Sync-Status, Assets, Unternehmen, Tagesbars und Snapshots
 landen standardmäßig in `data/trading_system.sqlite3`. Company-Facts-JSON wird nach erfolgreichem
 Parse und atomarem Upsert verworfen. Ein Parser- oder Datenbankfehler schreibt die zugehörige
 Accession nicht als erfolgreich; der nächste inkrementelle Lauf kann den Import wiederholen.
+Bestehende Legacy-Payloads werden durch den Sync weder gelöscht noch neu erzeugt.
 
 ## SQLite-Speicher und alter SEC-Cache
 
