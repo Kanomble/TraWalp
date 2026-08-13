@@ -26,7 +26,7 @@ from trading_system.fundamentals.peers import assign_peer_groups, peer_diagnosti
 from trading_system.fundamentals.quality import analyze_fundamentals
 from trading_system.models.fundamentals import CompanyIdentity, FundamentalMetrics
 from trading_system.models.market_data import DailyBar
-from trading_system.models.scores import StockScores
+from trading_system.models.scores import ScoreBreakdown, StockScores
 from trading_system.models.screening import MarketDebug, PeerDebug, ScreenRecord, ScreenReport
 from trading_system.models.signals import TechnicalSnapshot
 from trading_system.strategy.scoring import (
@@ -79,9 +79,20 @@ class Screener:
     def run(self, as_of: date, *, now: datetime | None = None) -> ScreenReport:
         market_session = effective_trading_session(as_of, now)
         companies = self.database.list_tradable_companies()
-        prepared = [self._prepare(company, market_session) for company in companies]
+        identity_conflicts = self.database.unresolved_sec_identity_conflict_symbols()
+        safe_companies = [
+            company for company in companies if company.symbol not in identity_conflicts
+        ]
+        conflicted_companies = [
+            company for company in companies if company.symbol in identity_conflicts
+        ]
+        prepared = [self._prepare(company, market_session) for company in safe_companies]
         peer_table = self._peer_table(prepared)
         records = [self._score(candidate, peer_table) for candidate in prepared]
+        records.extend(
+            self._identity_conflict_record(company, market_session)
+            for company in conflicted_companies
+        )
 
         eligible = sorted(
             (record for record in records if record.eligible),
@@ -111,6 +122,10 @@ class Screener:
             generated_at=datetime.now(UTC).isoformat(),
             analyzed_count=len(ranked),
             eligible_count=len(eligible),
+            identity_conflicts_excluded=len(conflicted_companies),
+            identity_conflict_sample=tuple(
+                sorted(company.symbol for company in conflicted_companies)[:10]
+            ),
             records=tuple(ranked),
         )
 
@@ -118,9 +133,11 @@ class Screener:
         self, symbol: str, as_of: date, *, now: datetime | None = None
     ) -> PeerDebug | None:
         market_session = effective_trading_session(as_of, now)
+        identity_conflicts = self.database.unresolved_sec_identity_conflict_symbols()
         prepared = [
             self._prepare(company, market_session)
             for company in self.database.list_tradable_companies()
+            if company.symbol not in identity_conflicts
         ]
         candidate = next((item for item in prepared if item.company.symbol == symbol.upper()), None)
         if candidate is None:
@@ -131,6 +148,27 @@ class Screener:
             candidate.company.symbol,
             candidate.company.sic,
             self.config.peers.min_peer_count,
+        )
+
+    def _identity_conflict_record(
+        self, company: CompanyIdentity, market_session: date
+    ) -> ScreenRecord:
+        return ScreenRecord(
+            symbol=company.symbol,
+            name=company.name,
+            as_of=market_session,
+            sic=company.sic,
+            eligible=False,
+            exclusion_reasons=("identity_conflict",),
+            data_warnings=("unresolved_current_issuer_identity",),
+            fundamentals=FundamentalMetrics(),
+            technical=TechnicalSnapshot(),
+            scores=StockScores(
+                quality=_unavailable_score("quality"),
+                valuation=_unavailable_score("valuation"),
+                opportunity=_unavailable_score("opportunity"),
+                timing=_unavailable_score("timing"),
+            ),
         )
 
     def debug_market(self, symbol: str, as_of: date, *, now: datetime | None = None) -> MarketDebug:
@@ -412,6 +450,15 @@ def _bar_frame(bars: list[DailyBar]) -> pd.DataFrame:
             "volume": [bar.volume for bar in bars],
         },
         index=pd.DatetimeIndex([bar.timestamp for bar in bars]),
+    )
+
+
+def _unavailable_score(name: str) -> ScoreBreakdown:
+    return ScoreBreakdown(
+        name=name,
+        factors=(),
+        available_factor_count=0,
+        reason_score_unavailable="identity_conflict",
     )
 
 

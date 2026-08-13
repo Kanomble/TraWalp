@@ -179,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
             f"\nRequested as-of: {report.requested_as_of}"
             f" | Effective completed session: {report.effective_market_session}"
             f"\nAnalyzed: {report.analyzed_count} | Eligible: {report.eligible_count}"
+            f" | Identity conflicts excluded: {report.identity_conflicts_excluded}"
             f"\nCSV: {csv_path}\nJSON: {json_path}"
         )
         return 0
@@ -307,6 +308,7 @@ def _format_data_status(states: dict[str, dict]) -> str:
             "companyfacts_unavailable",
             "submissions_unavailable",
             "identity_conflicts",
+            "identity_conflicts_skipped",
             "identity_conflict_sample",
             "negative_cache_hits",
             "missing_cik_mappings",

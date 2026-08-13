@@ -38,6 +38,8 @@ class ScreenReport(BaseModel):
     generated_at: str
     analyzed_count: int = Field(ge=0)
     eligible_count: int = Field(ge=0)
+    identity_conflicts_excluded: int = Field(default=0, ge=0)
+    identity_conflict_sample: tuple[str, ...] = ()
     records: tuple[ScreenRecord, ...]
 
 

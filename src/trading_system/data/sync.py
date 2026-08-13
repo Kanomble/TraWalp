@@ -21,6 +21,11 @@ from trading_system.data.market_sessions import (
     latest_completed_trading_session,
 )
 from trading_system.data.sec_client import SecClient, SecResourceNotFound
+from trading_system.data.sec_identity import (
+    SecIdentityResolution,
+    identity_conflict_is_resolved,
+    resolve_sec_identities,
+)
 from trading_system.data.universe import is_financial_or_reit, is_reit
 from trading_system.data.xbrl_parser import VALID_FORMS, parse_company_facts
 from trading_system.models.fundamentals import CompanyIdentity
@@ -40,31 +45,13 @@ UNMAPPED_CATEGORIES = (
     "depositary_or_foreign",
     "unclassified",
 )
+SEC_IDENTITY_CONFLICT_SOURCE = "sec_identity_conflicts"
 
 
 @dataclass(frozen=True)
 class FilingIndexSnapshot:
     last_data_received: date
     accessions_by_cik: dict[str, set[str]]
-
-
-@dataclass(frozen=True)
-class SecIdentityConflict:
-    """A proposed SEC identity that contradicts a persisted canonical identity."""
-
-    symbol: str
-    proposed_cik: str
-    existing_cik: str
-    existing_symbol: str
-    source: str
-
-
-@dataclass(frozen=True)
-class SecIdentityResolution:
-    ticker_map: dict[str, str]
-    alias_mappings: dict[str, str]
-    canonical_symbols: dict[str, str]
-    conflicts: tuple[SecIdentityConflict, ...]
 
 
 class SecCompanySyncError(Exception):
@@ -143,81 +130,6 @@ def _quarters_between(start: date, end: date) -> list[tuple[int, int]]:
         else:
             quarter += 1
     return output
-
-
-def _security_symbol_priority(symbol: str) -> tuple[int, str]:
-    structural = (".WS", ".RT", ".U", ".PR")
-    return (int(any(marker in symbol for marker in structural)), symbol)
-
-
-def _resolve_sec_identities(
-    symbols: set[str],
-    persisted: Mapping[str, str],
-    current_sec: Mapping[str, str],
-) -> SecIdentityResolution:
-    """Resolve current SEC identities without silently moving persisted symbols or CIKs."""
-
-    ticker_map: dict[str, str] = {}
-    conflicts: list[SecIdentityConflict] = []
-    for symbol in sorted(symbols):
-        persisted_cik = persisted.get(symbol)
-        current_cik = current_sec.get(symbol)
-        if persisted_cik is not None and current_cik is not None and persisted_cik != current_cik:
-            conflicts.append(
-                SecIdentityConflict(
-                    symbol=symbol,
-                    proposed_cik=current_cik,
-                    existing_cik=persisted_cik,
-                    existing_symbol=symbol,
-                    source="exact_sec_ticker",
-                )
-            )
-            ticker_map[symbol] = persisted_cik
-        elif current_cik is not None:
-            ticker_map[symbol] = current_cik
-        elif persisted_cik is not None:
-            ticker_map[symbol] = persisted_cik
-
-    alias_mappings = {
-        symbol: current_sec[symbol.replace(".", "-")]
-        for symbol in symbols - ticker_map.keys()
-        if "." in symbol and symbol.replace(".", "-") in current_sec
-    }
-    ticker_map.update(alias_mappings)
-
-    cik_symbols: dict[str, list[str]] = defaultdict(list)
-    for symbol, cik in sorted(ticker_map.items()):
-        cik_symbols[cik].append(symbol)
-    existing_by_cik = {cik: symbol for symbol, cik in persisted.items()}
-    canonical_symbols: dict[str, str] = {}
-    for cik, candidates in cik_symbols.items():
-        existing_symbol = existing_by_cik.get(cik)
-        if existing_symbol is None:
-            canonical_symbols[cik] = min(candidates, key=_security_symbol_priority)
-        elif existing_symbol in candidates:
-            canonical_symbols[cik] = existing_symbol
-        else:
-            proposed_symbol = min(candidates, key=_security_symbol_priority)
-            conflicts.append(
-                SecIdentityConflict(
-                    symbol=proposed_symbol,
-                    proposed_cik=cik,
-                    existing_cik=cik,
-                    existing_symbol=existing_symbol,
-                    source=(
-                        "dot_hyphen_alias"
-                        if proposed_symbol in alias_mappings
-                        else "exact_sec_ticker"
-                    ),
-                )
-            )
-
-    return SecIdentityResolution(
-        ticker_map=ticker_map,
-        alias_mappings=alias_mappings,
-        canonical_symbols=canonical_symbols,
-        conflicts=tuple(conflicts),
-    )
 
 
 def _classify_sync_failure(counts: dict[str, Any], error: SecCompanySyncError) -> None:
@@ -356,7 +268,8 @@ class DataSynchronizer:
         }
         self.database.set_sync_value("sec_reference", "ticker_to_cik", remote_map)
         local_map = self.database.company_symbol_to_cik()
-        identity = _resolve_sec_identities(symbols, local_map, remote_map)
+        identity = resolve_sec_identities(symbols, local_map, remote_map)
+        self._persist_identity_conflicts(identity, symbols, local_map, remote_map)
         ticker_map = identity.ticker_map
         alias_mappings = identity.alias_mappings
         unmapped = [asset for asset in selected_assets if asset.symbol not in ticker_map]
@@ -528,6 +441,47 @@ class DataSynchronizer:
             }
         )
         return counts
+
+    def _persist_identity_conflicts(
+        self,
+        identity: SecIdentityResolution,
+        selected_symbols: set[str],
+        persisted: Mapping[str, str],
+        current_sec: Mapping[str, str],
+    ) -> None:
+        previous = self.database.sync_values(SEC_IDENTITY_CONFLICT_SOURCE)
+        active = {conflict.symbol: conflict for conflict in identity.conflicts}
+        observed_at = self.clock().isoformat()
+        with self.database.connect() as connection:
+            for symbol, conflict in active.items():
+                old = previous.get(symbol)
+                detected_at = (
+                    old.get("detected_at") or observed_at
+                    if isinstance(old, dict) and old.get("status") == "unresolved"
+                    else observed_at
+                )
+                self.database.set_sync_value(
+                    SEC_IDENTITY_CONFLICT_SOURCE,
+                    symbol,
+                    {
+                        "symbol": symbol,
+                        "existing_cik": conflict.existing_cik,
+                        "existing_symbol": conflict.existing_symbol,
+                        "proposed_cik": conflict.proposed_cik,
+                        "source": conflict.source,
+                        "status": "unresolved",
+                        "detected_at": detected_at,
+                        "last_seen_at": observed_at,
+                    },
+                    connection=connection,
+                )
+            for symbol in (selected_symbols & previous.keys()) - active.keys():
+                if identity_conflict_is_resolved(symbol, persisted, current_sec):
+                    self.database.delete_sync_value(
+                        SEC_IDENTITY_CONFLICT_SOURCE,
+                        symbol,
+                        connection=connection,
+                    )
 
     def _sync_sec_company(
         self,
@@ -748,7 +702,10 @@ class DataSynchronizer:
         if self.alpaca is None:
             raise ValueError("Alpaca client is required for historical-bar synchronization")
         available = {company.symbol for company in self.database.list_tradable_companies()}
-        symbols = sorted(available if not requested_symbols else available & set(requested_symbols))
+        selected = available if not requested_symbols else available & set(requested_symbols)
+        identity_conflicts = self.database.unresolved_sec_identity_conflict_symbols()
+        skipped = sorted(selected & identity_conflicts)
+        symbols = sorted(selected - identity_conflicts)
         completed_session = latest_completed_trading_session()
         full_start, end = full_history_request_window(completed_session, self.market_data_days)
         latest = self.database.latest_bar_timestamps(symbols)
@@ -757,7 +714,13 @@ class DataSynchronizer:
             starts[latest[symbol] - timedelta(days=7) if symbol in latest else full_start].append(
                 symbol
             )
-        counts = {"symbols_checked": len(symbols), "records_updated": 0, "errors": 0}
+        counts = {
+            "symbols_checked": len(symbols),
+            "identity_conflicts_skipped": len(skipped),
+            "identity_conflict_sample": skipped[:10],
+            "records_updated": 0,
+            "errors": 0,
+        }
         for start, grouped_symbols in starts.items():
             for batch in _chunks(grouped_symbols, self.market_data_batch_size):
                 try:
@@ -779,9 +742,14 @@ class DataSynchronizer:
     def _refresh_market(self, requested_symbols: list[str] | None) -> dict[str, Any]:
         if self.alpaca is None:
             raise ValueError("Alpaca client is required for market refresh")
-        symbols = self._screenable_symbols(requested_symbols)
+        candidates = self._screenable_symbols(requested_symbols)
+        identity_conflicts = self.database.unresolved_sec_identity_conflict_symbols()
+        skipped = sorted(set(candidates) & identity_conflicts)
+        symbols = [symbol for symbol in candidates if symbol not in identity_conflicts]
         counts = {
             "symbols_requested": len(symbols),
+            "identity_conflicts_skipped": len(skipped),
+            "identity_conflict_sample": skipped[:10],
             "symbols_updated": 0,
             "missing_symbols": 0,
             "errors": 0,

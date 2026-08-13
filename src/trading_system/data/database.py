@@ -12,6 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from trading_system.data.sec_identity import resolve_sec_identities
 from trading_system.models.fundamentals import CompanyIdentity, FundamentalFact
 from trading_system.models.market_data import DailyBar, MarketSnapshot, TradableAsset
 
@@ -218,6 +219,45 @@ class Database:
             except (json.JSONDecodeError, TypeError):
                 output[str(row["key"])] = row["value"]
         return output
+
+    def unresolved_sec_identity_conflicts(self) -> dict[str, dict[str, Any]]:
+        """Return locally persisted issuer/ticker conflicts used by operational guards."""
+
+        conflicts = {
+            symbol: value
+            for symbol, value in self.sync_values("sec_identity_conflicts").items()
+            if isinstance(value, dict) and value.get("status") == "unresolved"
+        }
+        cached_sec = self.sync_value("sec_reference", "ticker_to_cik")
+        if not isinstance(cached_sec, dict):
+            return conflicts
+        current_sec = {
+            str(symbol).upper(): str(cik).zfill(10) for symbol, cik in cached_sec.items()
+        }
+        resolution = resolve_sec_identities(
+            set(self.list_tradable_asset_symbols()),
+            self.company_symbol_to_cik(),
+            current_sec,
+        )
+        for conflict in resolution.conflicts:
+            conflicts.setdefault(
+                conflict.symbol,
+                {
+                    "symbol": conflict.symbol,
+                    "existing_cik": conflict.existing_cik,
+                    "existing_symbol": conflict.existing_symbol,
+                    "proposed_cik": conflict.proposed_cik,
+                    "source": conflict.source,
+                    "status": "unresolved",
+                    "detected_at": None,
+                    "last_seen_at": None,
+                    "state_source": "cached_sec_reference",
+                },
+            )
+        return conflicts
+
+    def unresolved_sec_identity_conflict_symbols(self) -> set[str]:
+        return set(self.unresolved_sec_identity_conflicts())
 
     def delete_sync_value(
         self,

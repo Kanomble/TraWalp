@@ -7,6 +7,7 @@ from trading_system.config import DataQualityConfig, FilterConfig, PeerConfig, l
 from trading_system.data.database import Database
 from trading_system.models.fundamentals import CompanyIdentity, FundamentalFact
 from trading_system.models.market_data import DailyBar, MarketSnapshot, TradableAsset
+from trading_system.strategy import screener as screener_module
 from trading_system.strategy.reporting import (
     export_report,
     format_explanation,
@@ -200,6 +201,89 @@ def test_raw_cache_cleanup_does_not_change_screening_results(tmp_path) -> None:
 
     assert cleanup["deleted_rows"] == 2
     assert before.model_dump(exclude={"generated_at"}) == after.model_dump(exclude={"generated_at"})
+
+
+def test_identity_conflict_is_excluded_before_fundamental_or_technical_analysis(
+    tmp_path, monkeypatch
+) -> None:
+    database = _database(tmp_path)
+    database.set_sync_value(
+        "sec_reference",
+        "ticker_to_cik",
+        {"AAA": "0000009999", "BBB": "0000000002"},
+    )
+    original_bars = database.bars_available_as_of
+    original_facts = database.facts_available_as_of
+    original_snapshot = database.latest_market_snapshot
+    original_analyze = screener_module.analyze_fundamentals
+    original_technical = screener_module.technical_snapshot
+    analyzed_symbols: list[str] = []
+    technical_calls = 0
+
+    def guarded_bars(symbol, *args, **kwargs):
+        assert symbol != "AAA"
+        return original_bars(symbol, *args, **kwargs)
+
+    def guarded_facts(symbol, *args, **kwargs):
+        assert symbol != "AAA"
+        return original_facts(symbol, *args, **kwargs)
+
+    def guarded_snapshot(symbol):
+        assert symbol != "AAA"
+        return original_snapshot(symbol)
+
+    def tracked_analyze(facts, *args, **kwargs):
+        analyzed_symbols.append(facts[0].symbol if facts else "")
+        return original_analyze(facts, *args, **kwargs)
+
+    def tracked_technical(*args, **kwargs):
+        nonlocal technical_calls
+        technical_calls += 1
+        return original_technical(*args, **kwargs)
+
+    monkeypatch.setattr(database, "bars_available_as_of", guarded_bars)
+    monkeypatch.setattr(database, "facts_available_as_of", guarded_facts)
+    monkeypatch.setattr(database, "latest_market_snapshot", guarded_snapshot)
+    monkeypatch.setattr(screener_module, "analyze_fundamentals", tracked_analyze)
+    monkeypatch.setattr(screener_module, "technical_snapshot", tracked_technical)
+    before_facts = original_facts("AAA", date(2025, 2, 14))
+    before_bars = original_bars("AAA", date(2025, 2, 14))
+
+    current = Screener(database, _test_config()).run(date(2025, 2, 14))
+    historical = Screener(database, _test_config()).run(date(2024, 12, 31))
+
+    current_conflict = next(record for record in current.records if record.symbol == "AAA")
+    historical_conflict = next(record for record in historical.records if record.symbol == "AAA")
+    assert current.identity_conflicts_excluded == historical.identity_conflicts_excluded == 1
+    assert current.identity_conflict_sample == historical.identity_conflict_sample == ("AAA",)
+    assert (
+        current_conflict.exclusion_reasons
+        == historical_conflict.exclusion_reasons
+        == ("identity_conflict",)
+    )
+    assert not current_conflict.eligible and current_conflict.scores.total is None
+    assert current.analyzed_count == 2
+    assert current.eligible_count == sum(record.eligible for record in current.records)
+    assert analyzed_symbols == ["BBB", "BBB"]
+    assert technical_calls == 2
+    assert original_facts("AAA", date(2025, 2, 14)) == before_facts
+    assert original_bars("AAA", date(2025, 2, 14)) == before_bars
+
+    database.set_sync_value(
+        "sec_reference",
+        "ticker_to_cik",
+        {"AAA": "0000000001", "BBB": "0000000002"},
+    )
+    monkeypatch.setattr(database, "bars_available_as_of", original_bars)
+    monkeypatch.setattr(database, "facts_available_as_of", original_facts)
+    monkeypatch.setattr(database, "latest_market_snapshot", original_snapshot)
+    monkeypatch.setattr(screener_module, "analyze_fundamentals", original_analyze)
+    monkeypatch.setattr(screener_module, "technical_snapshot", original_technical)
+    resolved = Screener(database, _test_config()).run(date(2025, 2, 14))
+
+    resolved_aaa = next(record for record in resolved.records if record.symbol == "AAA")
+    assert resolved.identity_conflicts_excluded == 0
+    assert "identity_conflict" not in resolved_aaa.exclusion_reasons
 
 
 def test_peer_debug_uses_full_local_screening_universe(tmp_path) -> None:

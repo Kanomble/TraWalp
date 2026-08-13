@@ -140,6 +140,21 @@ bei Ticker-Reuse, Fusion oder Umbenennung –, wird der Vorschlag vor jedem Comp
 `identity_conflict` quarantänisiert. Der bestehende Company-, Fact- und Bar-Bestand bleibt erhalten,
 `errors` und `database_failures` bleiben unverändert, und der SEC-Stage-Status wird zur manuellen
 Prüfung `partial`. Ein Dot-/Hyphen-Alias darf ebenfalls keinen bereits gespeicherten CIK umbenennen.
+Der Sync persistiert aktive Konflikte kompakt in `sync_state` unter `sec_identity_conflicts`. Diese
+lokale Quarantäne ist anschließend die gemeinsame Quelle für Screening, Snapshot-Refresh und
+Daily-Bar-Updates; die drei Pfade erzeugen dafür keine zusätzlichen SEC-Requests.
+Für Datenbanken aus der Version vor dieser Persistenz ergänzen dieselben Guards den Zustand
+vorübergehend durch den identischen Resolver auf der bereits lokal gecachten SEC-Ticker-Referenz.
+Damit besteht auch vor dem ersten neuen Sync kein ungeschütztes Screening-Fenster.
+
+Ein quarantänisiertes Symbol erhält im Screen einen nicht geeigneten Record mit
+`identity_conflict`, ohne Facts, Bars, Snapshots oder Analysefunktionen zu laden. `refresh-market`
+und `update-bars` überspringen es vor Alpaca-Requests und melden `identity_conflicts_skipped`.
+Bereits gespeicherte Facts, Bars und Snapshots bleiben unverändert. Weil TraWalp noch kein
+verifiziertes Datum für einen Ticker-Besitzerwechsel speichert, gilt die Sperre konservativ auch
+für historische `--as-of`-Screens. Ein späterer SEC-Sync löscht sie automatisch, sobald die
+persistierte und aktuelle Zuordnung wieder übereinstimmen oder kein alter Company-Owner mehr unter
+dem Symbol gespeichert ist.
 
 Der tägliche SEC-Lauf lädt zunächst den offiziellen, ungefähr 2–3 MiB großen XBRL-Index des
 aktuellen Quartals. Er vergleicht dessen Accessions mit dem lokalen Zustand und ruft Submissions und

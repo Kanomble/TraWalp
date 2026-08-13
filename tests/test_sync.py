@@ -319,6 +319,12 @@ def test_ticker_reuse_identity_conflict_is_quarantined_without_losing_other_work
     assert result["identity_conflict_sample"] == ["PARA"]
     assert result["database_failures"] == result["errors"] == 0
     assert database.dataset_states()["sec"]["status"] == "partial"
+    conflict_state = database.unresolved_sec_identity_conflicts()["PARA"]
+    assert conflict_state["existing_cik"] == "0000813828"
+    assert conflict_state["proposed_cik"] == sec.proposed_cik
+    assert conflict_state["source"] == "exact_sec_ticker"
+    assert conflict_state["status"] == "unresolved"
+    assert conflict_state["detected_at"] == conflict_state["last_seen_at"]
     assert database.company_symbol_to_cik()["PARA"] == "0000813828"
     assert database.company_symbol_to_cik()["PSKY"] == "0002041610"
     assert database.company_symbol_to_cik()["GOODA"] == sec.preceding_cik
@@ -337,6 +343,7 @@ def test_ticker_reuse_identity_conflict_is_quarantined_without_losing_other_work
     corrected = DataSynchronizer(database, None, sec).sync_sec_incremental()  # type: ignore[arg-type]
 
     assert corrected["identity_conflicts"] == corrected["errors"] == 0
+    assert database.unresolved_sec_identity_conflicts() == {}
     assert database.company_symbol_to_cik()["BNZI"] == sec.proposed_cik
     assert database.sync_value("sec_accessions", sec.proposed_cik) == [sec.accession]
     assert sec.submission_calls == sec.fact_calls == 3
@@ -841,6 +848,28 @@ class SnapshotAlpaca:
         return output
 
 
+class OperationalAlpaca(SnapshotAlpaca):
+    def __init__(self) -> None:
+        super().__init__()
+        self.bar_batches: list[list[str]] = []
+
+    def daily_bars(self, symbols, _start, _end) -> list[DailyBar]:
+        batch = list(symbols)
+        self.bar_batches.append(batch)
+        return [
+            DailyBar(
+                symbol=symbol,
+                timestamp=datetime(2026, 8, 12, tzinfo=UTC),
+                open=Decimal("10"),
+                high=Decimal("12"),
+                low=Decimal("9"),
+                close=Decimal("11"),
+                volume=100,
+            )
+            for symbol in batch
+        ]
+
+
 class FailingSnapshotAlpaca(SnapshotAlpaca):
     def stock_snapshots(self, symbols) -> list[MarketSnapshot]:
         batch = list(symbols)
@@ -868,6 +897,69 @@ def test_market_refresh_batches_symbols_maps_results_without_touching_history(tm
     assert database.latest_market_snapshot("AAA").latest_trade_price == Decimal("11.25")
     assert database.latest_bar_timestamp("AAA") is None
     assert database.dataset_states()["market_snapshot"]["status"] == "success"
+
+
+def test_operational_market_and_bar_updates_skip_identity_conflicts(tmp_path) -> None:
+    database = Database(tmp_path / "operational-identity-quarantine.sqlite3")
+    database.initialize()
+    _seed_assets(database, "AAA", "BBB")
+    for index, symbol in enumerate(("AAA", "BBB"), start=1):
+        database.upsert_company(
+            CompanyIdentity(cik=f"{index:010d}", symbol=symbol, name=symbol, sic="3571")
+        )
+    database.upsert_bars(
+        [
+            DailyBar(
+                symbol="AAA",
+                timestamp=datetime(2026, 8, 11, tzinfo=UTC),
+                open=Decimal("9"),
+                high=Decimal("11"),
+                low=Decimal("8"),
+                close=Decimal("10"),
+                volume=90,
+            )
+        ]
+    )
+    database.set_sync_value(
+        "sec_identity_conflicts",
+        "AAA",
+        {
+            "symbol": "AAA",
+            "existing_cik": "0000000001",
+            "proposed_cik": "0000009999",
+            "source": "exact_sec_ticker",
+            "status": "unresolved",
+            "detected_at": "2026-08-13T12:00:00+00:00",
+            "last_seen_at": "2026-08-13T12:00:00+00:00",
+        },
+    )
+    existing_aaa_bars = database.bars_available_as_of("AAA", date(2026, 8, 13))
+    alpaca = OperationalAlpaca()
+    sync = DataSynchronizer(
+        database,
+        alpaca,
+        None,
+        market_data_batch_size=1,  # type: ignore[arg-type]
+    )
+
+    market = sync.refresh_market()
+    bars = sync.sync_historical_bars()
+
+    assert market["identity_conflicts_skipped"] == 1
+    assert market["identity_conflict_sample"] == ["AAA"]
+    assert market["symbols_requested"] == market["symbols_updated"] == 1
+    assert market["errors"] == 0
+    assert alpaca.batches == [["BBB"]]
+    assert database.latest_market_snapshot("AAA") is None
+    assert database.latest_market_snapshot("BBB") is not None
+    assert database.dataset_states()["market_snapshot"]["status"] == "success"
+    assert bars["identity_conflicts_skipped"] == 1
+    assert bars["identity_conflict_sample"] == ["AAA"]
+    assert bars["symbols_checked"] == bars["records_updated"] == 1
+    assert bars["errors"] == 0
+    assert alpaca.bar_batches == [["BBB"]]
+    assert database.bars_available_as_of("AAA", date(2026, 8, 13)) == existing_aaa_bars
+    assert database.dataset_states()["historical_bars"]["status"] == "success"
 
 
 def test_market_refresh_continues_after_failed_batch_and_does_not_mark_success(tmp_path) -> None:
