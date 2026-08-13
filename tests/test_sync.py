@@ -235,6 +235,34 @@ class IncrementalSec:
         )
 
 
+class IdentityConflictSec(IncrementalSec):
+    proposed_cik = "0001826011"
+    preceding_cik = "0001000000"
+    following_cik = "0003000000"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.corrected = False
+
+    def ticker_to_cik(self) -> dict[str, str]:
+        self.ticker_calls += 1
+        return {
+            "PARA": "0000813828" if self.corrected else self.proposed_cik,
+            **({"BNZI": self.proposed_cik} if self.corrected else {}),
+            "PSKY": "0002041610",
+            "GOODA": self.preceding_cik,
+            "GOODZ": self.following_cik,
+        }
+
+    def filing_index(self, year: int, quarter: int, *, current: bool) -> str:
+        self.index_calls.append((year, quarter, current))
+        return _master_index(
+            (self.proposed_cik, "10-Q", self.accession),
+            (self.preceding_cik, "10-Q", self.accession),
+            (self.following_cik, "10-Q", self.accession),
+        )
+
+
 def _seed_assets(database: Database, *symbols: str) -> None:
     database.upsert_assets(
         [
@@ -248,6 +276,92 @@ def _seed_assets(database: Database, *symbols: str) -> None:
             for symbol in symbols
         ]
     )
+
+
+def test_ticker_reuse_identity_conflict_is_quarantined_without_losing_other_work(
+    tmp_path, caplog
+) -> None:
+    database = Database(tmp_path / "identity-conflict.sqlite3")
+    database.initialize()
+    _seed_assets(database, "PARA", "PSKY", "GOODA", "GOODZ", "BNZI")
+    database.upsert_company(
+        CompanyIdentity(cik="0000813828", symbol="PARA", name="Paramount Global")
+    )
+    database.upsert_company(
+        CompanyIdentity(cik="0002041610", symbol="PSKY", name="Paramount Skydance Corp")
+    )
+    for cik in ("0000813828", "0002041610"):
+        database.set_sync_value("sec_accessions", cik, ["old-accession"])
+    old_payload = _company_facts("old-accession", 90)
+    old_payload["cik"] = 813828
+    database.upsert_facts(parse_company_facts(old_payload, "PARA"))
+    database.upsert_bars(
+        [
+            DailyBar(
+                symbol="PARA",
+                timestamp=datetime(2026, 8, 12, tzinfo=UTC),
+                open=Decimal("10"),
+                high=Decimal("12"),
+                low=Decimal("9"),
+                close=Decimal("11"),
+                volume=100,
+            )
+        ]
+    )
+    before_facts = database.facts_available_as_of("PARA", date(2026, 8, 13))
+    before_bar = database.latest_bar_timestamp("PARA")
+    sec = IdentityConflictSec()
+
+    with caplog.at_level(logging.WARNING):
+        result = DataSynchronizer(database, None, sec).sync_sec_incremental()  # type: ignore[arg-type]
+
+    assert result["identity_conflicts"] == 1
+    assert result["identity_conflict_sample"] == ["PARA"]
+    assert result["database_failures"] == result["errors"] == 0
+    assert database.dataset_states()["sec"]["status"] == "partial"
+    assert database.company_symbol_to_cik()["PARA"] == "0000813828"
+    assert database.company_symbol_to_cik()["PSKY"] == "0002041610"
+    assert database.company_symbol_to_cik()["GOODA"] == sec.preceding_cik
+    assert database.company_symbol_to_cik()["GOODZ"] == sec.following_cik
+    assert database.facts_available_as_of("PARA", date(2026, 8, 13)) == before_facts
+    assert database.latest_bar_timestamp("PARA") == before_bar
+    assert database.sync_value("sec_accessions", sec.proposed_cik) is None
+    assert database.sync_value("sec_accessions", sec.preceding_cik) == [sec.accession]
+    assert database.sync_value("sec_accessions", sec.following_cik) == [sec.accession]
+    assert sec.submission_calls == sec.fact_calls == 2
+    conflicts = [record for record in caplog.records if "identity conflict" in record.message]
+    assert len(conflicts) == 1
+    assert conflicts[0].exc_info is None
+
+    sec.corrected = True
+    corrected = DataSynchronizer(database, None, sec).sync_sec_incremental()  # type: ignore[arg-type]
+
+    assert corrected["identity_conflicts"] == corrected["errors"] == 0
+    assert database.company_symbol_to_cik()["BNZI"] == sec.proposed_cik
+    assert database.sync_value("sec_accessions", sec.proposed_cik) == [sec.accession]
+    assert sec.submission_calls == sec.fact_calls == 3
+
+
+def test_stale_alias_cannot_rename_an_existing_cik(tmp_path) -> None:
+    database = Database(tmp_path / "stale-alias.sqlite3")
+    database.initialize()
+    _seed_assets(database, "NEW.A")
+    database.upsert_company(CompanyIdentity(cik="0000001234", symbol="OLD", name="Existing Issuer"))
+    database.set_sync_value("sec_accessions", "0000001234", ["old-accession"])
+    sec = IncrementalSec()
+    sec.ticker_to_cik = lambda: {"NEW-A": "0000001234"}  # type: ignore[method-assign]
+    sec.filing_index = lambda *_args, **_kwargs: _master_index(  # type: ignore[method-assign]
+        ("0000001234", "10-Q", "new-accession")
+    )
+
+    result = DataSynchronizer(database, None, sec).sync_sec_incremental()  # type: ignore[arg-type]
+
+    assert result["sec_ticker_alias_symbols"] == 1
+    assert result["identity_conflicts"] == 1
+    assert result["database_failures"] == result["errors"] == 0
+    assert database.company_symbol_to_cik() == {"OLD": "0000001234"}
+    assert database.sync_value("sec_accessions", "0000001234") == ["old-accession"]
+    assert sec.submission_calls == sec.fact_calls == 0
 
 
 def test_incremental_sec_skips_unchanged_companyfacts_and_is_idempotent(tmp_path) -> None:

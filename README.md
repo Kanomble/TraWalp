@@ -134,6 +134,13 @@ werden neue Listings sichtbar, ohne tausende Unternehmensendpunkte abzufragen. S
 Class-Share-Aliase wie `BRK.B` → `BRK-B` werden normalisiert; unsichere Namens- oder
 Ähnlichkeits-Matches finden nicht statt.
 
+Persistierte Unternehmensidentitäten werden nicht stillschweigend durch eine neue SEC-Ticker-
+Zuordnung überschrieben. Widersprechen sich vorhandene und aktuelle Symbol-/CIK-Beziehungen – etwa
+bei Ticker-Reuse, Fusion oder Umbenennung –, wird der Vorschlag vor jedem Company-Request als
+`identity_conflict` quarantänisiert. Der bestehende Company-, Fact- und Bar-Bestand bleibt erhalten,
+`errors` und `database_failures` bleiben unverändert, und der SEC-Stage-Status wird zur manuellen
+Prüfung `partial`. Ein Dot-/Hyphen-Alias darf ebenfalls keinen bereits gespeicherten CIK umbenennen.
+
 Der tägliche SEC-Lauf lädt zunächst den offiziellen, ungefähr 2–3 MiB großen XBRL-Index des
 aktuellen Quartals. Er vergleicht dessen Accessions mit dem lokalen Zustand und ruft Submissions und
 Company Facts nur für neue, vom Parser unterstützte 10-K-/10-Q-/20-F-/40-F-/Amendment-Filings ab.
@@ -197,7 +204,9 @@ Verbindungs-, JSON-, Parser- und Datenbankfehler werden getrennt gezählt.
 Nicht gemappte Alpaca-Symbole werden beobachtbar als ETF/Fund, Warrant, Unit, Right, Preferred,
 Depositary/Foreign oder `unclassified` zusammengefasst. Diese Diagnose schließt keine gemappten
 Aktien aus dem SEC-Sync aus. Insbesondere bleibt `unclassified` bewusst bestehen, wenn lokale
-Metadaten keine zuverlässige Aussage erlauben.
+Metadaten keine zuverlässige Aussage erlauben. Diese sieben Gründe sind gegenseitig exklusiv;
+`unmapped_otc_exchange` ist dagegen ein zusätzliches, überlappendes Exchange-Tag und darf nicht zu
+den Gründen addiert werden.
 
 Normalisierte SEC-Facts, kompakter SEC-Sync-Status, Assets, Unternehmen, Tagesbars und Snapshots
 landen standardmäßig in `data/trading_system.sqlite3`. Company-Facts-JSON wird nach erfolgreichem

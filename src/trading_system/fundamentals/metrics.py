@@ -373,9 +373,7 @@ def balance_sheet_as_of(
         values[metric] = selected.value if selected else None
         if selected:
             ends.append(selected.period_end)
-    selected_shares = shares_outstanding_as_of(
-        facts, as_of, end_on_or_before=end_on_or_before
-    )
+    selected_shares = shares_outstanding_as_of(facts, as_of, end_on_or_before=end_on_or_before)
     if selected_shares:
         ends.append(selected_shares.period_end)
     total_debt, debt_sources = debt_as_of(facts, as_of, end_on_or_before=end_on_or_before)

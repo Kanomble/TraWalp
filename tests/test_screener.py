@@ -199,9 +199,7 @@ def test_raw_cache_cleanup_does_not_change_screening_results(tmp_path) -> None:
     after = screener.run(date(2025, 2, 14))
 
     assert cleanup["deleted_rows"] == 2
-    assert before.model_dump(exclude={"generated_at"}) == after.model_dump(
-        exclude={"generated_at"}
-    )
+    assert before.model_dump(exclude={"generated_at"}) == after.model_dump(exclude={"generated_at"})
 
 
 def test_peer_debug_uses_full_local_screening_universe(tmp_path) -> None:

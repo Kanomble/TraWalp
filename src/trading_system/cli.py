@@ -306,6 +306,8 @@ def _format_data_status(states: dict[str, dict]) -> str:
             "change_candidates",
             "companyfacts_unavailable",
             "submissions_unavailable",
+            "identity_conflicts",
+            "identity_conflict_sample",
             "negative_cache_hits",
             "missing_cik_mappings",
             "unmapped_etf_or_fund",

@@ -194,9 +194,7 @@ class Screener:
                 snapshot_price_selected = True
             fundamentals = analyze_fundamentals(facts, analysis_date, price)
             technical = technical_snapshot(_bar_frame(bars), self.config.technical)
-            technical_updates: dict[str, Any] = {
-                "market_session": analysis_date if bars else None
-            }
+            technical_updates: dict[str, Any] = {"market_session": analysis_date if bars else None}
             if snapshot_price_selected and price is not None:
                 closes = [bar.close for bar in bars[-252:]]
                 technical_updates["price"] = float(price)
