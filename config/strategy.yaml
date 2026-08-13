@@ -135,8 +135,17 @@ risk:
   atr_stop_multiple: 2.0
   max_stop_loss_pct: 0.10
 backtest:
+  initial_capital: 100000
   slippage_bps: 5
   commission_bps: 0
+  profit_target_pct: 0.12
+  max_holding_days: 10
+  min_total_score: 75
+  min_quality_score: 70
+  min_valuation_score: 60
+  min_opportunity_score: 60
+  min_timing_score: 55
+  min_relative_volume: 1.2
 storage:
   database_path: data/trading_system.sqlite3
   reports_path: reports

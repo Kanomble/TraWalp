@@ -6,6 +6,7 @@ from trading_system.data.database import Database
 from trading_system.data.market_sessions import (
     effective_trading_session,
     latest_completed_trading_session,
+    trading_sessions_between,
 )
 from trading_system.models.market_data import DailyBar
 from trading_system.strategy.screener import Screener
@@ -22,6 +23,14 @@ def test_effective_session_resolves_weekends_and_caps_future_dates() -> None:
     now = datetime(2026, 8, 10, 8, 0, tzinfo=UTC)
     assert effective_trading_session(date(2026, 8, 9), now) == date(2026, 8, 7)
     assert effective_trading_session(date(2026, 8, 10), now) == date(2026, 8, 7)
+
+
+def test_trading_session_range_excludes_weekends_and_exchange_holidays() -> None:
+    assert trading_sessions_between(date(2024, 7, 3), date(2024, 7, 8)) == [
+        date(2024, 7, 3),
+        date(2024, 7, 5),
+        date(2024, 7, 8),
+    ]
 
 
 def test_market_debug_excludes_current_incomplete_daily_bar(tmp_path) -> None:

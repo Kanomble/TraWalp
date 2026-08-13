@@ -12,6 +12,13 @@ from pathlib import Path
 from alpaca.data.enums import Adjustment, DataFeed
 
 from trading_system.ai.export import NoAICandidatesError, export_ai_candidates
+from trading_system.backtest.engine import BacktestEngine, compare_strategies
+from trading_system.backtest.report import (
+    export_backtest,
+    export_comparison,
+    format_backtest_summary,
+    format_comparison_table,
+)
 from trading_system.config import load_settings
 from trading_system.data.alpaca_client import AlpacaDataClient
 from trading_system.data.database import Database
@@ -19,6 +26,7 @@ from trading_system.data.market_sessions import effective_trading_session
 from trading_system.data.sec_client import SecClient
 from trading_system.data.sync import DataSynchronizer
 from trading_system.fundamentals.debug import debug_fundamentals
+from trading_system.models.backtest import StrategyVariant
 from trading_system.strategy.reporting import (
     export_report,
     format_explanation,
@@ -86,6 +94,19 @@ def _parser() -> argparse.ArgumentParser:
     screen = commands.add_parser("screen", help="Run the local point-in-time daily screen")
     screen.add_argument("--as-of", type=date.fromisoformat, default=date.today())
     screen.add_argument("--limit", type=int, default=None)
+    backtest = commands.add_parser("backtest", help="Run a point-in-time simulated portfolio")
+    backtest.add_argument("--start", type=date.fromisoformat, required=True)
+    backtest.add_argument("--end", type=date.fromisoformat, required=True)
+    backtest.add_argument(
+        "--variant",
+        choices=[variant.value for variant in StrategyVariant],
+        default=StrategyVariant.FULL.value,
+    )
+    comparison = commands.add_parser(
+        "compare-strategies", help="Compare strategy variants A/B/C on shared historical screens"
+    )
+    comparison.add_argument("--start", type=date.fromisoformat, required=True)
+    comparison.add_argument("--end", type=date.fromisoformat, required=True)
     export_ai = commands.add_parser(
         "export-ai", help="Export ranked screen candidates for manual AI analysis"
     )
@@ -182,6 +203,32 @@ def main(argv: list[str] | None = None) -> int:
             f" | Identity conflicts excluded: {report.identity_conflicts_excluded}"
             f"\nCSV: {csv_path}\nJSON: {json_path}"
         )
+        return 0
+    if args.command == "backtest":
+        try:
+            result = BacktestEngine(database, settings.strategy).run(
+                args.start,
+                args.end,
+                variant=StrategyVariant(args.variant),
+            )
+        except ValueError as exc:
+            print(f"Backtest refused: {exc}", file=sys.stderr)
+            return 1
+        paths = export_backtest(result, settings.strategy.storage.reports_path)
+        print(format_backtest_summary(result))
+        print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
+        return 0
+    if args.command == "compare-strategies":
+        try:
+            comparison_result = compare_strategies(
+                database, settings.strategy, args.start, args.end
+            )
+        except ValueError as exc:
+            print(f"Strategy comparison refused: {exc}", file=sys.stderr)
+            return 1
+        paths = export_comparison(comparison_result, settings.strategy.storage.reports_path)
+        print(format_comparison_table(comparison_result))
+        print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
         return 0
     if args.command == "export-ai":
         report = Screener(database, settings.strategy).run(args.as_of)

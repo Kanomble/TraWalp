@@ -65,6 +65,30 @@ def test_explain_cli_reports_unknown_local_symbol(tmp_path, monkeypatch, capsys)
     assert "MISSING" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("command", ["backtest", "compare-strategies"])
+def test_backtest_cli_rejects_invalid_period_clearly(
+    tmp_path, monkeypatch, capsys, command
+) -> None:
+    load_settings.cache_clear()
+    settings = load_settings()
+    strategy = settings.strategy.model_copy(
+        update={
+            "storage": StorageConfig(
+                database_path=tmp_path / "backtest.sqlite3",
+                reports_path=tmp_path / "reports",
+            )
+        }
+    )
+    monkeypatch.setattr(
+        cli, "load_settings", lambda _path: settings.model_copy(update={"strategy": strategy})
+    )
+
+    result = cli.main([command, "--start", "2025-02-01", "--end", "2025-01-01"])
+
+    assert result == 1
+    assert "start must not be after end" in capsys.readouterr().err
+
+
 class RoutedSynchronizer:
     def __init__(self) -> None:
         self.called: str | None = None

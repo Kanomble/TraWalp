@@ -32,6 +32,15 @@ def effective_trading_session(requested_as_of: date, now: datetime | None = None
     return calendar.date_to_session(pd.Timestamp(capped), direction="previous").date()
 
 
+def trading_sessions_between(start: date, end: date) -> list[date]:
+    """Return official XNYS sessions in an inclusive research interval."""
+
+    if start > end:
+        raise ValueError("start must not be after end")
+    calendar = xcals.get_calendar("XNYS")
+    return [session.date() for session in calendar.sessions_in_range(start, end)]
+
+
 def full_history_request_window(session: date, trading_days: int) -> tuple[datetime, datetime]:
     """Return the explicit Alpaca [start, end) window for a completed-session history."""
 

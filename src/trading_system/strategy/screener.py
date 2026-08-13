@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -76,7 +77,13 @@ class Screener:
         self.database = database
         self.config = config
 
-    def run(self, as_of: date, *, now: datetime | None = None) -> ScreenReport:
+    def run(
+        self,
+        as_of: date,
+        *,
+        now: datetime | None = None,
+        use_market_snapshots: bool = True,
+    ) -> ScreenReport:
         market_session = effective_trading_session(as_of, now)
         companies = self.database.list_tradable_companies()
         identity_conflicts = self.database.unresolved_sec_identity_conflict_symbols()
@@ -86,7 +93,16 @@ class Screener:
         conflicted_companies = [
             company for company in companies if company.symbol in identity_conflicts
         ]
-        prepared = [self._prepare(company, market_session) for company in safe_companies]
+        with self.database.read_only() as connection:
+            prepared = [
+                self._prepare(
+                    company,
+                    market_session,
+                    use_market_snapshots=use_market_snapshots,
+                    connection=connection,
+                )
+                for company in safe_companies
+            ]
         peer_table = self._peer_table(prepared)
         records = [self._score(candidate, peer_table) for candidate in prepared]
         records.extend(
@@ -210,15 +226,31 @@ class Screener:
             relative_volume=technical.relative_volume,
         )
 
-    def _prepare(self, company: CompanyIdentity, market_session: date) -> _PreparedCandidate:
+    def _prepare(
+        self,
+        company: CompanyIdentity,
+        market_session: date,
+        *,
+        use_market_snapshots: bool = True,
+        connection: sqlite3.Connection | None = None,
+    ) -> _PreparedCandidate:
         try:
             bars = self.database.bars_available_as_of(
-                company.symbol, market_session, limit=self.config.universe.market_data_days
+                company.symbol,
+                market_session,
+                limit=self.config.universe.market_data_days,
+                connection=connection,
             )
             analysis_date = bars[-1].timestamp.date() if bars else market_session
-            facts = self.database.facts_available_as_of(company.symbol, analysis_date)
+            facts = self.database.facts_available_as_of(
+                company.symbol, analysis_date, connection=connection
+            )
             price = bars[-1].close if bars else None
-            market_snapshot = self.database.latest_market_snapshot(company.symbol)
+            market_snapshot = (
+                self.database.latest_market_snapshot(company.symbol)
+                if use_market_snapshots
+                else None
+            )
             snapshot_price_selected = False
             if (
                 market_snapshot is not None

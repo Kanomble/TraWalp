@@ -375,7 +375,12 @@ class Database:
         return output
 
     def facts_available_as_of(
-        self, symbol: str, as_of: date, metric: str | None = None
+        self,
+        symbol: str,
+        as_of: date,
+        metric: str | None = None,
+        *,
+        connection: sqlite3.Connection | None = None,
     ) -> list[FundamentalFact]:
         """Return facts actually filed by ``as_of``; never filter by period end alone."""
 
@@ -385,7 +390,10 @@ class Database:
             query += " AND metric=?"
             parameters.append(metric)
         query += " ORDER BY filed, period_end, id"
-        with self.connect() as connection:
+        if connection is None:
+            with self.connect() as owned_connection:
+                rows = owned_connection.execute(query, parameters).fetchall()
+        else:
             rows = connection.execute(query, parameters).fetchall()
         return [_fact_from_row(row) for row in rows]
 
@@ -467,7 +475,12 @@ class Database:
         }
 
     def bars_available_as_of(
-        self, symbol: str, as_of: date, *, limit: int | None = None
+        self,
+        symbol: str,
+        as_of: date,
+        *,
+        limit: int | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> list[DailyBar]:
         """Return chronologically ordered bars whose trading date is not after ``as_of``."""
 
@@ -478,9 +491,53 @@ class Database:
         if limit is not None:
             query += " LIMIT ?"
             parameters.append(limit)
-        with self.connect() as connection:
+        if connection is None:
+            with self.connect() as owned_connection:
+                rows = owned_connection.execute(query, parameters).fetchall()
+        else:
             rows = connection.execute(query, parameters).fetchall()
         return [_bar_from_row(row) for row in reversed(rows)]
+
+    def bar_date_bounds(self, symbol: str | None = None) -> tuple[date | None, date | None]:
+        """Return local adjusted-bar coverage without modifying dataset state."""
+
+        query = "SELECT MIN(substr(timestamp,1,10)),MAX(substr(timestamp,1,10)) FROM daily_bars"
+        parameters: tuple[str, ...] = ()
+        if symbol is not None:
+            query += " WHERE symbol=?"
+            parameters = (symbol.upper(),)
+        with self.connect() as connection:
+            row = connection.execute(query, parameters).fetchone()
+        return (
+            date.fromisoformat(row[0]) if row and row[0] else None,
+            date.fromisoformat(row[1]) if row and row[1] else None,
+        )
+
+    def bar_sessions(self, start: date, end: date) -> list[date]:
+        """Return dates with at least one locally stored daily bar in a requested range."""
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """SELECT DISTINCT substr(timestamp,1,10) AS session FROM daily_bars
+                WHERE substr(timestamp,1,10) BETWEEN ? AND ? ORDER BY session""",
+                (start.isoformat(), end.isoformat()),
+            ).fetchall()
+        return [date.fromisoformat(row["session"]) for row in rows]
+
+    def bars_on_session(self, symbols: Iterable[str], session: date) -> dict[str, DailyBar]:
+        """Load one session for a bounded portfolio/order symbol set in one indexed query."""
+
+        normalized = sorted({symbol.upper() for symbol in symbols})
+        if not normalized:
+            return {}
+        placeholders = ",".join("?" for _ in normalized)
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM daily_bars WHERE symbol IN ({placeholders})
+                AND substr(timestamp,1,10)=? ORDER BY symbol,timestamp""",
+                [*normalized, session.isoformat()],
+            ).fetchall()
+        return {str(row["symbol"]): _bar_from_row(row) for row in rows}
 
     def upsert_market_snapshots(self, snapshots: Iterable[MarketSnapshot]) -> int:
         rows = [

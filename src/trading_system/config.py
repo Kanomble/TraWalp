@@ -53,6 +53,32 @@ class FilterConfig(BaseModel):
     require_positive_ocf: bool = True
 
 
+class PortfolioConfig(BaseModel):
+    max_positions: int = Field(5, ge=1)
+    max_position_pct: float = Field(0.20, gt=0, le=1)
+    max_sector_positions: int = Field(2, ge=1)
+
+
+class RiskConfig(BaseModel):
+    risk_per_trade: float = Field(0.01, gt=0, le=1)
+    atr_stop_multiple: float = Field(2.0, gt=0)
+    max_stop_loss_pct: float = Field(0.10, gt=0, lt=1)
+
+
+class BacktestConfig(BaseModel):
+    initial_capital: float = Field(100_000, gt=0)
+    slippage_bps: float = Field(5, ge=0)
+    commission_bps: float = Field(0, ge=0)
+    profit_target_pct: float = Field(0.12, gt=0)
+    max_holding_days: int = Field(10, ge=1)
+    min_total_score: float = Field(75, ge=0, le=100)
+    min_quality_score: float = Field(70, ge=0, le=100)
+    min_valuation_score: float = Field(60, ge=0, le=100)
+    min_opportunity_score: float = Field(60, ge=0, le=100)
+    min_timing_score: float = Field(55, ge=0, le=100)
+    min_relative_volume: float = Field(1.2, gt=0)
+
+
 class TechnicalConfig(BaseModel):
     rsi_oversold: float = Field(30, ge=0, le=100)
     rsi_recovery_min: float = Field(35, ge=0, le=100)
@@ -236,6 +262,9 @@ class StrategyConfig(BaseModel):
     data_quality: DataQualityConfig
     technical: TechnicalConfig = TechnicalConfig()
     filters: FilterConfig
+    portfolio: PortfolioConfig = PortfolioConfig()
+    risk: RiskConfig = RiskConfig()
+    backtest: BacktestConfig = BacktestConfig()
 
 
 class Settings(BaseModel):

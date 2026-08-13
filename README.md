@@ -5,7 +5,7 @@ Price Dislocation + Recovery Signal**. Die erste Zielversion ist ausschließlich
 Backtests, Dry Runs und Alpaca Paper Trading vorgesehen. Live-Trading ist weder implementiert
 noch zulässig.
 
-## Aktueller Stand: Milestone 3
+## Aktueller Stand: Milestone 4
 
 Implementiert sind die Projektstruktur, validierte zentrale Konfiguration, ein ausschließlich
 lesender Alpaca-Adapter, SEC-EDGAR-/Company-Facts-Zugriff, robustes US-GAAP-Tag-Mapping,
@@ -22,8 +22,10 @@ Milestone 3 ergänzt den lokalen Point-in-Time-Screener, konfigurierbare Hard Fi
 detaillierte Explain-Ausgaben und atomar geschriebene CSV-/JSON-Reports. Ein einzelner defekter
 Datensatz beendet den Screen nicht, sondern wird mit einem konkreten Ausschlussgrund markiert.
 
-Noch **nicht** implementiert sind Milestones 4–5: Backtester, Strategie-Vergleich, Risk Management
-und Paper Orders. Die entsprechenden CLI-Befehle werden bewusst erst in ihren Milestones ergänzt.
+Milestone 4 ergänzt einen lokalen Point-in-Time-Backtester, simuliertes Portfolio- und Risk
+Management, nachvollziehbare Trade-/Equity-Reports, einen lokalen SPY-Benchmark und den fairen
+Vergleich der Strategievarianten A/B/C. Noch **nicht** implementiert ist Milestone 5: Paper Orders.
+Es existiert weiterhin kein Codepfad, der eine Alpaca-Order absendet.
 
 ## Strategie
 
@@ -66,6 +68,7 @@ src/trading_system/technical/
 src/trading_system/strategy/scoring.py vier Teil-Scores und Total Score
 src/trading_system/strategy/screener.py PIT-Screen, Universe und Hard Filters
 src/trading_system/strategy/reporting.py CSV/JSON, Rangliste und Explain-Text
+src/trading_system/backtest/            PIT-Engine, Performance-Metriken und Reports
 src/trading_system/ai/                Schema und JSON-Export für manuelle AI-Analyse
 src/trading_system/cli.py             Sync-, Screen-, Export-, Explain- und Diagnose-CLI
 tests/                                isolierte Unit-/Integrationstests ohne echte APIs
@@ -384,17 +387,105 @@ am Valuation-Datenqualitätsfilter scheitern.
 
 ## Backtest und Strategie-Vergleich
 
-Point-in-Time-Backtests und Next-Day-Ausführung folgen in Milestone 4:
+Ein Backtest läuft ausschließlich auf den lokal gespeicherten, adjustierten Daily Bars und
+Fundamentaldaten. Er erzeugt keine Netzwerkaufrufe:
 
 ```bash
-python -m trading_system.cli backtest --start 2020-01-01 --end 2025-12-31
-python -m trading_system.cli compare-strategies
+python -m trading_system.cli backtest --start 2025-05-01 --end 2025-06-30
+python -m trading_system.cli backtest --start 2025-05-01 --end 2025-06-30 --variant A
+python -m trading_system.cli compare-strategies --start 2025-05-01 --end 2025-06-30
 ```
 
-Die bereits implementierte Datenbasis verhindert, dass ein am 5. Mai eingereichter Bericht am
-20. April sichtbar ist. Die spätere Engine muss zusätzlich Signale von Tag T frühestens am
-nächsten verfügbaren Kurs ausführen. Tests in `tests/test_database.py` sichern Filing- und
-Amendment-Grenzen explizit ab.
+### Point-in-Time- und Ausführungsmodell
+
+Jede Simulation verwendet offizielle XNYS-Sessions, für die mindestens ein lokaler Bar existiert.
+Pro Session ist die Reihenfolge fest:
+
+1. Bereits offene Positionen werden am Open auf Stop-/Target-Gaps geprüft.
+2. Signale vom vorherigen abgeschlossenen Handelstag werden zum aktuellen Open ausgeführt.
+3. Intraday-Stop und Profit Target werden anhand von High/Low geprüft.
+4. Der konfigurierte Time Exit wird am Close ausgeführt.
+5. Erst nach dem Close läuft derselbe Screener wie im operativen Betrieb und erzeugt Orders für die
+   nächste Session. Am letzten Backtest-Tag werden Positionen am letzten verfügbaren Close
+   geschlossen und keine neuen Orders erzeugt.
+
+Damit kann ein Signal vom Montagsschluss frühestens am Dienstag-Open handeln; Wochenenden und
+NYSE-Feiertage werden übersprungen. Käufe erhalten einen Preisaufschlag, Verkäufe einen Abschlag
+von `backtest.slippage_bps`; auf beide Seiten wird `commission_bps` angewendet. Berühren Stop und
+Target denselben Daily Bar, ist die unbekannte Intraday-Reihenfolge konservativ: der Stop gilt als
+zuerst getroffen. Gap-Ausführungen verwenden das schlechtere tatsächliche Open. Eine zusätzliche
+Signal-Exit-Regel wird nicht erfunden, weil die aktuelle zentrale Konfiguration keine enthält.
+
+SEC-Facts bleiben nur bei `filed <= as_of` sichtbar. Bars werden auf die jeweilige Session begrenzt;
+SMA, RSI, ATR, Momentum, Relative Volume und 52-Wochen-Hoch sehen keine spätere Zeile. Historische
+Screens ignorieren `market_snapshots` ausdrücklich, selbst wenn ein Snapshot zufällig dasselbe
+Datum trägt. Peer-Gruppen und Branchenmediane werden pro Session aus genau diesem PIT-Screen
+berechnet. Die aktuelle, konservative SEC-Identitätsquarantäne gilt für alle Backtest-Daten, weil
+noch keine verifizierten Ticker-Besitzzeiträume existieren.
+
+### Entry, Risiko und Portfolio
+
+Die Defaults in `config/strategy.yaml` verlangen Quality ≥ 70, Valuation ≥ 60 und einen
+variantenspezifischen Gesamtscore ≥ 75. B/C verlangen zusätzlich Opportunity ≥ 60, C zusätzlich
+Timing ≥ 55. Alle Varianten verwenden denselben Recovery-Gate: Kurs über SMA20 und mindestens
+eines aus RSI Recovery, Momentum5 > 0 oder Relative Volume > 1,2.
+
+Das initiale Stop-Risiko ist das Minimum aus `ATR14 × atr_stop_multiple` und dem maximal erlaubten
+prozentualen Stop-Abstand. Ohne positiven ATR wird kein Trade eröffnet. Die Stückzahl ergibt sich
+aus Portfolio-Equity × `risk_per_trade` geteilt durch Risiko je Aktie und wird anschließend durch
+Cash und `max_position_pct` begrenzt. Fractional Shares sind intern erlaubt; Leverage nicht. Das
+Portfolio respektiert `max_positions` und `max_sector_positions` (SIC-Zweisteller, fehlendes SIC als
+`unknown`). Defaults sind fünf Positionen, 20 % je Position und zwei Positionen je Sektor. Exits
+sind Stop Loss, +12-%-Profit-Target, zehn Handelstage oder `end_of_backtest`.
+
+### Strategievarianten und faire Berechnung
+
+- A — Quality + Value: normalisierte bestehende Gewichte 40:30.
+- B — Quality + Value + Opportunity: normalisierte Gewichte 40:30:20.
+- C — Quality + Value + Opportunity + Timing: bestehende Gewichte 40:30:20:10.
+
+Alle Varianten teilen Datenhorizont, Recovery-Gate, Portfolio, Risiko, Ausführung und Kosten. Nur
+Komponentenmix und die zugehörigen Mindestwerte unterscheiden sich. `compare-strategies` berechnet
+jeden Session-Screen einmal und cached ihn ausschließlich unter dem exakten Session-Datum; dadurch
+können keine späteren Daten rückwärts gelangen. In diesem Milestone werden keine Parameter anhand
+historischer Ergebnisse optimiert.
+
+### Reports und Kennzahlen
+
+`backtest` schreibt atomar JSON, Trade-CSV und Equity-CSV unter
+`reports/backtest_<start>_<end>_<variant>.*`. Das JSON enthält Konfigurations-Snapshot,
+angeforderten/tatsächlichen Zeitraum, Annahmen, Warnungen, Trades, Equity Curve und Benchmark.
+Die Equity Curve weist Cash, Marktwert, Equity, Positionen, Exposure sowie realisierten und
+unrealisierten P&L je Session aus.
+`compare-strategies` schreibt JSON und eine kompakte CSV-Tabelle. Kennzahlen sind Total Return,
+kalendertägig annualisierte CAGR, Maximum Drawdown, Sharpe und Sortino mit 252 Sessions/Jahr,
+Win Rate, durchschnittlicher Gewinn/Verlust als Trade Return, Profit Factor, monetäre Expectancy,
+Trade-Anzahl, Haltedauer, zweiseitiger Turnover und durchschnittliche Kapital-Exposure. Nicht
+definierte Werte bleiben `null`/`N/A`, statt irreführend null zu werden.
+
+SPY wird nur verwendet, wenn adjustierte lokale Bars den gesamten tatsächlichen Zeitraum abdecken.
+Der Benchmark ist ein kostenfreier Close-to-Close-Buy-and-Hold-Vergleich; fehlen Bars, bleibt er mit
+einer konkreten Warnung unavailable. Der Backtest lädt SPY niemals aus dem Netzwerk nach.
+
+### Bekannte Backtest-Grenzen
+
+`assets.tradable` beschreibt das aktuelle, nicht das historische Alpaca-Universum. TraWalp besitzt
+noch keine Point-in-Time-Mitgliedschaft inklusive Delistings; Backtests verwenden daher die aktuell
+handelbaren, SEC-identifizierten Unternehmen und dürfen **nicht** als survivorship-bias-frei
+bezeichnet werden. Ebenso fehlt ein verifiziertes Ticker-History-Modell, weshalb aktuelle
+Identitätskonflikte auch historische Trades sperren. Vorhandene Facts und Bars bleiben erhalten,
+werden aber nicht spekulativ zwischen Emittentenepochen migriert. Alpaca-Bars sind gemäß
+`universe.market_data_adjustment: all` bereits adjustiert; die Engine passt Splits nicht ein zweites
+Mal an. Historische Shares/Fundamentals können dennoch nicht für jede Corporate Action perfekt
+vergleichbar sein.
+
+Ein vollständiger PIT-Screen rekonstruiert derzeit für ungefähr 6.000 Unternehmen die jeweilige
+SEC-Historie und technische Zeitreihe. Die Engine verwendet pro Session nur eine read-only
+SQLite-Verbindung, und A/B/C teilen ihren Session-Screen; dennoch kann ein einzelner
+Produktions-Screen mehrere Minuten dauern. Ein späteres Performance-Projekt kann Filing-aware
+Fundamental-Snapshots materialisieren oder sicher batchen. Dieser Milestone speichert bewusst keine
+dateübergreifenden Feature-Caches, deren Invalidation neue Filings rückwirkend sichtbar machen
+könnte.
 
 ## Paper Trading und Sicherheitsmechanismen
 
