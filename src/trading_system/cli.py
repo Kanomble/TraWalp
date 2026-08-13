@@ -6,7 +6,7 @@ import argparse
 import json
 import logging
 import sys
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from alpaca.data.enums import Adjustment, DataFeed
@@ -49,11 +49,39 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default="config/strategy.yaml", type=Path)
     parser.add_argument("--verbose", action="store_true")
     commands = parser.add_subparsers(dest="command", required=True)
-    sync = commands.add_parser("sync", help="Synchronize Alpaca and SEC data")
+    sync = commands.add_parser("sync", help="Synchronize SEC data or run a complete refresh")
+    mode = sync.add_mutually_exclusive_group()
+    mode.add_argument("--full", action="store_true", help="Run the complete legacy sync pipeline")
+    mode.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Check submissions and reload Company Facts only for changed companies",
+    )
     sync.add_argument(
         "--symbols",
         nargs="*",
         help="Optional symbol subset. Omit to synchronize all tradable US equities.",
+    )
+    sync_assets = commands.add_parser("sync-assets", help="Refresh only the Alpaca asset universe")
+    sync_assets.add_argument("--symbols", nargs="*", help=argparse.SUPPRESS)
+    update_bars = commands.add_parser(
+        "update-bars", help="Incrementally update completed historical daily bars"
+    )
+    update_bars.add_argument("--symbols", nargs="*")
+    refresh_market = commands.add_parser(
+        "refresh-market", help="Refresh batched current snapshots without downloading history"
+    )
+    refresh_market.add_argument("--symbols", nargs="*")
+    commands.add_parser("status", help="Show local dataset freshness")
+    commands.add_parser("storage-report", help="Inspect SQLite allocation and table usage")
+    cleanup = commands.add_parser(
+        "db-cleanup", help="Explicitly remove guarded legacy SEC Company Facts payloads"
+    )
+    cleanup.add_argument("--dry-run", action="store_true", help="Report without deleting rows")
+    cleanup.add_argument(
+        "--vacuum",
+        action="store_true",
+        help="After cleanup, compact SQLite if conservative free-space checks pass",
     )
     screen = commands.add_parser("screen", help="Run the local point-in-time daily screen")
     screen.add_argument("--as-of", type=date.fromisoformat, default=date.today())
@@ -82,33 +110,68 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     configure_logging(args.verbose)
     settings = load_settings(args.config)
-    if args.command == "sync":
-        key, secret = settings.require_alpaca_credentials()
-        database = Database(settings.strategy.storage.database_path)
-        database.initialize()
-        sec_config = settings.strategy.sec
-        synchronizer = DataSynchronizer(
-            database,
-            AlpacaDataClient(
-                key,
-                secret,
-                feed=DataFeed(settings.strategy.universe.market_data_feed),
-                adjustment=Adjustment(settings.strategy.universe.market_data_adjustment),
-            ),
-            SecClient(
-                settings.require_sec_user_agent(),
-                request_interval_seconds=sec_config.request_interval_seconds,
-                timeout_seconds=sec_config.timeout_seconds,
-                max_retries=sec_config.max_retries,
-            ),
-            market_data_days=settings.strategy.universe.market_data_days,
-        )
-        requested = [symbol.upper() for symbol in args.symbols] if args.symbols else None
-        print(json.dumps(synchronizer.sync(requested), indent=2))
-        return 0
     database = Database(settings.strategy.storage.database_path)
+    if args.command == "storage-report":
+        try:
+            print(_format_storage_report(database.storage_report()))
+        except FileNotFoundError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        return 0
+    if args.command == "db-cleanup":
+        print(
+            "Analyzing legacy SEC Company Facts cache; exact payload sizes may take time...",
+            flush=True,
+        )
+        try:
+            result = database.cleanup_raw_sec_cache(dry_run=args.dry_run)
+        except FileNotFoundError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(_format_cleanup_report(result))
+        if args.vacuum:
+            if args.dry_run:
+                print("\nVACUUM not run during --dry-run.")
+            else:
+                requirements = database.vacuum_requirements()
+                print(_format_vacuum_requirements(requirements), flush=True)
+                try:
+                    database.vacuum()
+                except RuntimeError as exc:
+                    print(f"\nVACUUM refused: {exc}", file=sys.stderr)
+                    return 1
+                print("\nVACUUM completed.")
+        return 0
     database.initialize()
+    if args.command in {"sync", "sync-assets", "update-bars", "refresh-market"}:
+        requested = [symbol.upper() for symbol in args.symbols] if args.symbols else None
+        needs_alpaca = args.command != "sync" or not args.incremental
+        synchronizer = _synchronizer(
+            settings,
+            database,
+            with_alpaca=needs_alpaca,
+            with_sec=args.command == "sync",
+        )
+        if args.command == "sync":
+            # No flag intentionally retains the historical complete-sync behavior.
+            result = (
+                synchronizer.sync_sec_incremental(requested)
+                if args.incremental
+                else synchronizer.sync_full(requested)
+            )
+        elif args.command == "sync-assets":
+            result = synchronizer.sync_assets()
+        elif args.command == "update-bars":
+            result = synchronizer.sync_historical_bars(requested)
+        else:
+            result = synchronizer.refresh_market(requested)
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.command == "status":
+        print(_format_data_status(database.dataset_states()))
+        return 0
     if args.command == "screen":
+        _warn_data_freshness(database.dataset_states())
         report = Screener(database, settings.strategy).run(args.as_of)
         csv_path, json_path = export_report(report, settings.strategy.storage.reports_path)
         print(format_screen_table(report, limit=args.limit))
@@ -170,6 +233,203 @@ def main(argv: list[str] | None = None) -> int:
         print(format_market_debug(debug))
         return 0
     return 2
+
+
+def _synchronizer(
+    settings,
+    database: Database,
+    *,
+    with_alpaca: bool,
+    with_sec: bool,
+) -> DataSynchronizer:
+    universe = settings.strategy.universe
+    alpaca = None
+    if with_alpaca:
+        key, secret = settings.require_alpaca_credentials()
+        alpaca = AlpacaDataClient(
+            key,
+            secret,
+            feed=DataFeed(universe.market_data_feed),
+            adjustment=Adjustment(universe.market_data_adjustment),
+        )
+    sec = None
+    if with_sec:
+        sec_config = settings.strategy.sec
+        sec = SecClient(
+            settings.require_sec_user_agent(),
+            request_interval_seconds=sec_config.request_interval_seconds,
+            timeout_seconds=sec_config.timeout_seconds,
+            max_retries=sec_config.max_retries,
+        )
+    return DataSynchronizer(
+        database,
+        alpaca,
+        sec,
+        market_data_days=universe.market_data_days,
+        exclude_financials=universe.exclude_financials,
+        exclude_reits=universe.exclude_reits,
+    )
+
+
+def _format_data_status(states: dict[str, dict]) -> str:
+    labels = {
+        "asset_universe": "Asset universe",
+        "sec": "SEC fundamentals",
+        "historical_bars": "Historical bars",
+        "market_snapshot": "Market snapshot",
+    }
+    lines = ["TraWalp data status"]
+    for dataset, label in labels.items():
+        state = states.get(dataset, {})
+        lines.extend(
+            [
+                "",
+                label,
+                f"  status:       {state.get('status', 'never synchronized')}",
+                f"  last success: {state.get('last_success_at') or 'N/A'}",
+            ]
+        )
+        for key in (
+            "mode",
+            "records_updated",
+            "companies_checked",
+            "companies_updated",
+            "facts_processed",
+            "missing_cik_mappings",
+            "submissions_seconds",
+            "companyfacts_seconds",
+            "symbols_requested",
+            "symbols_updated",
+            "bars_updated",
+            "errors",
+            "elapsed_seconds",
+        ):
+            if key in state:
+                lines.append(f"  {key.replace('_', ' ')}: {state[key]}")
+    return "\n".join(lines)
+
+
+def _format_storage_report(report: dict) -> str:
+    lines = [
+        "TraWalp database storage report",
+        "",
+        f"Database:              {report['database_path']}",
+        f"File size:             {_format_bytes(report['file_bytes'])}",
+        f"SQLite page size:      {report['page_size']:,} bytes",
+        f"Page count:            {report['page_count']:,}",
+        f"Freelist pages:        {report['freelist_pages']:,}",
+        "Estimated reclaimable: " + _format_bytes(report["estimated_reclaimable_bytes"]),
+        "",
+        "Row counts",
+    ]
+    for table, count in sorted(
+        report["row_counts"].items(), key=lambda item: item[1], reverse=True
+    ):
+        lines.append(f"  {table:<36} {count:>14,}")
+    lines.extend(["", "Raw SEC cache by endpoint"])
+    if report["raw_sec_cache"]:
+        for endpoint in report["raw_sec_cache"]:
+            lines.append(
+                f"  {endpoint['endpoint']:<18} rows={endpoint['rows']:>7,}  "
+                f"payload={_format_bytes(endpoint['payload_bytes']):>10}  "
+                f"average={_format_bytes(endpoint['average_payload_bytes']):>9}  "
+                f"largest={_format_bytes(endpoint['largest_payload_bytes']):>9}"
+            )
+    else:
+        lines.append("  (empty)")
+    lines.extend(["", "Table/index allocation"])
+    if report["object_sizes"] is None:
+        lines.append(f"  unavailable: {report['dbstat_error']}")
+        lines.append("  Page, row, and raw-endpoint totals above remain available.")
+    else:
+        for item in report["object_sizes"]:
+            lines.append(f"  {item['name']:<44} {_format_bytes(item['bytes']):>10}")
+    return "\n".join(lines)
+
+
+def _format_cleanup_report(result: dict) -> str:
+    if result["safe_rows"] == result["total_rows"]:
+        safety = "yes"
+    elif result["safe_rows"]:
+        safety = "partial"
+    else:
+        safety = "no"
+    lines = [
+        "TraWalp database cleanup",
+        "",
+        f"raw SEC {result['endpoint']}:",
+        f"  rows:                    {result['total_rows']:,}",
+        f"  payload size:            {_format_bytes(result['total_payload_bytes'])}",
+        f"  safe to remove:          {safety}",
+        f"  guarded rows:            {result['safe_rows']:,}",
+        f"  guarded payload:         {_format_bytes(result['safe_payload_bytes'])}",
+        f"  blocked without facts:   {result['blocked_rows']:,}",
+        f"  blocked payload:         {_format_bytes(result['blocked_payload_bytes'])}",
+        "",
+        f"Structured fact rows:      {result['fundamental_fact_rows']:,} (preserved)",
+        f"Daily bar rows:            {result['daily_bar_rows']:,} (preserved)",
+        "Estimated reclaimable after VACUUM: "
+        + _format_bytes(result["safe_payload_bytes"]),
+    ]
+    if result["dry_run"]:
+        lines.extend(["", "No changes made (--dry-run)."])
+    else:
+        lines.extend(
+            [
+                "",
+                f"Deleted guarded rows:      {result['deleted_rows']:,}",
+                f"Freelist after DELETE:     {result['freelist_pages_after']:,} pages",
+                "Physical file size is unchanged until an explicit VACUUM.",
+            ]
+        )
+    if result["blocked_rows"]:
+        lines.append(
+            "Blocked rows were retained because no normalized fact exists for their CIK."
+        )
+    return "\n".join(lines)
+
+
+def _format_vacuum_requirements(requirements: dict[str, int]) -> str:
+    return (
+        "\nVACUUM preflight"
+        f"\n  current database:       {_format_bytes(requirements['database_bytes'])}"
+        f"\n  available disk space:   {_format_bytes(requirements['available_bytes'])}"
+        f"\n  conservative temporary: {_format_bytes(requirements['required_temporary_bytes'])}"
+        "\nVACUUM may require substantial downtime and temporary disk space."
+    )
+
+
+def _format_bytes(value: int) -> str:
+    amount = float(value)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if abs(amount) < 1024 or unit == "TiB":
+            return f"{amount:.2f} {unit}"
+        amount /= 1024
+    raise AssertionError("unreachable")
+
+
+def _warn_data_freshness(states: dict[str, dict], *, now: datetime | None = None) -> None:
+    current = now or datetime.now(UTC)
+    thresholds = {
+        "asset_universe": timedelta(days=7),
+        "sec": timedelta(days=7),
+        "historical_bars": timedelta(days=3),
+        "market_snapshot": timedelta(hours=1),
+    }
+    for dataset, threshold in thresholds.items():
+        raw = states.get(dataset, {}).get("last_success_at")
+        if not raw:
+            logging.getLogger(__name__).warning("%s has no successful sync metadata", dataset)
+            continue
+        try:
+            age = current - datetime.fromisoformat(str(raw)).astimezone(UTC)
+        except ValueError:
+            logging.getLogger(__name__).warning("%s has invalid freshness metadata", dataset)
+            continue
+        if age > threshold:
+            logging.getLogger(__name__).warning(
+                "%s last updated %s (age %s)", dataset, raw, str(age).split(".")[0]
+            )
 
 
 if __name__ == "__main__":

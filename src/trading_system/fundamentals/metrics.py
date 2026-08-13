@@ -36,8 +36,13 @@ INSTANT_METRICS = (
     "current_liabilities",
     "total_assets",
     "total_equity",
-    "shares_outstanding",
 )
+
+# Company Facts includes annual foreign filers as well as quarterly domestic filers.
+# Fifteen months permits a normal annual filing cycle plus one quarter of timing
+# variation, while preventing multi-year-old counts from driving current valuation.
+MAX_SHARES_OUTSTANDING_AGE = timedelta(days=460)
+SHARE_TAXONOMY_PRIORITY = {"us-gaap": 0, "dei": 1}
 
 
 @dataclass(frozen=True)
@@ -368,6 +373,11 @@ def balance_sheet_as_of(
         values[metric] = selected.value if selected else None
         if selected:
             ends.append(selected.period_end)
+    selected_shares = shares_outstanding_as_of(
+        facts, as_of, end_on_or_before=end_on_or_before
+    )
+    if selected_shares:
+        ends.append(selected_shares.period_end)
     total_debt, debt_sources = debt_as_of(facts, as_of, end_on_or_before=end_on_or_before)
     ends.extend(source.period_end for source in debt_sources)
     return BalanceSheetSnapshot(
@@ -378,8 +388,54 @@ def balance_sheet_as_of(
         current_liabilities=values["current_liabilities"],
         total_assets=values["total_assets"],
         total_equity=values["total_equity"],
-        shares_outstanding=values["shares_outstanding"],
+        shares_outstanding=selected_shares.value if selected_shares else None,
     )
+
+
+def shares_outstanding_as_of(
+    facts: list[FundamentalFact],
+    as_of: date,
+    *,
+    end_on_or_before: date | None = None,
+) -> FundamentalFact | None:
+    """Select a recent, point-in-time share count with deterministic taxonomy priority.
+
+    Measurement-period recency wins first.  For otherwise equivalent observations,
+    the SEC DEI entity share count wins over the legacy US-GAAP fallback.  Both the
+    measurement and filing must be recent enough to avoid valuing current equity with
+    a historical pre-split count repeated in a later filing.
+    """
+
+    eligible = [
+        fact
+        for fact in facts
+        if fact.metric == "shares_outstanding"
+        and fact.unit == "shares"
+        and fact.value > 0
+        and fact.period_end <= as_of
+        and fact.filed <= as_of
+        and (end_on_or_before is None or fact.period_end <= end_on_or_before)
+    ]
+    selected = max(
+        eligible,
+        key=lambda fact: (
+            fact.period_end,
+            fact.filed,
+            SHARE_TAXONOMY_PRIORITY.get(fact.taxonomy, -1),
+            fact.accession_number or "",
+            fact.tag,
+            fact.value,
+        ),
+        default=None,
+    )
+    if selected is None:
+        return None
+    if (
+        as_of - selected.filed > MAX_SHARES_OUTSTANDING_AGE
+        or as_of - selected.period_end > MAX_SHARES_OUTSTANDING_AGE
+    ):
+        return None
+    return selected
 
 
 def debt_as_of(

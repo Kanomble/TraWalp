@@ -114,34 +114,137 @@ SEC_USER_AGENT=Vorname Nachname name@example.com
 ```
 
 Der Client begrenzt die Aufruffrequenz (Default 0,11 Sekunden), verwendet exponentielles Backoff
-bei 429/5xx und cached Antworten lokal für zwölf Stunden. Das ist bewusst konservativer als zehn
+bei 429/5xx und akzeptiert komprimierte HTTP-Antworten. Das ist bewusst konservativer als zehn
 Requests pro Sekunde. Details: <https://www.sec.gov/os/accessing-edgar-data>.
 
 ## Daten synchronisieren
 
-Ein kleiner Symbolsatz eignet sich für den ersten Lauf:
+Die Datenpipeline besteht aus getrennten Stufen. Der bestehende Befehl `sync` bleibt aus
+Kompatibilitätsgründen ein vollständiger Lauf; `--full` macht diese Absicht explizit. Er aktualisiert
+Asset-Universum, SEC Submissions und Company Facts sowie historische Tagesbars und eignet sich für
+Initialisierung, Reparatur und gelegentliche komplette Aktualisierungen:
 
 ```bash
-python -m trading_system.cli sync --symbols ORCL AAPL MSFT
+python -m trading_system.cli sync --full
+python -m trading_system.cli sync --full --symbols ORCL AAPL MSFT
 ```
 
-Ohne `--symbols` wird das gesamte aktuell handelbare US-Aktienuniversum verarbeitet:
+Die SEC-Ticker-/CIK-Referenz wird dabei aktualisiert und anschließend lokal wiederverwendet, statt
+bei jedem inkrementellen Lauf neu aufgebaut zu werden.
+
+Der tägliche SEC-Lauf prüft dagegen nur die aktuellen Submissions. Company Facts werden nur dann
+geladen und neu geparst, wenn eine neue relevante 10-K-/10-Q-/20-F-/40-F-/Amendment-Accession
+vorliegt oder lokal noch keine Facts existieren. 8-K-Filings lösen keinen Download aus, weil der
+Parser daraus keine Screening-Facts übernimmt. Der Zustand stammt aus SEC-Accessions, nicht nur aus
+einer lokalen Uhrzeit; Upserts machen wiederholte Läufe idempotent:
 
 ```bash
-python -m trading_system.cli sync
+python -m trading_system.cli sync --incremental
 ```
 
-Der erste Kursabruf umfasst ungefähr 480 Kalendertage und damit mindestens 300 Handelstage.
-Folgeläufe beginnen sieben Tage vor dem zuletzt gespeicherten Bar, um Provider-Korrekturen per
-Upsert zu übernehmen. Alpaca-Bars werden explizit mit der konfigurierten
-`universe.market_data_adjustment`-Policy angefordert; Default ist `all`. SEC-Rohantworten,
-normalisierte Facts, Assets, Unternehmen und Tagesbars landen standardmäßig in
-`data/trading_system.sqlite3`.
+Asset-Universum, historische Bars und aktuelle Snapshots lassen sich unabhängig aktualisieren:
+
+```bash
+python -m trading_system.cli sync-assets
+python -m trading_system.cli update-bars
+python -m trading_system.cli refresh-market
+python -m trading_system.cli status
+```
+
+`update-bars` verwendet weiterhin adjustierte Daily Bars. Der erste Abruf umfasst ungefähr 480
+Kalendertage; Folgeläufe starten sieben Tage vor dem zuletzt gespeicherten Bar, um
+Provider-Korrekturen per Upsert zu übernehmen. Die letzten Bar-Zeitpunkte werden für das gesamte
+Universum in einer Abfrage gelesen, und API-Aufrufe erfolgen in Batches.
+
+`refresh-market` nutzt Alpacas Multi-Symbol-Snapshot-Endpunkt in begrenzten Batches. Aktuelle Trades
+werden getrennt von der adjustierten historischen OHLCV-Serie gespeichert; der Befehl lädt keine
+Kurshistorie. Finanzwerte und REITs, die bereits durch die bestehende Konfiguration ausgeschlossen
+sind, werden vor dem Snapshot-Abruf entfernt. Ein Snapshot-Trade wird im Screening nur verwendet,
+wenn sein Datum exakt der vollständig abgeschlossenen Analyse-Session entspricht. Dadurch gelangen
+weder Intraday- noch Zukunftspreise in historische Screens.
+
+Der empfohlene Tagesablauf lautet:
+
+```bash
+# nachts / morgens
+python -m trading_system.cli sync --incremental
+python -m trading_system.cli update-bars
+
+# kurz vor dem Screening
+python -m trading_system.cli refresh-market
+python -m trading_system.cli screen
+```
+
+`status` zeigt Erfolg, Modus, Datensatzmengen, Fehler und Laufzeit getrennt für Asset-Universum,
+SEC-Fundamentals, historische Bars und Market Snapshot. Fundamentaldaten ändern sich nur mit neuen
+Filings und müssen daher nicht unmittelbar vor jedem Screen aktualisiert werden. Snapshots und der
+neueste abgeschlossene Daily Bar sind zeitkritischer. `screen` startet niemals automatisch einen
+Sync; fehlende oder alte Freshness-Metadaten erzeugen lediglich Warnungen.
+
+Normalisierte SEC-Facts, kompakter SEC-Sync-Status, Assets, Unternehmen, Tagesbars und Snapshots
+landen standardmäßig in `data/trading_system.sqlite3`. Company-Facts-JSON wird nach erfolgreichem
+Parse und atomarem Upsert verworfen. Ein Parser- oder Datenbankfehler schreibt die zugehörige
+Accession nicht als erfolgreich; der nächste inkrementelle Lauf kann den Import wiederholen.
+
+## SQLite-Speicher und alter SEC-Cache
+
+`fundamental_facts` ist die dauerhafte, normalisierte Historie. Sie enthält unter anderem
+`filed`, `period_end`, `accession_number` und `frame`; historische Screens lesen weiterhin nur
+Facts mit `filed <= as_of`. `raw_sec_cache` ist dagegen ein Quell-Cache aus älteren Versionen und
+nicht die historische Fundamentaldatenbank. Das Entfernen eines abgesicherten Raw-Cache-Eintrags
+entfernt keine normalisierten Facts und keine Daily Bars.
+
+Die aktuelle Belegung lässt sich ohne Schreibzugriff untersuchen:
+
+```bash
+python -m trading_system.cli storage-report
+```
+
+Der Report zeigt Dateigröße, SQLite-Pages, Freelist, Zeilenzahlen und Raw-Cache-Größen nach
+Endpunkt. Falls das lokale SQLite ohne `dbstat` gebaut wurde, fehlen nur die exakten Größen pro
+Tabelle/Index; die übrigen Werte werden weiterhin ausgegeben. Die Analyse kann bei einer großen
+Datenbank etwas dauern, weil SQLite die Payload-Längen und Zeilenzahlen lesen muss.
+
+Alte Company-Facts-Payloads werden niemals beim Start, Sync oder Screening automatisch gelöscht.
+Zuerst sollte ein Dry Run ausgeführt werden:
+
+```bash
+python -m trading_system.cli db-cleanup --dry-run
+```
+
+Der Guard gibt nur Company-Facts-Zeilen frei, für deren CIK bereits mindestens ein normalisierter
+Fact existiert. Raw-Zeilen ohne strukturierte Facts bleiben erhalten, weil sie aus einem alten,
+vor dem Parse geschriebenen Cache stammen und die einzige lokale Quellkopie sein können.
+Submissions und alle anderen Endpunkte bleiben beim Standard-Cleanup ebenfalls erhalten. Erst der
+explizite Befehl löscht die freigegebenen Zeilen innerhalb einer Transaktion:
+
+```bash
+python -m trading_system.cli db-cleanup
+```
+
+`DELETE` verkleinert die SQLite-Datei nicht; die frei gewordenen Pages erscheinen zunächst in der
+Freelist. Optional kann direkt danach ein ebenfalls explizites VACUUM angefordert werden:
+
+```bash
+python -m trading_system.cli db-cleanup --vacuum
+```
+
+Vor `VACUUM` werden aktuelle Dateigröße, verfügbarer Speicher und ein konservativer temporärer
+Speicherbedarf ausgegeben. TraWalp verweigert den Start, wenn nicht mindestens noch einmal die
+aktuelle Datenbankgröße frei ist. `VACUUM` kann lange exklusiv arbeiten und vorübergehend viel
+zusätzlichen Speicher belegen. Es wird daher nie automatisch ausgeführt.
+
+Wer die Offline-Reparse- oder Source-Debug-Möglichkeit des alten Caches behalten möchte, sollte die
+SQLite-Datei vor dem Cleanup bewusst sichern oder die Raw-Payloads separat archivieren. TraWalp
+dupliziert eine rund 15-GB-Datei nicht ungefragt. JSON komprimiert sehr gut; ein kleiner produktiver
+gzip-Test erreichte 6,8 % der Rohgröße. Ein optionales externes Archiv ist deshalb eine mögliche
+spätere Erweiterung, aber kein Bestandteil des operativen Datenmodells. Die vollständige
+Entscheidungsanalyse steht in [docs/sec-storage-decision.md](docs/sec-storage-decision.md).
 
 Der Default-Feed ist `iex`, damit ein üblicher Paper-Account ohne SIP-Abonnement funktioniert.
 Wer SIP-Zugriff besitzt, kann `universe.market_data_feed: sip` konfigurieren.
 
-Der vollständige Market-Data-Import wird auf handelbare Symbole mit einer lokal bestätigten
+Der historische Market-Data-Import wird auf handelbare Symbole mit einer lokal bestätigten
 SEC-Unternehmensidentität begrenzt und in 200er-Batches unmittelbar persistiert. Ein fehlerhafter
 Provider-Batch kann dadurch keine bereits erfolgreich geladenen Batches mehr verwerfen. Alpaca
 liefert für einzelne illiquide Sessions mitunter flache Bars ohne Trades und mit `vwap=0`. In

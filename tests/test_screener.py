@@ -6,7 +6,7 @@ import pandas as pd
 from trading_system.config import DataQualityConfig, FilterConfig, PeerConfig, load_settings
 from trading_system.data.database import Database
 from trading_system.models.fundamentals import CompanyIdentity, FundamentalFact
-from trading_system.models.market_data import DailyBar, TradableAsset
+from trading_system.models.market_data import DailyBar, MarketSnapshot, TradableAsset
 from trading_system.strategy.reporting import (
     export_report,
     format_explanation,
@@ -188,9 +188,52 @@ def test_historical_screen_excludes_future_filings_and_bars(tmp_path) -> None:
     )
 
 
+def test_raw_cache_cleanup_does_not_change_screening_results(tmp_path) -> None:
+    database = _database(tmp_path)
+    database.cache_sec_payload("0000000001", "companyfacts", {"raw": "AAA"})
+    database.cache_sec_payload("0000000002", "companyfacts", {"raw": "BBB"})
+    screener = Screener(database, _test_config())
+    before = screener.run(date(2025, 2, 14))
+
+    cleanup = database.cleanup_raw_sec_cache(dry_run=False)
+    after = screener.run(date(2025, 2, 14))
+
+    assert cleanup["deleted_rows"] == 2
+    assert before.model_dump(exclude={"generated_at"}) == after.model_dump(
+        exclude={"generated_at"}
+    )
+
+
 def test_peer_debug_uses_full_local_screening_universe(tmp_path) -> None:
     debug = Screener(_database(tmp_path), _test_config()).debug_peers("AAA", date(2025, 2, 14))
     assert debug is not None
     assert debug.exact_peer_count == 2
     assert debug.selected_group == "sic4:3571"
     assert debug.valid_pe_count == 2
+
+
+def test_screener_uses_only_snapshot_trade_from_completed_analysis_session(tmp_path) -> None:
+    database = _database(tmp_path)
+    observed = datetime(2025, 2, 15, 8, tzinfo=UTC)
+    database.upsert_market_snapshots(
+        [
+            MarketSnapshot(
+                symbol="AAA",
+                observed_at=observed,
+                latest_trade_price=Decimal("200"),
+                latest_trade_timestamp=datetime(2025, 2, 14, 21, tzinfo=UTC),
+            ),
+            MarketSnapshot(
+                symbol="BBB",
+                observed_at=observed,
+                latest_trade_price=Decimal("999"),
+                latest_trade_timestamp=datetime(2025, 2, 15, 8, tzinfo=UTC),
+            ),
+        ]
+    )
+
+    report = Screener(database, _test_config()).run(date(2025, 2, 14))
+    by_symbol = {record.symbol: record for record in report.records}
+    assert by_symbol["AAA"].fundamentals.market_cap == Decimal("4000000000")
+    assert by_symbol["AAA"].technical.price == 200
+    assert by_symbol["BBB"].fundamentals.market_cap != Decimal("19980000000")

@@ -1,4 +1,4 @@
-"""Normalize heterogeneous SEC US-GAAP Company Facts tags."""
+"""Normalize heterogeneous SEC Company Facts concepts across taxonomies."""
 
 from __future__ import annotations
 
@@ -9,69 +9,75 @@ from typing import Any
 
 from trading_system.models.fundamentals import FundamentalFact
 
-TAG_ALIASES: dict[str, tuple[str, ...]] = {
+TAG_ALIASES: dict[str, tuple[tuple[str, str], ...]] = {
     "revenue": (
-        "RevenueFromContractWithCustomerExcludingAssessedTax",
-        "Revenues",
-        "SalesRevenueNet",
-        "SalesRevenueGoodsNet",
+        ("us-gaap", "RevenueFromContractWithCustomerExcludingAssessedTax"),
+        ("us-gaap", "Revenues"),
+        ("us-gaap", "SalesRevenueNet"),
+        ("us-gaap", "SalesRevenueGoodsNet"),
     ),
-    "operating_income": ("OperatingIncomeLoss",),
-    "net_income": ("NetIncomeLoss", "ProfitLoss"),
-    "eps_diluted": ("EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"),
-    "operating_cash_flow": ("NetCashProvidedByUsedInOperatingActivities",),
+    "operating_income": (("us-gaap", "OperatingIncomeLoss"),),
+    "net_income": (("us-gaap", "NetIncomeLoss"), ("us-gaap", "ProfitLoss")),
+    "eps_diluted": (
+        ("us-gaap", "EarningsPerShareDiluted"),
+        ("us-gaap", "EarningsPerShareBasicAndDiluted"),
+    ),
+    "operating_cash_flow": (("us-gaap", "NetCashProvidedByUsedInOperatingActivities"),),
     "capital_expenditures": (
-        "PaymentsToAcquirePropertyPlantAndEquipment",
-        "PaymentsForAdditionsToPropertyPlantAndEquipment",
+        ("us-gaap", "PaymentsToAcquirePropertyPlantAndEquipment"),
+        ("us-gaap", "PaymentsForAdditionsToPropertyPlantAndEquipment"),
     ),
     "cash": (
-        "CashAndCashEquivalentsAtCarryingValue",
-        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+        ("us-gaap", "CashAndCashEquivalentsAtCarryingValue"),
+        ("us-gaap", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"),
     ),
     "total_debt": (
-        "LongTermDebtAndFinanceLeaseObligations",
-        "LongTermDebtAndCapitalLeaseObligations",
-        "DebtLongtermAndShorttermCombinedAmount",
-        "DebtAndCapitalLeaseObligations",
+        ("us-gaap", "LongTermDebtAndFinanceLeaseObligations"),
+        ("us-gaap", "LongTermDebtAndCapitalLeaseObligations"),
+        ("us-gaap", "DebtLongtermAndShorttermCombinedAmount"),
+        ("us-gaap", "DebtAndCapitalLeaseObligations"),
     ),
     "debt_current": (
-        "LongTermDebtAndFinanceLeaseObligationsCurrent",
-        "LongTermDebtCurrent",
-        "DebtCurrent",
-        "ShortTermBorrowings",
-        "NotesPayableCurrent",
+        ("us-gaap", "LongTermDebtAndFinanceLeaseObligationsCurrent"),
+        ("us-gaap", "LongTermDebtCurrent"),
+        ("us-gaap", "DebtCurrent"),
+        ("us-gaap", "ShortTermBorrowings"),
+        ("us-gaap", "NotesPayableCurrent"),
     ),
     "debt_noncurrent": (
-        "LongTermDebtAndFinanceLeaseObligationsNoncurrent",
-        "LongTermDebtNoncurrent",
-        "LongTermNotesAndLoans",
-        "LongTermDebt",
+        ("us-gaap", "LongTermDebtAndFinanceLeaseObligationsNoncurrent"),
+        ("us-gaap", "LongTermDebtNoncurrent"),
+        ("us-gaap", "LongTermNotesAndLoans"),
+        ("us-gaap", "LongTermDebt"),
     ),
-    "current_assets": ("AssetsCurrent",),
-    "current_liabilities": ("LiabilitiesCurrent",),
-    "total_assets": ("Assets",),
+    "current_assets": (("us-gaap", "AssetsCurrent"),),
+    "current_liabilities": (("us-gaap", "LiabilitiesCurrent"),),
+    "total_assets": (("us-gaap", "Assets"),),
     "total_equity": (
-        "StockholdersEquity",
-        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+        ("us-gaap", "StockholdersEquity"),
+        (
+            "us-gaap",
+            "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+        ),
     ),
     "shares_outstanding": (
-        "EntityCommonStockSharesOutstanding",
-        "CommonStockSharesOutstanding",
+        ("dei", "EntityCommonStockSharesOutstanding"),
+        ("us-gaap", "CommonStockSharesOutstanding"),
     ),
     "interest_expense": (
-        "InterestExpenseNonOperating",
-        "InterestAndDebtExpense",
-        "InterestExpense",
+        ("us-gaap", "InterestExpenseNonOperating"),
+        ("us-gaap", "InterestAndDebtExpense"),
+        ("us-gaap", "InterestExpense"),
     ),
-    "tax_expense": ("IncomeTaxExpenseBenefit",),
+    "tax_expense": (("us-gaap", "IncomeTaxExpenseBenefit"),),
     "depreciation_amortization": (
-        "DepreciationDepletionAndAmortization",
-        "DepreciationDepletionAndAmortizationPropertyPlantAndEquipment",
+        ("us-gaap", "DepreciationDepletionAndAmortization"),
+        ("us-gaap", "DepreciationDepletionAndAmortizationPropertyPlantAndEquipment"),
     ),
-    "depreciation": ("Depreciation",),
+    "depreciation": (("us-gaap", "Depreciation"),),
     "amortization": (
-        "AmortizationOfIntangibleAssets",
-        "FiniteLivedIntangibleAssetsAmortizationExpense",
+        ("us-gaap", "AmortizationOfIntangibleAssets"),
+        ("us-gaap", "FiniteLivedIntangibleAssetsAmortizationExpense"),
     ),
 }
 
@@ -101,16 +107,19 @@ def parse_company_facts(payload: Mapping[str, Any], symbol: str) -> list[Fundame
     """
 
     cik = str(payload.get("cik", "")).zfill(10)
-    gaap = payload.get("facts", {}).get("us-gaap", {})
-    if not isinstance(gaap, Mapping):
+    taxonomy_facts = payload.get("facts", {})
+    if not isinstance(taxonomy_facts, Mapping):
         return []
     parsed: list[FundamentalFact] = []
     seen: set[tuple[str, str, str, str, str]] = set()
     for metric, aliases in TAG_ALIASES.items():
         # The alias order is the documented semantic preference, not a fallback
         # that discards other tags. Dedupe removes identical filing observations.
-        for tag in aliases:
-            concept = gaap.get(tag)
+        for taxonomy, tag in aliases:
+            concepts = taxonomy_facts.get(taxonomy, {})
+            if not isinstance(concepts, Mapping):
+                continue
+            concept = concepts.get(tag)
             if not isinstance(concept, Mapping):
                 continue
             units = concept.get("units", {})
@@ -136,6 +145,7 @@ def parse_company_facts(payload: Mapping[str, Any], symbol: str) -> list[Fundame
                         cik=cik,
                         symbol=symbol.upper(),
                         metric=metric,
+                        taxonomy=taxonomy,
                         tag=tag,
                         value=value,
                         unit=unit,

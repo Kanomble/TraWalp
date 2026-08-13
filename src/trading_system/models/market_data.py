@@ -29,3 +29,15 @@ class TradableAsset(BaseModel):
     tradable: bool
     fractionable: bool
     shortable: bool = False
+
+
+class MarketSnapshot(BaseModel):
+    """Time-sensitive market observation kept separate from completed history."""
+
+    model_config = ConfigDict(frozen=True)
+    symbol: str
+    observed_at: datetime
+    latest_trade_price: Decimal | None = Field(default=None, gt=0)
+    latest_trade_timestamp: datetime | None = None
+    daily_bar: DailyBar | None = None
+    previous_daily_bar: DailyBar | None = None

@@ -60,6 +60,55 @@ def test_missing_metric_is_unavailable_not_zero() -> None:
     assert "net_income" not in metrics
 
 
+def test_dei_shares_outstanding_preserves_taxonomy_and_concept() -> None:
+    payload = _payload()
+    payload["facts"]["dei"] = {
+        "EntityCommonStockSharesOutstanding": {
+            "units": {
+                "shares": [
+                    {
+                        "end": "2024-04-25",
+                        "val": 239_228_849,
+                        "accn": "shares-1",
+                        "fy": 2024,
+                        "fp": "Q1",
+                        "form": "10-Q",
+                        "filed": "2024-04-30",
+                    }
+                ]
+            }
+        }
+    }
+    payload["facts"]["us-gaap"]["CommonStockSharesOutstanding"] = {
+        "units": {
+            "shares": [
+                {
+                    "end": "2020-04-10",
+                    "val": 1_957_000_000,
+                    "accn": "shares-old",
+                    "fy": 2020,
+                    "fp": "Q2",
+                    "form": "10-Q",
+                    "filed": "2020-08-10",
+                }
+            ]
+        }
+    }
+
+    facts = parse_company_facts(payload, "exe")
+    share_facts = [fact for fact in facts if fact.metric == "shares_outstanding"]
+    shares = next(fact for fact in share_facts if fact.taxonomy == "dei")
+    assert shares.taxonomy == "dei"
+    assert shares.tag == "EntityCommonStockSharesOutstanding"
+    assert shares.unit == "shares"
+    assert shares.value == Decimal("239228849")
+    assert {(fact.taxonomy, fact.tag) for fact in share_facts} == {
+        ("dei", "EntityCommonStockSharesOutstanding"),
+        ("us-gaap", "CommonStockSharesOutstanding"),
+    }
+    assert {fact.metric for fact in facts} >= {"revenue", "eps_diluted", "shares_outstanding"}
+
+
 def test_separate_depreciation_and_amortization_tags_are_preserved() -> None:
     payload = _payload()
     observation = {

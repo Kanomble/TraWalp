@@ -180,10 +180,30 @@ class Screener:
             analysis_date = bars[-1].timestamp.date() if bars else market_session
             facts = self.database.facts_available_as_of(company.symbol, analysis_date)
             price = bars[-1].close if bars else None
+            market_snapshot = self.database.latest_market_snapshot(company.symbol)
+            snapshot_price_selected = False
+            if (
+                market_snapshot is not None
+                and market_snapshot.latest_trade_price is not None
+                and market_snapshot.latest_trade_timestamp is not None
+                and market_snapshot.latest_trade_timestamp.date() == analysis_date
+            ):
+                # A snapshot may contain an intraday trade from a later session.
+                # Only a trade from the completed analysis session is point-in-time safe.
+                price = market_snapshot.latest_trade_price
+                snapshot_price_selected = True
             fundamentals = analyze_fundamentals(facts, analysis_date, price)
-            technical = technical_snapshot(_bar_frame(bars), self.config.technical).model_copy(
-                update={"market_session": analysis_date if bars else None}
-            )
+            technical = technical_snapshot(_bar_frame(bars), self.config.technical)
+            technical_updates: dict[str, Any] = {
+                "market_session": analysis_date if bars else None
+            }
+            if snapshot_price_selected and price is not None:
+                closes = [bar.close for bar in bars[-252:]]
+                technical_updates["price"] = float(price)
+                technical_updates["drawdown_52w"] = (
+                    float(price / max(closes) - Decimal(1)) if len(closes) == 252 else None
+                )
+            technical = technical.model_copy(update=technical_updates)
             average_dollar_volume = _average_dollar_volume(bars)
             snapshot = UniverseSnapshot(
                 symbol=company.symbol,

@@ -10,6 +10,7 @@ from trading_system.fundamentals.metrics import (
     build_ttm,
     debt_as_of,
     discrete_quarters,
+    shares_outstanding_as_of,
 )
 from trading_system.models.fundamentals import (
     BalanceSheetSnapshot,
@@ -98,6 +99,23 @@ def _balance_item(
             )
             return _item(label, value, sources, sources[0].unit, formula)
         return _item(label, value, (), None, "unavailable: no reliable mapped XBRL concept")
+    if metric == "shares_outstanding":
+        selected = shares_outstanding_as_of(facts, as_of)
+        if selected:
+            age_days = (as_of - selected.filed).days
+            formula = (
+                f"latest reliable {selected.taxonomy}:{selected.tag}; "
+                f"period_end={selected.period_end.isoformat()}; "
+                f"filed={selected.filed.isoformat()}; age_days={age_days}"
+            )
+            return _item(label, value, (selected,), selected.unit, formula)
+        return _item(
+            label,
+            value,
+            (),
+            None,
+            "unavailable: no recent reliable shares-outstanding observation",
+        )
     matching = [fact for fact in facts if fact.metric == metric and fact.filed <= as_of]
     selected = max(matching, key=lambda fact: (fact.period_end, fact.filed), default=None)
     if selected:

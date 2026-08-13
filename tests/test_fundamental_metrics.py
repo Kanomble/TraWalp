@@ -5,6 +5,7 @@ import pytest
 
 from trading_system.fundamentals.debug import debug_fundamentals
 from trading_system.fundamentals.metrics import (
+    MAX_SHARES_OUTSTANDING_AGE,
     balance_sheet_as_of,
     build_ttm,
     calculate_fundamental_metrics,
@@ -17,6 +18,7 @@ from trading_system.fundamentals.metrics import (
     growth_rate,
     price_to_earnings,
     roic,
+    shares_outstanding_as_of,
 )
 from trading_system.fundamentals.quality import analyze_fundamentals
 from trading_system.models.fundamentals import (
@@ -35,12 +37,15 @@ def fact(
     *,
     unit: str = "USD",
     fiscal_period: str = "Q1",
+    taxonomy: str = "us-gaap",
+    tag: str | None = None,
 ) -> FundamentalFact:
     return FundamentalFact(
         cik="0000000001",
         symbol="TEST",
         metric=metric,
-        tag=metric,
+        taxonomy=taxonomy,
+        tag=tag or metric,
         value=Decimal(value),
         unit=unit,
         period_start=start,
@@ -180,6 +185,165 @@ def test_point_in_time_analysis_does_not_invent_missing_history() -> None:
     assert before.market_cap is None
     assert after.market_cap == Decimal("2000")
     assert after.roic is None
+
+
+def test_new_dei_shares_override_exe_like_historical_us_gaap_count() -> None:
+    facts = [
+        fact(
+            "shares_outstanding",
+            "1957000000",
+            None,
+            date(2020, 4, 10),
+            date(2020, 8, 10),
+            unit="shares",
+            tag="CommonStockSharesOutstanding",
+        ),
+        fact(
+            "shares_outstanding",
+            "239228849",
+            None,
+            date(2026, 4, 24),
+            date(2026, 4, 28),
+            unit="shares",
+            taxonomy="dei",
+            tag="EntityCommonStockSharesOutstanding",
+        ),
+    ]
+
+    snapshot = balance_sheet_as_of(facts, date(2026, 8, 7))
+    selected = shares_outstanding_as_of(facts, date(2026, 8, 7))
+    assert snapshot.shares_outstanding == Decimal("239228849")
+    assert selected is not None
+    assert selected.taxonomy == "dei"
+
+
+def test_corrected_share_count_produces_exe_like_market_cap() -> None:
+    metrics = calculate_fundamental_metrics(
+        TTMFundamentals(),
+        TTMFundamentals(),
+        BalanceSheetSnapshot(shares_outstanding=Decimal("239228849")),
+        BalanceSheetSnapshot(),
+        Decimal("97.565"),
+    )
+    assert metrics.market_cap == Decimal("23340362652.685")
+    assert Decimal("23000000000") < metrics.market_cap < Decimal("24000000000")
+    assert metrics.market_cap != Decimal("190934705000")
+
+
+def test_stale_share_count_fails_closed_for_market_cap_and_ev_metrics() -> None:
+    as_of = date(2026, 8, 7)
+    stale_filed = as_of - MAX_SHARES_OUTSTANDING_AGE - timedelta(days=1)
+    stale = fact(
+        "shares_outstanding",
+        "1957000000",
+        None,
+        stale_filed - timedelta(days=5),
+        stale_filed,
+        unit="shares",
+        tag="CommonStockSharesOutstanding",
+    )
+    snapshot = balance_sheet_as_of([stale], as_of)
+    metrics = calculate_fundamental_metrics(
+        TTMFundamentals(
+            free_cash_flow=Decimal("100"),
+            ebit=Decimal("100"),
+            ebitda=Decimal("100"),
+        ),
+        TTMFundamentals(),
+        snapshot.model_copy(update={"cash": Decimal("10"), "total_debt": Decimal("20")}),
+        BalanceSheetSnapshot(),
+        Decimal("97.565"),
+    )
+    assert snapshot.shares_outstanding is None
+    assert metrics.market_cap is None
+    assert metrics.enterprise_value is None
+    assert metrics.ev_to_ebit is None
+    assert metrics.ev_to_ebitda is None
+    assert metrics.fcf_yield is None
+
+
+def test_share_selection_is_point_in_time_and_prefers_dei_on_equal_dates() -> None:
+    old = fact(
+        "shares_outstanding",
+        "250000000",
+        None,
+        date(2024, 10, 25),
+        date(2024, 10, 30),
+        unit="shares",
+        tag="CommonStockSharesOutstanding",
+    )
+    new_gaap = fact(
+        "shares_outstanding",
+        "241000000",
+        None,
+        date(2025, 2, 20),
+        date(2025, 2, 26),
+        unit="shares",
+        tag="CommonStockSharesOutstanding",
+    )
+    new_dei = fact(
+        "shares_outstanding",
+        "239000000",
+        None,
+        date(2025, 2, 20),
+        date(2025, 2, 26),
+        unit="shares",
+        taxonomy="dei",
+        tag="EntityCommonStockSharesOutstanding",
+    )
+
+    before = balance_sheet_as_of([old, new_gaap, new_dei], date(2025, 2, 25))
+    after = balance_sheet_as_of([new_dei, old, new_gaap], date(2025, 2, 27))
+    assert before.shares_outstanding == Decimal("250000000")
+    assert after.shares_outstanding == Decimal("239000000")
+
+
+def test_later_share_count_amendment_wins_only_after_it_is_filed() -> None:
+    original = fact(
+        "shares_outstanding",
+        "240000000",
+        None,
+        date(2025, 3, 31),
+        date(2025, 4, 25),
+        unit="shares",
+        taxonomy="dei",
+        tag="EntityCommonStockSharesOutstanding",
+    )
+    amended = original.model_copy(
+        update={
+            "value": Decimal("239000000"),
+            "filed": date(2025, 5, 2),
+            "form": "10-Q/A",
+            "accession_number": "shares-amended",
+        }
+    )
+
+    assert balance_sheet_as_of([amended, original], date(2025, 5, 1)).shares_outstanding == Decimal(
+        "240000000"
+    )
+    assert balance_sheet_as_of([original, amended], date(2025, 5, 3)).shares_outstanding == Decimal(
+        "239000000"
+    )
+
+
+def test_share_debug_reports_selected_taxonomy_dates_and_age() -> None:
+    shares = fact(
+        "shares_outstanding",
+        "239228849",
+        None,
+        date(2026, 4, 24),
+        date(2026, 4, 28),
+        unit="shares",
+        taxonomy="dei",
+        tag="EntityCommonStockSharesOutstanding",
+    )
+    report = debug_fundamentals("EXE", [shares], date(2026, 8, 7))
+    item = next(item for item in report.items if item.name == "Shares Outstanding")
+    assert item.value == Decimal("239228849")
+    assert "dei:EntityCommonStockSharesOutstanding" in item.formula
+    assert "period_end=2026-04-24" in item.formula
+    assert "filed=2026-04-28" in item.formula
+    assert "age_days=101" in item.formula
 
 
 def test_ebitda_derived_from_period_aligned_depreciation_and_amortization() -> None:

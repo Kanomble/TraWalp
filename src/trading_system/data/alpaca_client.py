@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
 from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
+from alpaca.data.requests import StockBarsRequest, StockSnapshotRequest
 from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import AssetClass, AssetStatus
 from alpaca.trading.requests import GetAssetsRequest
 
-from trading_system.models.market_data import DailyBar, TradableAsset
+from trading_system.models.market_data import DailyBar, MarketSnapshot, TradableAsset
 
 LOGGER = logging.getLogger(__name__)
 
@@ -138,3 +138,71 @@ class AlpacaDataClient:
                     invalid_samples,
                 )
         return sorted(output, key=lambda bar: (bar.symbol, bar.timestamp))
+
+    def stock_snapshots(self, symbols: Iterable[str]) -> list[MarketSnapshot]:
+        """Fetch one multi-symbol snapshot request and isolate malformed symbols."""
+
+        normalized = sorted({symbol.upper() for symbol in symbols})
+        if not normalized:
+            return []
+        response = self.historical.get_stock_snapshot(
+            StockSnapshotRequest(symbol_or_symbols=normalized, feed=self.feed)
+        )
+        observed_at = datetime.now(UTC)
+        output: list[MarketSnapshot] = []
+        for symbol, snapshot in response.items():
+            normalized_symbol = str(symbol).upper()
+            try:
+                latest_trade = getattr(snapshot, "latest_trade", None)
+                price = (
+                    Decimal(str(latest_trade.price))
+                    if latest_trade is not None and latest_trade.price is not None
+                    else None
+                )
+                output.append(
+                    MarketSnapshot(
+                        symbol=normalized_symbol,
+                        observed_at=observed_at,
+                        latest_trade_price=price,
+                        latest_trade_timestamp=(
+                            latest_trade.timestamp if latest_trade is not None else None
+                        ),
+                        daily_bar=_snapshot_bar(
+                            normalized_symbol, getattr(snapshot, "daily_bar", None)
+                        ),
+                        previous_daily_bar=_snapshot_bar(
+                            normalized_symbol, getattr(snapshot, "previous_daily_bar", None)
+                        ),
+                    )
+                )
+            except (AttributeError, InvalidOperation, TypeError, ValueError) as exc:
+                LOGGER.warning(
+                    "Skipped invalid Alpaca snapshot symbol=%s error=%s: %s",
+                    normalized_symbol,
+                    type(exc).__name__,
+                    exc,
+                )
+        return sorted(output, key=lambda item: item.symbol)
+
+
+def _snapshot_bar(symbol: str, bar: object | None) -> DailyBar | None:
+    if bar is None:
+        return None
+    volume = int(bar.volume)  # type: ignore[attr-defined]
+    raw_trade_count = getattr(bar, "trade_count", None)
+    trade_count = int(raw_trade_count) if raw_trade_count is not None else None
+    raw_vwap = getattr(bar, "vwap", None)
+    vwap = Decimal(str(raw_vwap)) if raw_vwap is not None else None
+    if vwap == 0 and volume == 0 and trade_count in (None, 0):
+        vwap = None
+    return DailyBar(
+        symbol=symbol,
+        timestamp=bar.timestamp,  # type: ignore[attr-defined]
+        open=Decimal(str(bar.open)),  # type: ignore[attr-defined]
+        high=Decimal(str(bar.high)),  # type: ignore[attr-defined]
+        low=Decimal(str(bar.low)),  # type: ignore[attr-defined]
+        close=Decimal(str(bar.close)),  # type: ignore[attr-defined]
+        volume=volume,
+        trade_count=trade_count,
+        vwap=vwap,
+    )
