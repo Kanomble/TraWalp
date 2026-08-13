@@ -134,6 +134,18 @@ def test_status_cli_reads_persisted_freshness_without_credentials(
     database.initialize()
     database.set_sync_value(
         "dataset",
+        "asset_universe",
+        {
+            "status": "success",
+            "last_success_at": "2026-08-13T06:00:00+00:00",
+            "assets_received": 13364,
+            "assets_upserted": 13364,
+            "assets_deactivated": 66,
+            "tradable_assets_after": 13364,
+        },
+    )
+    database.set_sync_value(
+        "dataset",
         "sec",
         {
             "status": "success",
@@ -155,6 +167,9 @@ def test_status_cli_reads_persisted_freshness_without_credentials(
     output = capsys.readouterr().out
     assert "TraWalp data status" in output
     assert "SEC fundamentals" in output
+    assert "assets received: 13364" in output
+    assert "assets deactivated: 66" in output
+    assert "tradable assets after: 13364" in output
     assert "incremental" in output
     assert "companies updated: 47" in output
 

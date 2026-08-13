@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import sqlite3
 from collections.abc import Iterable, Iterator
@@ -103,6 +104,91 @@ class Database:
                 rows,
             )
         return len(rows)
+
+    def reconcile_assets(
+        self,
+        assets: Iterable[TradableAsset],
+        *,
+        minimum_retained_ratio: float = 0.5,
+    ) -> dict[str, int]:
+        """Atomically reconcile an authoritative current tradable-asset snapshot."""
+
+        if not 0 < minimum_retained_ratio <= 1:
+            raise ValueError("minimum_retained_ratio must be within (0, 1]")
+        current = list(assets)
+        if not current:
+            raise ValueError("Refusing to reconcile an empty Alpaca asset snapshot")
+        symbols = [asset.symbol for asset in current]
+        if len(set(symbols)) != len(symbols):
+            raise ValueError("Alpaca asset snapshot contains duplicate symbols")
+        if any(not asset.tradable for asset in current):
+            raise ValueError("Asset reconciliation requires a fully tradable snapshot")
+
+        now = _now()
+        rows = [
+            (
+                asset.symbol,
+                asset.name,
+                asset.exchange,
+                asset.tradable,
+                asset.fractionable,
+                asset.shortable,
+                now,
+            )
+            for asset in current
+        ]
+        with self.connect() as connection:
+            tradable_before = int(
+                connection.execute(
+                    "SELECT COUNT(*) AS count FROM assets WHERE tradable=1"
+                ).fetchone()["count"]
+            )
+            minimum_expected = math.ceil(tradable_before * minimum_retained_ratio)
+            if tradable_before and len(current) < minimum_expected:
+                raise ValueError(
+                    "Refusing suspicious Alpaca asset snapshot: "
+                    f"received={len(current)} previous_tradable={tradable_before} "
+                    f"minimum_expected={minimum_expected}"
+                )
+            connection.execute(
+                "CREATE TEMP TABLE current_asset_symbols(symbol TEXT PRIMARY KEY) WITHOUT ROWID"
+            )
+            connection.executemany(
+                "INSERT INTO current_asset_symbols(symbol) VALUES (?)",
+                ((symbol,) for symbol in symbols),
+            )
+            connection.executemany(
+                """INSERT INTO assets VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol) DO UPDATE SET name=excluded.name, exchange=excluded.exchange,
+                tradable=excluded.tradable, fractionable=excluded.fractionable,
+                shortable=excluded.shortable, updated_at=excluded.updated_at""",
+                rows,
+            )
+            deactivated = connection.execute(
+                """UPDATE assets SET tradable=0, updated_at=?
+                WHERE tradable=1 AND NOT EXISTS (
+                    SELECT 1 FROM current_asset_symbols current
+                    WHERE current.symbol=assets.symbol
+                )""",
+                (now,),
+            ).rowcount
+            tradable_after = int(
+                connection.execute(
+                    "SELECT COUNT(*) AS count FROM assets WHERE tradable=1"
+                ).fetchone()["count"]
+            )
+            if tradable_after != len(current):
+                raise RuntimeError(
+                    "Asset reconciliation invariant failed: "
+                    f"snapshot={len(current)} tradable_after={tradable_after}"
+                )
+        return {
+            "records_updated": len(current) + deactivated,
+            "assets_received": len(current),
+            "assets_upserted": len(current),
+            "assets_deactivated": deactivated,
+            "tradable_assets_after": tradable_after,
+        }
 
     def list_tradable_asset_symbols(self) -> list[str]:
         with self.connect() as connection:

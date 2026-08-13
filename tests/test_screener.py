@@ -203,6 +203,32 @@ def test_raw_cache_cleanup_does_not_change_screening_results(tmp_path) -> None:
     assert before.model_dump(exclude={"generated_at"}) == after.model_dump(exclude={"generated_at"})
 
 
+def test_reconciled_inactive_asset_leaves_history_but_exits_current_screen(tmp_path) -> None:
+    database = _database(tmp_path)
+    before_facts = database.facts_available_as_of("BBB", date(2025, 2, 14))
+    before_bars = database.bars_available_as_of("BBB", date(2025, 2, 14))
+
+    result = database.reconcile_assets(
+        [
+            TradableAsset(
+                symbol="AAA",
+                name="AAA Corp",
+                exchange="NASDAQ",
+                tradable=True,
+                fractionable=True,
+            )
+        ]
+    )
+    report = Screener(database, _test_config()).run(date(2025, 2, 14))
+
+    assert result["assets_deactivated"] == 1
+    assert [record.symbol for record in report.records] == ["AAA"]
+    assert report.analyzed_count == 1
+    assert report.eligible_count == sum(record.eligible for record in report.records)
+    assert database.facts_available_as_of("BBB", date(2025, 2, 14)) == before_facts
+    assert database.bars_available_as_of("BBB", date(2025, 2, 14)) == before_bars
+
+
 def test_identity_conflict_is_excluded_before_fundamental_or_technical_analysis(
     tmp_path, monkeypatch
 ) -> None:

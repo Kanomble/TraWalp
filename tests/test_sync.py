@@ -48,6 +48,28 @@ class Alpaca:
         ]
 
 
+class AssetSnapshotAlpaca:
+    def __init__(self, symbols: tuple[str, ...] = ("AAA", "CCC", "DDD")) -> None:
+        self.symbols = symbols
+
+    def list_tradable_us_equities(self) -> list[TradableAsset]:
+        return [
+            TradableAsset(
+                symbol=symbol,
+                name=f"{symbol} Current",
+                exchange="NASDAQ",
+                tradable=True,
+                fractionable=True,
+            )
+            for symbol in self.symbols
+        ]
+
+
+class FailingAssetSnapshotAlpaca:
+    def list_tradable_us_equities(self) -> list[TradableAsset]:
+        raise RuntimeError("Alpaca assets unavailable")
+
+
 class Sec:
     def __init__(self) -> None:
         self.submission_calls = 0
@@ -125,6 +147,51 @@ def test_complete_sync_refreshes_all_sources_and_updates_bars_incrementally(tmp_
     assert alpaca.starts[1] < datetime(2024, 6, 3, tzinfo=UTC)
     assert database.cached_sec_payload("0000001234", "companyfacts", max_age=None) is None
     assert database.cached_sec_payload("0000001234", "submissions", max_age=None) is None
+
+
+def test_sync_assets_reconciles_full_snapshot_and_reports_metrics(tmp_path) -> None:
+    database = Database(tmp_path / "sync-assets.sqlite3")
+    database.initialize()
+    _seed_assets(database, "AAA", "BBB", "CCC")
+    sync = DataSynchronizer(
+        database,
+        AssetSnapshotAlpaca(),  # type: ignore[arg-type]
+        None,
+    )
+
+    first = sync.sync_assets()
+    second = sync.sync_assets()
+
+    assert first["assets_received"] == first["assets_upserted"] == 3
+    assert first["assets_deactivated"] == 1
+    assert first["tradable_assets_after"] == 3
+    assert first["records_updated"] == 4
+    assert first["errors"] == 0
+    assert second["assets_deactivated"] == 0
+    assert second["records_updated"] == 3
+    assert database.list_tradable_asset_symbols() == ["AAA", "CCC", "DDD"]
+    state = database.dataset_states()["asset_universe"]
+    assert state["assets_received"] == 3
+    assert state["assets_deactivated"] == 0
+    assert state["tradable_assets_after"] == 3
+
+
+@pytest.mark.parametrize(
+    "alpaca",
+    [FailingAssetSnapshotAlpaca(), AssetSnapshotAlpaca(())],
+)
+def test_failed_or_empty_asset_snapshot_does_not_change_universe(tmp_path, alpaca) -> None:
+    database = Database(tmp_path / "failed-assets.sqlite3")
+    database.initialize()
+    _seed_assets(database, "AAA", "BBB", "CCC")
+    before = database.list_tradable_assets()
+    sync = DataSynchronizer(database, alpaca, None)  # type: ignore[arg-type]
+
+    with pytest.raises((RuntimeError, ValueError)):
+        sync.sync_assets()
+
+    assert database.list_tradable_assets() == before
+    assert database.dataset_states()["asset_universe"]["status"] == "failed"
 
 
 def test_sync_persists_successful_market_batch_after_another_batch_fails(tmp_path) -> None:
@@ -868,6 +935,55 @@ class OperationalAlpaca(SnapshotAlpaca):
             )
             for symbol in batch
         ]
+
+
+def test_reconciled_assets_drive_sec_market_and_bar_universes(tmp_path) -> None:
+    database = Database(tmp_path / "reconciled-downstream.sqlite3")
+    database.initialize()
+    _seed_assets(database, "AAA", "BBB")
+    for index, symbol in enumerate(("AAA", "BBB"), start=1):
+        database.upsert_company(
+            CompanyIdentity(cik=f"{index:010d}", symbol=symbol, name=symbol, sic="3571")
+        )
+    historical_bbb = DailyBar(
+        symbol="BBB",
+        timestamp=datetime(2026, 8, 11, tzinfo=UTC),
+        open=Decimal("9"),
+        high=Decimal("11"),
+        low=Decimal("8"),
+        close=Decimal("10"),
+        volume=90,
+    )
+    database.upsert_bars([historical_bbb])
+    database.reconcile_assets(
+        [
+            TradableAsset(
+                symbol="AAA",
+                name="AAA Current",
+                exchange="NASDAQ",
+                tradable=True,
+                fractionable=True,
+            )
+        ]
+    )
+
+    sec = IncrementalSec()
+    sec.ticker_to_cik = lambda: {  # type: ignore[method-assign]
+        "AAA": "0000000001",
+        "BBB": "0000000002",
+    }
+    sec_result = DataSynchronizer(database, None, sec).sync_sec_full()  # type: ignore[arg-type]
+    alpaca = OperationalAlpaca()
+    operational = DataSynchronizer(database, alpaca, None)  # type: ignore[arg-type]
+    market_result = operational.refresh_market()
+    bar_result = operational.sync_historical_bars()
+
+    assert sec_result["universe_symbols"] == sec_result["companies_checked"] == 1
+    assert sec.submission_calls == sec.fact_calls == 1
+    assert market_result["symbols_requested"] == 1
+    assert bar_result["symbols_checked"] == 1
+    assert alpaca.batches == alpaca.bar_batches == [["AAA"]]
+    assert database.bars_available_as_of("BBB", date(2026, 8, 13)) == [historical_bbb]
 
 
 class FailingSnapshotAlpaca(SnapshotAlpaca):

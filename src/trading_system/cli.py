@@ -296,6 +296,10 @@ def _format_data_status(states: dict[str, dict]) -> str:
         for key in (
             "mode",
             "records_updated",
+            "assets_received",
+            "assets_upserted",
+            "assets_deactivated",
+            "tradable_assets_after",
             "universe_symbols",
             "sec_mapped_symbols",
             "sec_mapped_ciks",

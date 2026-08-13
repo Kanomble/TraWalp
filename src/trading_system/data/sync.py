@@ -244,7 +244,7 @@ class DataSynchronizer:
         if self.alpaca is None:
             raise ValueError("Alpaca client is required for asset synchronization")
         assets = self.alpaca.list_tradable_us_equities()
-        return {"records_updated": self.database.upsert_assets(assets), "errors": 0}
+        return {**self.database.reconcile_assets(assets), "errors": 0}
 
     def sync_sec_full(self, requested_symbols: list[str] | None = None) -> dict[str, Any]:
         return self._run_stage("sec", lambda: self._sync_sec(requested_symbols, full=True))

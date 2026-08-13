@@ -1,9 +1,23 @@
+import sqlite3
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+import pytest
+
 from trading_system.data.database import Database
-from trading_system.models.fundamentals import FundamentalFact
-from trading_system.models.market_data import DailyBar, MarketSnapshot
+from trading_system.models.fundamentals import CompanyIdentity, FundamentalFact
+from trading_system.models.market_data import DailyBar, MarketSnapshot, TradableAsset
+
+
+def asset(symbol: str, *, tradable: bool = True, name: str | None = None) -> TradableAsset:
+    return TradableAsset(
+        symbol=symbol,
+        name=name or f"{symbol} Corporation",
+        exchange="NASDAQ",
+        tradable=tradable,
+        fractionable=True,
+        shortable=True,
+    )
 
 
 def fact(filed: date, value: str, accession: str) -> FundamentalFact:
@@ -31,6 +45,87 @@ def test_point_in_time_query_prevents_lookahead(tmp_path) -> None:
     assert database.facts_available_as_of("TEST", date(2024, 4, 20)) == []
     available = database.facts_available_as_of("TEST", date(2024, 5, 10))
     assert [item.value for item in available] == [Decimal("100")]
+
+
+def test_asset_snapshot_reconciliation_deactivates_without_deleting_and_reactivates(
+    tmp_path,
+) -> None:
+    database = Database(tmp_path / "assets.sqlite3")
+    database.initialize()
+    database.upsert_assets([asset("AAA"), asset("BBB"), asset("CCC")])
+    database.upsert_company(CompanyIdentity(cik="0000000002", symbol="BBB", name="Historical BBB"))
+
+    first = database.reconcile_assets([asset("AAA"), asset("CCC"), asset("DDD")])
+
+    assert first == {
+        "records_updated": 4,
+        "assets_received": 3,
+        "assets_upserted": 3,
+        "assets_deactivated": 1,
+        "tradable_assets_after": 3,
+    }
+    assert database.list_tradable_asset_symbols() == ["AAA", "CCC", "DDD"]
+    assert database.list_tradable_companies() == []
+    with database.connect() as connection:
+        stale = connection.execute(
+            """SELECT name,exchange,tradable,fractionable,shortable
+            FROM assets WHERE symbol='BBB'"""
+        ).fetchone()
+        assert connection.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == 4
+    assert tuple(stale) == ("BBB Corporation", "NASDAQ", 0, 1, 1)
+
+    second = database.reconcile_assets([asset("AAA"), asset("CCC"), asset("DDD")])
+    reactivated = database.reconcile_assets(
+        [asset("AAA"), asset("BBB", name="BBB Reactivated"), asset("CCC"), asset("DDD")]
+    )
+
+    assert second["assets_deactivated"] == 0
+    assert second["tradable_assets_after"] == 3
+    assert reactivated["assets_deactivated"] == 0
+    assert reactivated["tradable_assets_after"] == 4
+    assert database.list_tradable_asset_symbols() == ["AAA", "BBB", "CCC", "DDD"]
+    assert [company.symbol for company in database.list_tradable_companies()] == ["BBB"]
+
+
+def test_asset_reconciliation_rejects_empty_and_suspicious_snapshots_without_changes(
+    tmp_path,
+) -> None:
+    database = Database(tmp_path / "asset-safety.sqlite3")
+    database.initialize()
+    database.upsert_assets([asset(f"A{index}") for index in range(10)])
+    before = database.list_tradable_assets()
+
+    with pytest.raises(ValueError, match="empty Alpaca asset snapshot"):
+        database.reconcile_assets([])
+    with pytest.raises(ValueError, match="suspicious Alpaca asset snapshot"):
+        database.reconcile_assets([asset(f"A{index}") for index in range(4)])
+
+    assert database.list_tradable_assets() == before
+
+
+def test_asset_reconciliation_rolls_back_upserts_when_deactivation_fails(tmp_path) -> None:
+    database = Database(tmp_path / "asset-atomicity.sqlite3")
+    database.initialize()
+    database.upsert_assets([asset("AAA"), asset("BBB"), asset("CCC")])
+    with database.connect() as connection:
+        connection.executescript(
+            """CREATE TRIGGER reject_bbb_deactivation
+            BEFORE UPDATE OF tradable ON assets
+            WHEN OLD.symbol='BBB' AND NEW.tradable=0
+            BEGIN SELECT RAISE(ABORT, 'forced deactivation failure'); END;"""
+        )
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced deactivation failure"):
+        database.reconcile_assets([asset("AAA", name="Changed AAA"), asset("CCC"), asset("DDD")])
+
+    assert database.list_tradable_asset_symbols() == ["AAA", "BBB", "CCC"]
+    with database.connect() as connection:
+        rows = connection.execute("SELECT symbol,name FROM assets ORDER BY symbol").fetchall()
+    assert [tuple(row) for row in rows] == [
+        ("AAA", "AAA Corporation"),
+        ("BBB", "BBB Corporation"),
+        ("CCC", "CCC Corporation"),
+    ]
 
 
 def test_amendment_is_not_visible_before_its_filing_date(tmp_path) -> None:

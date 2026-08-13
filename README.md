@@ -178,6 +178,25 @@ python -m trading_system.cli refresh-market
 python -m trading_system.cli status
 ```
 
+`sync-assets` behandelt Alpacas vollständige Liste aktiver, handelbarer US-Aktien als aktuellen
+Snapshot. Alle enthaltenen Symbole werden eingefügt oder aktualisiert und erhalten `tradable=1`;
+bislang handelbare, im erfolgreichen Snapshot aber fehlende Symbole bleiben aus historischen und
+Audit-Gründen als Asset-Zeile erhalten und erhalten atomar `tradable=0`. Name, Börse sowie die
+letzten bekannten Fractionable-/Shortable-Angaben werden bei dieser Deaktivierung nicht erfunden
+oder gelöscht. Ein später erneut geliefertes Symbol wird durch denselben Upsert wieder aktiviert.
+
+Die Reconciliation läuft in einer SQLite-Transaktion über eine temporäre Symboltabelle, sodass
+Upserts und Deaktivierungen gemeinsam committen oder gemeinsam zurückgerollt werden. Ein
+fehlgeschlagener Alpaca-Aufruf oder ein leerer Snapshot ändert keine Asset-Zeile. Als zusätzliche
+Sicherung wird ein Snapshot abgelehnt, wenn er weniger als 50 % des zuvor handelbaren Universums
+enthält; diese Grenze schützt vor offensichtlich unvollständigen Provider-Antworten. `sync-assets`
+und `status` melden unter anderem empfangene, upsertete, deaktivierte und anschließend handelbare
+Assets. Das kompatible Feld `records_updated` zählt dabei Snapshot-Upserts plus tatsächlich
+deaktivierte Zeilen. SEC-Sync, Bar-Update, Market-Refresh und aktuelles Screening verwenden weiterhin
+`tradable=1`, sodass deaktivierte Symbole automatisch aus den operativen Universen verschwinden,
+während bestehende Facts und Bars erhalten bleiben. Die separate SEC-Identitätsquarantäne wird
+anschließend unverändert zusätzlich angewendet.
+
 `update-bars` verwendet weiterhin adjustierte Daily Bars. Der erste Abruf umfasst ungefähr 480
 Kalendertage; Folgeläufe starten sieben Tage vor dem zuletzt gespeicherten Bar, um
 Provider-Korrekturen per Upsert zu übernehmen. Die letzten Bar-Zeitpunkte werden für das gesamte
