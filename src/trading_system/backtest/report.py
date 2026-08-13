@@ -150,6 +150,8 @@ def _equity_fields() -> list[str]:
         "portfolio_equity",
         "active_positions",
         "exposure",
+        "session_exposure",
+        "end_of_day_exposure",
         "realized_pnl",
         "unrealized_pnl",
     ]

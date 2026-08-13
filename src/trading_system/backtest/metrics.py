@@ -69,6 +69,11 @@ def calculate_metrics(
             if equity_curve
             else None
         ),
+        end_of_day_exposure=(
+            sum(point.end_of_day_exposure for point in equity_curve) / len(equity_curve)
+            if equity_curve
+            else None
+        ),
     )
 
 

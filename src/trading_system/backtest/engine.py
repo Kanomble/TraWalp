@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Protocol
 
+from trading_system.backtest.features import HistoricalFeatureScreenSource
 from trading_system.backtest.metrics import calculate_metrics, maximum_drawdown
 from trading_system.config import StrategyConfig
 from trading_system.data.database import Database
@@ -67,6 +68,10 @@ class CachedScreenSource:
             self.cache[session] = self.source.screen(session)
         return self.cache[session]
 
+    @property
+    def diagnostics(self):
+        return getattr(self.source, "diagnostics", None)
+
 
 @dataclass(frozen=True)
 class _PendingEntry:
@@ -111,7 +116,7 @@ class BacktestEngine:
     ) -> None:
         self.database = database
         self.config = config
-        self.screen_source = screen_source or HistoricalScreenSource(database, config)
+        self.screen_source = screen_source
         self.clock = clock
 
     def run(
@@ -142,11 +147,24 @@ class BacktestEngine:
         trades: list[BacktestTrade] = []
         curve: list[EquityPoint] = []
         skipped: Counter[str] = Counter()
+        screen_source = self.screen_source or HistoricalFeatureScreenSource(
+            self.database, self.config, sessions[0], sessions[-2]
+        )
 
         for index, session in enumerate(sessions):
             final_session = index == len(sessions) - 1
             active_symbols = set(positions) | {order.record.symbol for order in pending}
             bars = self.database.bars_on_session(active_symbols, session)
+            session_peak_market_value = sum(
+                position.quantity
+                * (
+                    float(bars[position.symbol].open)
+                    if position.symbol in bars
+                    else position.last_price
+                )
+                for position in positions.values()
+            )
+            session_start_equity = cash + session_peak_market_value
 
             for position in positions.values():
                 position.holding_days += 1
@@ -179,6 +197,10 @@ class BacktestEngine:
                     skipped[reason or "entry_rejected"] += 1
                     continue
                 positions[position.symbol] = position
+                session_peak_market_value = max(
+                    session_peak_market_value,
+                    sum(item.quantity * item.last_price for item in positions.values()),
+                )
             pending = []
 
             # 3. Intraday stops/targets use daily OHLC; simultaneous hits are stop-first.
@@ -230,7 +252,7 @@ class BacktestEngine:
                     del positions[symbol]
             else:
                 # 6. The point-in-time screen is calculated only after the close.
-                report = self.screen_source.screen(session)
+                report = screen_source.screen(session)
                 pending = self._entry_orders(report, variant, positions, skipped)
 
             market_value = sum(
@@ -242,6 +264,12 @@ class BacktestEngine:
                 for position in positions.values()
             )
             equity = cash + market_value
+            session_exposure = (
+                session_peak_market_value / session_start_equity
+                if session_start_equity > 0
+                else 0.0
+            )
+            end_of_day_exposure = market_value / equity if equity > 0 else 0.0
             curve.append(
                 EquityPoint(
                     date=session,
@@ -249,7 +277,9 @@ class BacktestEngine:
                     market_value=market_value,
                     portfolio_equity=equity,
                     active_positions=len(positions),
-                    exposure=market_value / equity if equity > 0 else 0.0,
+                    exposure=session_exposure,
+                    session_exposure=session_exposure,
+                    end_of_day_exposure=end_of_day_exposure,
                     realized_pnl=sum(trade.pnl for trade in trades),
                     unrealized_pnl=unrealized_pnl,
                 )
@@ -264,6 +294,15 @@ class BacktestEngine:
         benchmark = self._benchmark(sessions[0], sessions[-1])
         if benchmark.warning:
             warnings.append(benchmark.warning)
+        source_diagnostics = getattr(screen_source, "diagnostics", None)
+        performance_diagnostics = (
+            source_diagnostics.as_dict()
+            if source_diagnostics is not None
+            else {"sessions_screened": len(sessions) - 1}
+        )
+        annualized_reliable = len(sessions) >= 63
+        if not annualized_reliable:
+            warnings.append("annualized metrics are unstable for fewer than 63 trading sessions")
         return BacktestResult(
             requested_start=start,
             requested_end=end,
@@ -289,6 +328,8 @@ class BacktestEngine:
                 "local_bar_end": last_bound.isoformat() if last_bound else None,
                 "benchmark_available": benchmark.available,
             },
+            performance_diagnostics=performance_diagnostics,
+            annualized_metrics_reliable=annualized_reliable,
             warnings=tuple(warnings),
         )
 
@@ -487,6 +528,21 @@ class BacktestEngine:
                 "time_exit": "close",
                 "end_of_backtest": "last available close",
             },
+            "variant_definition": {
+                "A": "Quality + Value scoring with common technical recovery entry gate",
+                "B": "Quality + Value + Opportunity scoring with common recovery gate",
+                "C": "Quality + Value + Opportunity + Timing scoring with common recovery gate",
+            }[variant.value],
+            "common_recovery_gate": {
+                "applies_to": [item.value for item in StrategyVariant],
+                "price_above_sma20": True,
+                "any_of": [
+                    "rsi_recovery",
+                    "momentum5_above_zero",
+                    "relative_volume_above_threshold",
+                ],
+                "relative_volume_threshold": self.config.backtest.min_relative_volume,
+            },
         }
 
 
@@ -498,7 +554,7 @@ def compare_strategies(
     *,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> StrategyComparison:
-    shared = CachedScreenSource(HistoricalScreenSource(database, config))
+    shared = CachedScreenSource(HistoricalFeatureScreenSource(database, config, start, end))
     generated_at = clock().isoformat()
     results = tuple(
         BacktestEngine(

@@ -52,6 +52,8 @@ class EquityPoint(BaseModel):
     portfolio_equity: float = Field(ge=0)
     active_positions: int = Field(ge=0)
     exposure: float = Field(ge=0)
+    session_exposure: float = Field(default=0, ge=0)
+    end_of_day_exposure: float = Field(default=0, ge=0)
     realized_pnl: float = 0
     unrealized_pnl: float = 0
 
@@ -73,6 +75,7 @@ class PerformanceMetrics(BaseModel):
     average_holding_period: float | None = None
     portfolio_turnover: float | None = None
     exposure: float | None = None
+    end_of_day_exposure: float | None = None
 
 
 class BenchmarkResult(BaseModel):
@@ -105,6 +108,8 @@ class BacktestResult(BaseModel):
     equity_curve: tuple[EquityPoint, ...]
     skipped_entries: dict[str, int] = Field(default_factory=dict)
     data_diagnostics: dict = Field(default_factory=dict)
+    performance_diagnostics: dict = Field(default_factory=dict)
+    annualized_metrics_reliable: bool = False
     warnings: tuple[str, ...] = ()
 
 

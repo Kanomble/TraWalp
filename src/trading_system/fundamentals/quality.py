@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -14,13 +15,30 @@ from trading_system.models.fundamentals import (
     BalanceSheetSnapshot,
     FundamentalFact,
     FundamentalMetrics,
+    TTMFundamentals,
 )
+
+
+@dataclass(frozen=True)
+class FundamentalAccountingState:
+    """Price-independent accounting state for one SEC filing information set."""
+
+    current: TTMFundamentals
+    prior: TTMFundamentals
+    balance: BalanceSheetSnapshot
+    prior_balance: BalanceSheetSnapshot
 
 
 def analyze_fundamentals(
     facts: list[FundamentalFact], as_of: date, price: Decimal | None
 ) -> FundamentalMetrics:
     """Build a complete metric snapshot using only facts filed by ``as_of``."""
+
+    return attach_market_price(accounting_state_as_of(facts, as_of), price)
+
+
+def accounting_state_as_of(facts: list[FundamentalFact], as_of: date) -> FundamentalAccountingState:
+    """Build the reusable accounting state for facts actually filed by ``as_of``."""
 
     current, prior = current_and_prior_ttm(facts, as_of)
     balance = balance_sheet_as_of(facts, as_of)
@@ -30,7 +48,26 @@ def analyze_fundamentals(
         if prior_cutoff
         else BalanceSheetSnapshot()
     )
-    return calculate_fundamental_metrics(current, prior, balance, prior_balance, price)
+    return FundamentalAccountingState(current, prior, balance, prior_balance)
 
 
-__all__ = ["analyze_fundamentals"]
+def attach_market_price(
+    state: FundamentalAccountingState, price: Decimal | None
+) -> FundamentalMetrics:
+    """Attach a session-specific price without rebuilding filing-driven accounting state."""
+
+    return calculate_fundamental_metrics(
+        state.current,
+        state.prior,
+        state.balance,
+        state.prior_balance,
+        price,
+    )
+
+
+__all__ = [
+    "FundamentalAccountingState",
+    "accounting_state_as_of",
+    "analyze_fundamentals",
+    "attach_market_price",
+]

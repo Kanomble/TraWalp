@@ -455,13 +455,39 @@ historischer Ergebnisse optimiert.
 `backtest` schreibt atomar JSON, Trade-CSV und Equity-CSV unter
 `reports/backtest_<start>_<end>_<variant>.*`. Das JSON enthält Konfigurations-Snapshot,
 angeforderten/tatsächlichen Zeitraum, Annahmen, Warnungen, Trades, Equity Curve und Benchmark.
-Die Equity Curve weist Cash, Marktwert, Equity, Positionen, Exposure sowie realisierten und
-unrealisierten P&L je Session aus.
+Die Equity Curve weist Cash, Marktwert, Equity, Positionen sowie realisierten und unrealisierten
+P&L je Session aus. `session_exposure`/die generische `exposure` misst den maximal tatsächlich im
+Session-Verlauf gebundenen Kapitalanteil. Damit zählt auch ein am selben Tag eröffneter und
+geschlossener Trade. `end_of_day_exposure` misst separat nur den Bestand am Session-Ende; aus Daily
+OHLC wird keine scheinpräzise intraday zeitgewichtete Exposure abgeleitet.
 `compare-strategies` schreibt JSON und eine kompakte CSV-Tabelle. Kennzahlen sind Total Return,
 kalendertägig annualisierte CAGR, Maximum Drawdown, Sharpe und Sortino mit 252 Sessions/Jahr,
 Win Rate, durchschnittlicher Gewinn/Verlust als Trade Return, Profit Factor, monetäre Expectancy,
 Trade-Anzahl, Haltedauer, zweiseitiger Turnover und durchschnittliche Kapital-Exposure. Nicht
 definierte Werte bleiben `null`/`N/A`, statt irreführend null zu werden.
+
+Bei weniger als 63 lokalen Trading-Sessions setzt der Report
+`annualized_metrics_reliable: false` und gibt eine Warnung aus. CAGR, Sharpe und Sortino können
+rechnerisch weiterhin vorhanden sein, sind über einen so kurzen Horizont aber keine belastbare
+Strategieerwartung. Maximum Drawdown basiert auf den aufgezeichneten Session-Equity-Punkten, nicht
+auf einem rekonstruierten Intraday-Equity-Pfad.
+
+### PIT-Feature-Pipeline und Performance
+
+Historische Screens verwenden einen ausschließlich laufzeitlokalen, rebuildbaren Feature-Store. Er
+lädt Bars über indexfreundliche Timestamp-Ranges in Batches, verwirft Finanzwerte/REITs und
+offensichtlich unzureichende Preis-/Liquiditätshistorien vor teurer Rekonstruktion und lädt zunächst
+nur Share-Facts für den Market-Cap-Gate. Erst dessen Überlebende erhalten den vollständigen,
+filing-bewussten Accounting-Zustand. Technische Snapshot-Werte werden für exakt denselben auf 320
+Bars begrenzten Prefix wie im operativen Screener vorberechnet.
+
+Der Accounting-Cache ist nicht nur nach Symbol, sondern nach der tatsächlich sichtbaren
+Filing-/Accession-Menge und dem ausgewählten Share-Fact getrennt. Eine spätere Filing- oder
+Bar-Zeile kann daher keinen früheren Session-Key verändern. Accounting-Zustände werden zwischen
+Filings wiederverwendet; historische Preise werden pro Session erst danach an die unveränderten
+Bilanz-/TTM-Werte angehängt. Es gibt keine persistente Feature-Tabelle und keinen zusätzlichen
+Source-Datenbestand. Das JSON enthält unter `performance_diagnostics` Ladezeiten, Zeilenzahlen,
+ungefähren Speicherbedarf, Query-Anzahl sowie Cache Hits/Misses.
 
 SPY wird nur verwendet, wenn adjustierte lokale Bars den gesamten tatsächlichen Zeitraum abdecken.
 Der Benchmark ist ein kostenfreier Close-to-Close-Buy-and-Hold-Vergleich; fehlen Bars, bleibt er mit
@@ -479,13 +505,12 @@ werden aber nicht spekulativ zwischen Emittentenepochen migriert. Alpaca-Bars si
 Mal an. Historische Shares/Fundamentals können dennoch nicht für jede Corporate Action perfekt
 vergleichbar sein.
 
-Ein vollständiger PIT-Screen rekonstruiert derzeit für ungefähr 6.000 Unternehmen die jeweilige
-SEC-Historie und technische Zeitreihe. Die Engine verwendet pro Session nur eine read-only
-SQLite-Verbindung, und A/B/C teilen ihren Session-Screen; dennoch kann ein einzelner
-Produktions-Screen mehrere Minuten dauern. Ein späteres Performance-Projekt kann Filing-aware
-Fundamental-Snapshots materialisieren oder sicher batchen. Dieser Milestone speichert bewusst keine
-dateübergreifenden Feature-Caches, deren Invalidation neue Filings rückwirkend sichtbar machen
-könnte.
+Die beschleunigte Pipeline ändert die historische Universumsquelle nicht: sie bleibt die heutige
+tradable-Mitgliedschaft und damit survivorship-biased. A/B/C teilen weiterhin denselben PIT-Screen.
+Der gemeinsame Recovery-Gate gilt ausdrücklich auch für A und B; die Varianten sind deshalb ein
+Scoring-/Threshold-Vergleich unter gemeinsamer technischer Entry-Bestätigung und keine reine
+Faktor-Ablation. Diese tatsächliche Definition wird im Konfigurations-Snapshot jedes Reports
+gespeichert.
 
 ## Paper Trading und Sicherheitsmechanismen
 

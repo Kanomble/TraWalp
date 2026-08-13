@@ -177,6 +177,8 @@ def test_stop_target_and_conservative_same_bar_policy(
 
     assert result.trades[0].exit_reason == expected
     assert result.trades[0].entry_date == result.trades[0].exit_date == second
+    assert result.metrics.exposure > 0
+    assert result.metrics.end_of_day_exposure == 0
     if expected == "stop_loss":
         assert result.trades[0].exit_reference_price == pytest.approx(90)
     else:
@@ -311,6 +313,20 @@ def test_variants_change_only_component_mix_and_share_recovery_gate() -> None:
     )
 
 
+def test_short_horizon_and_common_gate_are_explicit_in_result_metadata(tmp_path) -> None:
+    sessions = [date(2024, 1, 2), date(2024, 1, 3)]
+    database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
+    result = BacktestEngine(
+        database,
+        _config(),
+        screen_source=FixtureScreens({sessions[0]: (_record(),)}),
+    ).run(sessions[0], sessions[-1])
+
+    assert result.annualized_metrics_reliable is False
+    assert any("annualized metrics are unstable" in warning for warning in result.warnings)
+    assert result.configuration["common_recovery_gate"]["applies_to"] == ["A", "B", "C"]
+
+
 def test_filing_and_future_bar_never_leak_backward(tmp_path) -> None:
     database = Database(tmp_path / "pit.sqlite3")
     database.initialize()
@@ -342,7 +358,7 @@ def test_strategy_comparison_reuses_each_session_screen(monkeypatch, tmp_path) -
     database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
     source = FixtureScreens({sessions[0]: (_record(),)})
 
-    monkeypatch.setattr(engine_module, "HistoricalScreenSource", lambda *_args: source)
+    monkeypatch.setattr(engine_module, "HistoricalFeatureScreenSource", lambda *_args: source)
     comparison = engine_module.compare_strategies(
         database,
         _config(),

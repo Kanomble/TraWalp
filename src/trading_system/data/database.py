@@ -485,9 +485,9 @@ class Database:
         """Return chronologically ordered bars whose trading date is not after ``as_of``."""
 
         query = """SELECT * FROM daily_bars
-            WHERE symbol=? AND substr(timestamp,1,10)<=?
+            WHERE symbol=? AND timestamp<?
             ORDER BY timestamp DESC"""
-        parameters: list[Any] = [symbol.upper(), as_of.isoformat()]
+        parameters: list[Any] = [symbol.upper(), (as_of + timedelta(days=1)).isoformat()]
         if limit is not None:
             query += " LIMIT ?"
             parameters.append(limit)
@@ -531,13 +531,122 @@ class Database:
         if not normalized:
             return {}
         placeholders = ",".join("?" for _ in normalized)
+        start_inclusive = session.isoformat()
+        end_exclusive = (session + timedelta(days=1)).isoformat()
         with self.connect() as connection:
             rows = connection.execute(
                 f"""SELECT * FROM daily_bars WHERE symbol IN ({placeholders})
-                AND substr(timestamp,1,10)=? ORDER BY symbol,timestamp""",
-                [*normalized, session.isoformat()],
+                AND timestamp>=? AND timestamp<? ORDER BY symbol,timestamp""",
+                [*normalized, start_inclusive, end_exclusive],
             ).fetchall()
         return {str(row["symbol"]): _bar_from_row(row) for row in rows}
+
+    def iter_bar_batches(
+        self,
+        symbols: Iterable[str],
+        start: date,
+        end: date,
+        *,
+        batch_size: int = 400,
+    ) -> Iterator[list[DailyBar]]:
+        """Yield bounded symbol batches using the `(symbol,timestamp)` index range."""
+
+        normalized = sorted({symbol.upper() for symbol in symbols})
+        end_exclusive = (end + timedelta(days=1)).isoformat()
+        start_inclusive = start.isoformat()
+        with self.read_only() as connection:
+            for offset in range(0, len(normalized), batch_size):
+                batch = normalized[offset : offset + batch_size]
+                placeholders = ",".join("?" for _ in batch)
+                rows = connection.execute(
+                    f"""SELECT * FROM daily_bars WHERE symbol IN ({placeholders})
+                    AND timestamp>=? AND timestamp<? ORDER BY symbol,timestamp""",
+                    [*batch, start_inclusive, end_exclusive],
+                ).fetchall()
+                yield [_bar_from_row(row) for row in rows]
+
+    def iter_bar_value_batches(
+        self,
+        symbols: Iterable[str],
+        start: date,
+        end: date,
+        *,
+        batch_size: int = 400,
+    ) -> Iterator[list[tuple[Any, ...]]]:
+        """Yield compact raw bar values for a rebuildable historical feature run."""
+
+        normalized = sorted({symbol.upper() for symbol in symbols})
+        end_exclusive = (end + timedelta(days=1)).isoformat()
+        start_inclusive = start.isoformat()
+        with self.read_only() as connection:
+            for offset in range(0, len(normalized), batch_size):
+                batch = normalized[offset : offset + batch_size]
+                placeholders = ",".join("?" for _ in batch)
+                rows = connection.execute(
+                    f"""SELECT symbol,timestamp,high,low,close,volume
+                    FROM daily_bars WHERE symbol IN ({placeholders})
+                    AND timestamp>=? AND timestamp<? ORDER BY symbol,timestamp""",
+                    [*batch, start_inclusive, end_exclusive],
+                ).fetchall()
+                yield [tuple(row) for row in rows]
+
+    def iter_fact_batches(
+        self,
+        symbols: Iterable[str],
+        end: date,
+        *,
+        batch_size: int = 100,
+        metrics: Iterable[str] | None = None,
+        period_end_on_or_after: date | None = None,
+        retain_latest_periods: int | None = None,
+    ) -> Iterator[list[FundamentalFact]]:
+        """Yield PIT fact streams for selected symbols without loading the full fact table."""
+
+        normalized = sorted({symbol.upper() for symbol in symbols})
+        selected_metrics = sorted(set(metrics or ()))
+        with self.read_only() as connection:
+            for offset in range(0, len(normalized), batch_size):
+                batch = normalized[offset : offset + batch_size]
+                placeholders = ",".join("?" for _ in batch)
+                metric_clause = ""
+                parameters: list[Any] = [*batch, end.isoformat()]
+                if selected_metrics:
+                    metric_placeholders = ",".join("?" for _ in selected_metrics)
+                    metric_clause = f" AND metric IN ({metric_placeholders})"
+                    parameters.extend(selected_metrics)
+                period_clause = ""
+                if period_end_on_or_after is not None:
+                    period_clause = " AND period_end>=?"
+                    parameters.append(period_end_on_or_after.isoformat())
+                if period_end_on_or_after is not None and retain_latest_periods is not None:
+                    # Preserve stale-but-still-selected inputs without transferring an
+                    # issuer's entire history. Dense ranking retains every amendment
+                    # and unit for each selected reporting period.
+                    ranked_parameters = parameters[:-1]
+                    ranked_parameters.extend(
+                        [period_end_on_or_after.isoformat(), retain_latest_periods]
+                    )
+                    rows = connection.execute(
+                        f"""WITH ranked AS (
+                            SELECT *,DENSE_RANK() OVER (
+                                PARTITION BY symbol,metric ORDER BY period_end DESC
+                            ) AS period_rank
+                            FROM fundamental_facts
+                            WHERE symbol IN ({placeholders}) AND filed<=?{metric_clause}
+                        )
+                        SELECT * FROM ranked
+                        WHERE period_end>=? OR period_rank<=?
+                        ORDER BY symbol,filed,period_end,id""",
+                        ranked_parameters,
+                    ).fetchall()
+                else:
+                    rows = connection.execute(
+                        f"""SELECT * FROM fundamental_facts WHERE symbol IN ({placeholders})
+                        AND filed<=?{metric_clause}{period_clause}
+                        ORDER BY symbol,filed,period_end,id""",
+                        parameters,
+                    ).fetchall()
+                yield [_fact_from_row(row) for row in rows]
 
     def upsert_market_snapshots(self, snapshots: Iterable[MarketSnapshot]) -> int:
         rows = [

@@ -68,6 +68,7 @@ class _PreparedCandidate:
     base_exclusions: list[str]
     data_warnings: list[str]
     analysis_date: date
+    fundamentals_evaluated: bool = True
 
 
 class Screener:
@@ -103,6 +104,23 @@ class Screener:
                 )
                 for company in safe_companies
             ]
+        return self.report_from_prepared(
+            prepared,
+            conflicted_companies,
+            requested_as_of=as_of,
+            market_session=market_session,
+        )
+
+    def report_from_prepared(
+        self,
+        prepared: list[_PreparedCandidate],
+        conflicted_companies: list[CompanyIdentity],
+        *,
+        requested_as_of: date,
+        market_session: date,
+    ) -> ScreenReport:
+        """Score a prepared PIT cross-section using the canonical peer/ranking logic."""
+
         peer_table = self._peer_table(prepared)
         records = [self._score(candidate, peer_table) for candidate in prepared]
         records.extend(
@@ -133,7 +151,7 @@ class Screener:
         )
         return ScreenReport(
             as_of=market_session,
-            requested_as_of=as_of,
+            requested_as_of=requested_as_of,
             effective_market_session=market_session,
             generated_at=datetime.now(UTC).isoformat(),
             analyzed_count=len(ranked),
@@ -396,7 +414,8 @@ class Screener:
         }
         scores = self._scores(candidate, peer_values, industry_medians)
         exclusions = list(candidate.base_exclusions)
-        exclusions.extend(self._hard_filter_exclusions(candidate.fundamentals, scores))
+        if candidate.fundamentals_evaluated:
+            exclusions.extend(self._hard_filter_exclusions(candidate.fundamentals, scores))
         if peer_group is None:
             candidate.data_warnings.append("insufficient_peer_group")
         eligible = not exclusions
