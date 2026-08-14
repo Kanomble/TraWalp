@@ -12,6 +12,7 @@ from pathlib import Path
 from alpaca.data.enums import Adjustment, DataFeed
 
 from trading_system.ai.export import NoAICandidatesError, export_ai_candidates
+from trading_system.backtest.candidate_audit import run_candidate_audit
 from trading_system.backtest.engine import (
     BacktestEngine,
     compare_position_management,
@@ -19,8 +20,10 @@ from trading_system.backtest.engine import (
 )
 from trading_system.backtest.report import (
     export_backtest,
+    export_candidate_audit,
     export_comparison,
     format_backtest_summary,
+    format_candidate_audit_summary,
     format_comparison_table,
 )
 from trading_system.config import load_settings
@@ -171,6 +174,30 @@ def _parser() -> argparse.ArgumentParser:
     )
     position_comparison.add_argument("--start", type=date.fromisoformat, required=True)
     position_comparison.add_argument("--end", type=date.fromisoformat, required=True)
+    audit = commands.add_parser(
+        "audit-candidates",
+        help="Audit the production historical candidate funnel and PIT data coverage",
+    )
+    audit.add_argument("--start", type=date.fromisoformat, required=True)
+    audit.add_argument("--end", type=date.fromisoformat, required=True)
+    audit.add_argument(
+        "--variant",
+        choices=[variant.value for variant in StrategyVariant],
+        default=StrategyVariant.FULL.value,
+        help="Use the configured backtest entry funnel for this score variant (default: C)",
+    )
+    audit.add_argument(
+        "--near-miss-limit",
+        type=_positive_int,
+        default=10,
+        help="Maximum retained near misses per screening session",
+    )
+    audit.add_argument(
+        "--group-by",
+        choices=("month",),
+        default="month",
+        help="Compact terminal grouping; full session records are always exported",
+    )
     export_ai = commands.add_parser(
         "export-ai", help="Export ranked screen candidates for manual AI analysis"
     )
@@ -326,6 +353,25 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         paths = export_backtest(result, settings.strategy.storage.reports_path)
         print(format_backtest_summary(result))
+        print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
+        return 0
+    if args.command == "audit-candidates":
+        try:
+            audit_result = run_candidate_audit(
+                database,
+                settings.strategy,
+                args.start,
+                args.end,
+                variant=StrategyVariant(args.variant),
+                near_miss_limit=args.near_miss_limit,
+            )
+        except ValueError as exc:
+            print(f"Candidate audit refused: {exc}", file=sys.stderr)
+            return 1
+        paths = export_candidate_audit(
+            audit_result, settings.strategy.storage.reports_path
+        )
+        print(format_candidate_audit_summary(audit_result))
         print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
         return 0
     if args.command == "backtest-compare":

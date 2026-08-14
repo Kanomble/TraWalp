@@ -69,6 +69,11 @@ class _PreparedCandidate:
     data_warnings: list[str]
     analysis_date: date
     fundamentals_evaluated: bool = True
+    market_history_count: int = 0
+    pit_fact_count: int = 0
+    estimated_market_cap: float | None = None
+    latest_pit_filing_date: date | None = None
+    latest_pit_period_end: date | None = None
 
 
 class Screener:
@@ -309,6 +314,9 @@ class Screener:
             warnings = _missing_metric_warnings(fundamentals, technical)
             if not facts:
                 exclusions.append("no_point_in_time_fundamentals")
+            latest_fact = (
+                max(facts, key=lambda item: (item.filed, item.period_end)) if facts else None
+            )
             return _PreparedCandidate(
                 company=company,
                 fundamentals=fundamentals,
@@ -317,6 +325,15 @@ class Screener:
                 base_exclusions=exclusions,
                 data_warnings=warnings,
                 analysis_date=analysis_date,
+                market_history_count=len(bars),
+                pit_fact_count=len(facts),
+                estimated_market_cap=(
+                    float(fundamentals.market_cap)
+                    if fundamentals.market_cap is not None
+                    else None
+                ),
+                latest_pit_filing_date=latest_fact.filed if latest_fact else None,
+                latest_pit_period_end=latest_fact.period_end if latest_fact else None,
             )
         except Exception as exc:
             LOGGER.exception("Candidate analysis failed symbol=%s", company.symbol)
@@ -394,7 +411,15 @@ class Screener:
         return output
 
     def _score(self, candidate: _PreparedCandidate, peer_table: pd.DataFrame) -> ScreenRecord:
-        peer_row = peer_table.loc[peer_table["symbol"] == candidate.company.symbol]
+        # Base-excluded candidates are intentionally absent from ``peer_table``.
+        # Avoid an O(peer rows) DataFrame scan for thousands of already rejected
+        # symbols on every historical session; their score inputs remain exactly
+        # the same empty-peer context as before.
+        peer_row = (
+            peer_table.iloc[0:0]
+            if candidate.base_exclusions
+            else peer_table.loc[peer_table["symbol"] == candidate.company.symbol]
+        )
         peer_group = None if peer_row.empty else _optional_string(peer_row.iloc[0]["peer_group"])
         group = (
             peer_table.loc[peer_table["peer_group"] == peer_group]
@@ -440,6 +465,11 @@ class Screener:
             fundamentals=candidate.fundamentals,
             technical=candidate.technical,
             scores=scores,
+            market_history_count=candidate.market_history_count,
+            pit_fact_count=candidate.pit_fact_count,
+            estimated_market_cap=candidate.estimated_market_cap,
+            latest_pit_filing_date=candidate.latest_pit_filing_date,
+            latest_pit_period_end=candidate.latest_pit_period_end,
         )
 
     def _scores(

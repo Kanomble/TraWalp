@@ -83,6 +83,63 @@ class ScreenSource(Protocol):
     def screen(self, session: date) -> ScreenReport: ...
 
 
+@dataclass(frozen=True, slots=True)
+class EntryFilterEvaluation:
+    """Structured result of the canonical backtest entry funnel.
+
+    The audit consumes this object instead of reimplementing entry thresholds.
+    ``failure_detail`` distinguishes unavailable input from a genuine threshold
+    miss while ``first_failure`` retains the public skipped-entry reason.
+    """
+
+    score: float | None
+    first_failure: str | None
+    failure_detail: str | None
+    blocking_reasons: tuple[str, ...]
+    quality_score: float | None
+    valuation_score: float | None
+    opportunity_score: float | None
+    timing_score: float | None
+    weighted_score: float | None
+    price_above_sma20: bool | None
+    rsi_recovery: bool | None
+    momentum5_above_zero: bool | None
+    relative_volume_above_threshold: bool | None
+    recovery_gate_pass: bool | None
+
+    @property
+    def eligible(self) -> bool:
+        return self.score is not None and self.first_failure is None
+
+
+class CandidateAuditObserver(Protocol):
+    """Optional non-trading observer used by the historical candidate audit."""
+
+    def observe_screen(
+        self,
+        report: ScreenReport,
+        variant: StrategyVariant,
+        config: StrategyConfig,
+    ) -> None: ...
+
+    def observe_portfolio_decision(
+        self,
+        signal_date: date,
+        symbol: str,
+        outcome: str,
+        reason: str | None = None,
+    ) -> None: ...
+
+    def observe_execution(
+        self,
+        signal_date: date,
+        execution_date: date,
+        symbol: str,
+        executed: bool,
+        reason: str | None = None,
+    ) -> None: ...
+
+
 class HistoricalScreenSource:
     """Adapter that guarantees historical screens never consult current snapshots."""
 
@@ -135,11 +192,13 @@ class BacktestEngine:
         config: StrategyConfig,
         *,
         screen_source: ScreenSource | None = None,
+        audit_observer: CandidateAuditObserver | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.database = database
         self.config = config
         self.screen_source = screen_source
+        self.audit_observer = audit_observer
         self.clock = clock
         self.position_management = config.position_management
         self.position_manager = PositionManager(
@@ -364,6 +423,9 @@ class BacktestEngine:
                         symbol = order.record.symbol
                         if symbol in positions:
                             skipped["duplicate_position"] += 1
+                            self._observe_execution(
+                                order, session, executed=False, reason="duplicate_position"
+                            )
                             continue
                         history = intraday_histories[symbol]
                         if len(history) < self.config.intraday.warmup_bars:
@@ -391,10 +453,17 @@ class BacktestEngine:
                         )
                         if position is None:
                             skipped[reason or "entry_rejected"] += 1
+                            self._observe_execution(
+                                order,
+                                session,
+                                executed=False,
+                                reason=reason or "entry_rejected",
+                            )
                             continue
                         positions[position.symbol] = position
                         execution_legs[position.position_id] = []
                         reentry_trackers.pop(position.symbol, None)
+                        self._observe_execution(order, session, executed=True)
 
                     session_peak_market_value = max(
                         session_peak_market_value,
@@ -454,20 +523,36 @@ class BacktestEngine:
                 ):
                     if order.record.symbol in positions:
                         skipped["duplicate_position"] += 1
+                        self._observe_execution(
+                            order, session, executed=False, reason="duplicate_position"
+                        )
                         continue
                     bar = bars.get(order.record.symbol)
                     if bar is None:
                         skipped["missing_next_session_bar"] += 1
+                        self._observe_execution(
+                            order,
+                            session,
+                            executed=False,
+                            reason="missing_next_session_bar",
+                        )
                         continue
                     position, cash, reason = self._open_position(
                         order, bar, bars, positions, cash
                     )
                     if position is None:
                         skipped[reason or "entry_rejected"] += 1
+                        self._observe_execution(
+                            order,
+                            session,
+                            executed=False,
+                            reason=reason or "entry_rejected",
+                        )
                         continue
                     positions[position.symbol] = position
                     execution_legs[position.position_id] = []
                     reentry_trackers.pop(position.symbol, None)
+                    self._observe_execution(order, session, executed=True)
                     session_peak_market_value = max(
                         session_peak_market_value,
                         sum(item.quantity * item.last_price for item in positions.values()),
@@ -499,6 +584,8 @@ class BacktestEngine:
 
             # 4. Close-based score, rotation and time rules use this completed session only.
             report = None if final_session else screen_source.screen(session)
+            if report is not None and self.audit_observer is not None:
+                self.audit_observer.observe_screen(report, variant, self.config)
             records = {record.symbol: record for record in report.records} if report else {}
             best_symbol, best_score = self._best_candidate(report, variant, positions)
             for symbol in list(positions):
@@ -705,24 +792,52 @@ class BacktestEngine:
         self._update_reentry_trackers(report, trackers)
         capacity = self.config.portfolio.max_positions - len(positions)
         if capacity <= 0:
+            if self.audit_observer is not None:
+                for record in report.records:
+                    evaluation = evaluate_variant_entry(record, variant, self.config)
+                    if not evaluation.eligible:
+                        continue
+                    reason = (
+                        "already_holding_symbol"
+                        if record.symbol in positions
+                        else "max_positions_reached"
+                    )
+                    self.audit_observer.observe_portfolio_decision(
+                        report.as_of, record.symbol, "blocked", reason
+                    )
             return []
         occupied = set(positions)
         candidates: list[_PendingEntry] = []
         for record in report.records:
             if record.symbol in occupied:
+                if self.audit_observer is not None and evaluate_variant_entry(
+                    record, variant, self.config
+                ).eligible:
+                    self.audit_observer.observe_portfolio_decision(
+                        report.as_of,
+                        record.symbol,
+                        "blocked",
+                        "already_holding_symbol",
+                    )
                 continue
             if not self._reentry_allowed(record.symbol, report.as_of, closed_dates or {}):
                 skipped["reentry_cooldown"] += 1
+                if self.audit_observer is not None and evaluate_variant_entry(
+                    record, variant, self.config
+                ).eligible:
+                    self.audit_observer.observe_portfolio_decision(
+                        report.as_of, record.symbol, "blocked", "reentry_rule"
+                    )
                 continue
-            score, reason = _variant_entry_score(record, variant, self.config)
-            if score is None:
-                skipped[reason or "entry_filter"] += 1
+            evaluation = evaluate_variant_entry(record, variant, self.config)
+            if evaluation.score is None or evaluation.first_failure is not None:
+                skipped[evaluation.first_failure or "entry_filter"] += 1
                 continue
             candidates.append(
                 _PendingEntry(
                     record=record,
                     signal_date=report.as_of,
-                    variant_score=score,
+                    variant_score=evaluation.score,
                     variant=variant,
                     entry_triggers=_entry_triggers(record, self.config),
                     previous_position=(
@@ -744,12 +859,47 @@ class BacktestEngine:
             sector = (candidate.record.sic or "unknown")[:2]
             if sector_counts[sector] >= self.config.portfolio.max_sector_positions:
                 skipped["max_sector_positions"] += 1
+                if self.audit_observer is not None:
+                    self.audit_observer.observe_portfolio_decision(
+                        report.as_of,
+                        candidate.record.symbol,
+                        "blocked",
+                        "sector_limit",
+                    )
+                continue
+            if len(orders) >= capacity:
+                if self.audit_observer is not None:
+                    self.audit_observer.observe_portfolio_decision(
+                        report.as_of,
+                        candidate.record.symbol,
+                        "blocked",
+                        "max_positions_reached",
+                    )
                 continue
             orders.append(candidate)
             sector_counts[sector] += 1
-            if len(orders) >= capacity:
-                break
+            if self.audit_observer is not None:
+                self.audit_observer.observe_portfolio_decision(
+                    report.as_of, candidate.record.symbol, "order_created"
+                )
         return orders
+
+    def _observe_execution(
+        self,
+        order: _PendingEntry,
+        execution_date: date,
+        *,
+        executed: bool,
+        reason: str | None = None,
+    ) -> None:
+        if self.audit_observer is not None:
+            self.audit_observer.observe_execution(
+                order.signal_date,
+                execution_date,
+                order.record.symbol,
+                executed,
+                reason,
+            )
 
     def _update_reentry_trackers(
         self,
@@ -1298,51 +1448,115 @@ def _comparison_label(
     return f"{variant.value}/{preset.value}"
 
 
-def _variant_entry_score(
+def evaluate_variant_entry(
     record: ScreenRecord, variant: StrategyVariant, config: StrategyConfig
-) -> tuple[float | None, str | None]:
-    blocking = set(record.exclusion_reasons) - SCORE_FILTER_EXCLUSIONS
-    if blocking:
-        return None, sorted(blocking)[0]
+) -> EntryFilterEvaluation:
+    """Evaluate the production entry funnel and expose its point-in-time evidence."""
+
     quality = record.scores.quality.score
     valuation = record.scores.valuation.score
     opportunity = record.scores.opportunity.score
     timing = record.scores.timing.score
     rules = config.backtest
-    if quality is None or quality < rules.min_quality_score:
-        return None, "quality_threshold"
-    if valuation is None or valuation < rules.min_valuation_score:
-        return None, "valuation_threshold"
+    technical = record.technical
+    price_above_sma20 = (
+        None
+        if technical.price is None or technical.sma20 is None
+        else technical.price > technical.sma20
+    )
+    rsi_recovery = technical.rsi_recovery
+    momentum_recovery = (
+        None if technical.momentum5 is None else technical.momentum5 > 0
+    )
+    relative_volume_recovery = (
+        None
+        if technical.relative_volume is None
+        else technical.relative_volume > rules.min_relative_volume
+    )
+    recovery_values = (rsi_recovery, momentum_recovery, relative_volume_recovery)
+    recovery_pass = (
+        None
+        if all(value is None for value in recovery_values)
+        else any(value is True for value in recovery_values)
+    )
+    blocking = tuple(
+        reason for reason in record.exclusion_reasons if reason not in SCORE_FILTER_EXCLUSIONS
+    )
+
+    def result(
+        first_failure: str | None,
+        failure_detail: str | None = None,
+        *,
+        weighted_score: float | None = None,
+    ) -> EntryFilterEvaluation:
+        return EntryFilterEvaluation(
+            score=weighted_score if first_failure is None else None,
+            first_failure=first_failure,
+            failure_detail=failure_detail,
+            blocking_reasons=blocking,
+            quality_score=quality,
+            valuation_score=valuation,
+            opportunity_score=opportunity,
+            timing_score=timing,
+            weighted_score=weighted_score,
+            price_above_sma20=price_above_sma20,
+            rsi_recovery=rsi_recovery,
+            momentum5_above_zero=momentum_recovery,
+            relative_volume_above_threshold=relative_volume_recovery,
+            recovery_gate_pass=recovery_pass,
+        )
+
+    if blocking:
+        return result(blocking[0], blocking[0])
+    if quality is None:
+        return result("quality_threshold", "quality_score_unavailable")
+    if quality < rules.min_quality_score:
+        return result("quality_threshold", "quality_threshold")
+    if valuation is None:
+        return result("valuation_threshold", "valuation_score_unavailable")
+    if valuation < rules.min_valuation_score:
+        return result("valuation_threshold", "valuation_threshold")
     components: list[tuple[float, float]] = [
         (quality, config.scores.total.quality),
         (valuation, config.scores.total.valuation),
     ]
     if variant in {StrategyVariant.QUALITY_VALUE_OPPORTUNITY, StrategyVariant.FULL}:
-        if opportunity is None or opportunity < rules.min_opportunity_score:
-            return None, "opportunity_threshold"
+        if opportunity is None:
+            return result("opportunity_threshold", "opportunity_score_unavailable")
+        if opportunity < rules.min_opportunity_score:
+            return result("opportunity_threshold", "opportunity_threshold")
         components.append((opportunity, config.scores.total.opportunity))
     if variant is StrategyVariant.FULL:
-        if timing is None or timing < rules.min_timing_score:
-            return None, "timing_threshold"
+        if timing is None:
+            return result("timing_threshold", "timing_score_unavailable")
+        if timing < rules.min_timing_score:
+            return result("timing_threshold", "timing_threshold")
         components.append((timing, config.scores.total.timing))
     denominator = sum(weight for _, weight in components)
     score = sum(value * weight for value, weight in components) / denominator
     if score < rules.min_total_score:
-        return None, "total_threshold"
-    technical = record.technical
-    if technical.price is None or technical.sma20 is None or technical.price <= technical.sma20:
-        return None, "price_not_above_sma20"
-    recovered = (
-        technical.rsi_recovery is True
-        or (technical.momentum5 is not None and technical.momentum5 > 0)
-        or (
-            technical.relative_volume is not None
-            and technical.relative_volume > rules.min_relative_volume
+        return result("total_threshold", "total_threshold", weighted_score=score)
+    if price_above_sma20 is None:
+        return result(
+            "price_not_above_sma20", "sma20_or_price_unavailable", weighted_score=score
         )
-    )
-    if not recovered:
-        return None, "recovery_signal_required"
-    return score, None
+    if not price_above_sma20:
+        return result("price_not_above_sma20", "price_not_above_sma20", weighted_score=score)
+    if recovery_pass is not True:
+        detail = (
+            "recovery_inputs_unavailable"
+            if recovery_pass is None
+            else "recovery_signal_required"
+        )
+        return result("recovery_signal_required", detail, weighted_score=score)
+    return result(None, weighted_score=score)
+
+
+def _variant_entry_score(
+    record: ScreenRecord, variant: StrategyVariant, config: StrategyConfig
+) -> tuple[float | None, str | None]:
+    evaluation = evaluate_variant_entry(record, variant, config)
+    return evaluation.score, evaluation.first_failure
 
 
 def _variant_score_value(

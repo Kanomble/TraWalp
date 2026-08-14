@@ -51,6 +51,7 @@ coverage.xml
 .pytest_cache/
 .tmp_pytest_*/
 .tmp_intraday_*/
+.tmp_candidate_audit_*/
 cover/
 
 # Translations

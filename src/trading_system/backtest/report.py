@@ -19,6 +19,14 @@ from trading_system.models.backtest import (
     StrategyComparison,
     StrategyComparisonKind,
 )
+from trading_system.models.candidate_audit import (
+    CandidateAuditEvent,
+    CandidateAuditMonthly,
+    CandidateAuditResult,
+    CandidateAuditSession,
+    CandidateFailureSummary,
+    CandidateNearMiss,
+)
 
 
 def export_backtest(result: BacktestResult, output_directory: Path) -> dict[str, Path]:
@@ -120,6 +128,118 @@ def export_comparison(comparison: StrategyComparison, output_directory: Path) ->
         ["strategy", *_post_exit_fields()],
     )
     return paths
+
+
+def export_candidate_audit(
+    audit: CandidateAuditResult, output_directory: Path
+) -> dict[str, Path]:
+    """Persist the bounded audit summary and reusable intraday candidate set."""
+
+    output_directory.mkdir(parents=True, exist_ok=True)
+    stem = f"candidate_audit_{audit.requested_start}_{audit.requested_end}"
+    paths = {
+        "json": output_directory / f"{stem}.json",
+        "sessions": output_directory / f"{stem}_sessions.csv",
+        "monthly": output_directory / f"{stem}_monthly.csv",
+        "failures": output_directory / f"{stem}_failures.csv",
+        "near_misses": output_directory / f"{stem}_near_misses.csv",
+        "candidates": output_directory / f"{stem}_candidates.csv",
+        "intraday_candidates": output_directory / f"{stem}_intraday_candidates.json",
+        "entry_symbols": output_directory / f"{stem}_entry_symbols.json",
+        "near_miss_symbols": output_directory / f"{stem}_near_miss_symbols.json",
+    }
+    _atomic_text(paths["json"], json.dumps(audit.model_dump(mode="json"), indent=2))
+    session_rows = [item.model_dump(mode="json") for item in audit.sessions]
+    monthly_rows = [item.model_dump(mode="json") for item in audit.monthly_summary]
+    failure_rows = [item.model_dump(mode="json") for item in audit.failure_reasons]
+    near_miss_rows = [item.model_dump(mode="json") for item in audit.near_misses]
+    candidate_rows = [item.model_dump(mode="json") for item in audit.candidates]
+    _atomic_csv(paths["sessions"], session_rows, list(CandidateAuditSession.model_fields))
+    _atomic_csv(
+        paths["monthly"],
+        monthly_rows,
+        list(CandidateAuditMonthly.model_fields),
+    )
+    _atomic_csv(
+        paths["failures"],
+        failure_rows,
+        list(CandidateFailureSummary.model_fields),
+    )
+    _atomic_csv(
+        paths["near_misses"],
+        near_miss_rows,
+        list(CandidateNearMiss.model_fields),
+    )
+    _atomic_csv(
+        paths["candidates"],
+        candidate_rows,
+        list(CandidateAuditEvent.model_fields),
+    )
+    _atomic_text(
+        paths["intraday_candidates"],
+        json.dumps(
+            {
+                "report_type": "historical_candidate_audit_intraday_candidates",
+                "requested_start": audit.requested_start.isoformat(),
+                "requested_end": audit.requested_end.isoformat(),
+                "selection": "all symbols eligible at least once in the production entry funnel",
+                "candidate_count": len(audit.candidate_symbols),
+                "candidates": [{"symbol": symbol} for symbol in audit.candidate_symbols],
+            },
+            indent=2,
+        ),
+    )
+    for key, symbols in (
+        ("entry_symbols", audit.entry_symbols),
+        ("near_miss_symbols", audit.near_miss_symbols),
+    ):
+        _atomic_text(
+            paths[key],
+            json.dumps(
+                {
+                    "report_type": key,
+                    "symbols": [{"symbol": symbol} for symbol in symbols],
+                },
+                indent=2,
+            ),
+        )
+    return paths
+
+
+def format_candidate_audit_summary(audit: CandidateAuditResult) -> str:
+    lines = [
+        f"TraWalp historical candidate audit / variant {audit.strategy_variant.value}",
+        f"Period: {audit.actual_start} through {audit.actual_end}",
+        f"Classification: {audit.classification}",
+        f"First eligible candidate: {audit.first_eligible_candidate_date or 'none'} | "
+        f"First entry: {audit.first_entry_date or 'none'}",
+        f"Unique candidate symbols: {len(audit.candidate_symbols)} | "
+        f"entry symbols: {len(audit.entry_symbols)} | near-miss symbols: "
+        f"{len(audit.near_miss_symbols)}",
+        "",
+        "Month    Screens  PITCov   PreRec  Recovery  Eligible  Entries  Primary blocker",
+    ]
+    for item in audit.monthly_summary:
+        coverage = (
+            "N/A"
+            if item.pit_fundamental_coverage_pct is None
+            else f"{item.pit_fundamental_coverage_pct:>6.1%}"
+        )
+        lines.append(
+            f"{item.month:<8} {item.screens:>7}  {coverage:>6} "
+            f"{item.candidates_before_recovery:>7} {item.recovery_passes:>9} "
+            f"{item.eligible_candidates:>9} {item.actual_entries:>8}  "
+            f"{item.primary_blocker or 'none'}"
+        )
+    if audit.portfolio_blockers:
+        lines.extend(["", f"Portfolio blockers: {audit.portfolio_blockers}"])
+    lines.extend(
+        [
+            "",
+            "Counts are symbol-session observations; PIT and forward trading logic are unchanged.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def format_backtest_summary(result: BacktestResult) -> str:

@@ -307,9 +307,9 @@ class HistoricalFeatureScreenSource:
         cheap_market = self._cheap_exclusions.get(company.symbol, {}).get(session)
         market = self._market.get(company.symbol, {}).get(session)
         if cheap_market is None:
-            reasons = ["insufficient_market_history"]
-            if static is not None:
-                reasons.append(static)
+            reasons = [static, "insufficient_market_history"] if static else [
+                "insufficient_market_history"
+            ]
             return _empty_candidate(company, session, *reasons)
         if static == "reit_excluded":
             reasons = list(cheap_market)
@@ -320,7 +320,7 @@ class HistoricalFeatureScreenSource:
                 or market.price * shares.value < Decimal(str(self.config.universe.min_market_cap))
             ):
                 reasons.append("missing_or_small_market_cap")
-            reasons.append(static)
+            reasons.insert(0, static)
             return _empty_candidate(company, session, *reasons)
         if cheap_market:
             return _PreparedCandidate(
@@ -332,11 +332,15 @@ class HistoricalFeatureScreenSource:
                 data_warnings=[],
                 analysis_date=session,
                 fundamentals_evaluated=False,
+                market_history_count=market.history_count if market else 0,
             )
         if market is None:
             return _empty_candidate(company, session, "insufficient_market_history")
         selected_shares = shares_outstanding_as_of(self._shares.get(company.symbol, []), session)
-        if selected_shares is None or market.price * selected_shares.value < Decimal(
+        estimated_market_cap = (
+            market.price * selected_shares.value if selected_shares is not None else None
+        )
+        if estimated_market_cap is None or estimated_market_cap < Decimal(
             str(self.config.universe.min_market_cap)
         ):
             return _PreparedCandidate(
@@ -348,6 +352,10 @@ class HistoricalFeatureScreenSource:
                 data_warnings=[],
                 analysis_date=market.technical.market_session or session,
                 fundamentals_evaluated=False,
+                market_history_count=market.history_count,
+                estimated_market_cap=(
+                    float(estimated_market_cap) if estimated_market_cap is not None else None
+                ),
             )
         cache = self._facts.get(company.symbol)
         if cache is None:
@@ -356,17 +364,24 @@ class HistoricalFeatureScreenSource:
                 fundamentals=FundamentalMetrics(),
                 technical=market.technical,
                 average_dollar_volume_20d=market.average_dollar_volume_20d,
-                base_exclusions=["no_point_in_time_fundamentals", "missing_or_small_market_cap"],
+                # The shares gate immediately above already proved market-cap
+                # eligibility.  Keep the actual missing PIT input as the sole
+                # exclusion so diagnostics do not report a contradictory cap miss.
+                base_exclusions=["no_point_in_time_fundamentals"],
                 data_warnings=[],
                 analysis_date=session,
+                market_history_count=market.history_count,
+                estimated_market_cap=float(estimated_market_cap),
             )
+        eligible_fact_count = _eligible_fact_count(cache.facts, session)
         fundamentals = cache.metrics(session, market.price, self.diagnostics)
         exclusions = self.screener._universe_exclusions(  # noqa: SLF001
             _universe_snapshot(company, market, fundamentals), market.history_count
         )
         base_exclusions = list(exclusions)
-        if _eligible_fact_count(cache.facts, session) == 0:
+        if eligible_fact_count == 0:
             base_exclusions.append("no_point_in_time_fundamentals")
+        latest_fact = cache.facts[eligible_fact_count - 1] if eligible_fact_count else None
         analysis_date = market.technical.market_session or session
         if analysis_date != session:
             base_exclusions.append("stale_market_data")
@@ -378,6 +393,11 @@ class HistoricalFeatureScreenSource:
             base_exclusions=base_exclusions,
             data_warnings=_missing_metric_warnings(fundamentals, market.technical),
             analysis_date=analysis_date,
+            market_history_count=market.history_count,
+            pit_fact_count=eligible_fact_count,
+            estimated_market_cap=float(estimated_market_cap),
+            latest_pit_filing_date=latest_fact.filed if latest_fact else None,
+            latest_pit_period_end=latest_fact.period_end if latest_fact else None,
         )
 
 

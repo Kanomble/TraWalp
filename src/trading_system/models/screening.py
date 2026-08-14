@@ -28,6 +28,14 @@ class ScreenRecord(BaseModel):
     fundamentals: FundamentalMetrics
     technical: TechnicalSnapshot
     scores: StockScores
+    # Lightweight provenance used by the historical candidate audit.  These
+    # values describe only information available at ``as_of`` and deliberately
+    # avoid retaining complete bar/fact dictionaries in historical reports.
+    market_history_count: int = Field(default=0, ge=0)
+    pit_fact_count: int = Field(default=0, ge=0)
+    estimated_market_cap: float | None = Field(default=None, ge=0)
+    latest_pit_filing_date: date | None = None
+    latest_pit_period_end: date | None = None
 
 
 class ScreenReport(BaseModel):
