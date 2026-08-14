@@ -185,6 +185,9 @@ python -m trading_system.cli data-status
 Der Intraday-Backfill ist explizit, inkrementell und provider-nativ; der normale Sync lädt nicht
 unbeabsichtigt 5-Minuten-Daten für das Gesamtuniversum. Schema, Warmup, Sessions und Strategy-F-
 Integration beschreibt [`docs/intraday-market-data.md`](docs/intraday-market-data.md).
+Der Full-Universe-Daily-Warmup, beidseitige Coverage-Gaps, SPY-Historie und der anschließende
+Candidate-Audit-Workflow sind in
+[`docs/historical-daily-backfill.md`](docs/historical-daily-backfill.md) dokumentiert.
 
 `sync-assets` behandelt Alpacas vollständige Liste aktiver, handelbarer US-Aktien als aktuellen
 Snapshot. Alle enthaltenen Symbole werden eingefügt oder aktualisiert und erhalten `tradable=1`;

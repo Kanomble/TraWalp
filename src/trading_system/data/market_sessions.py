@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import exchange_calendars as xcals
 import pandas as pd
 
+from trading_system.config import StrategyConfig
 from trading_system.models.market_data import BarTimeframe
 
 
@@ -65,6 +66,32 @@ def full_history_request_window(session: date, trading_days: int) -> tuple[datet
         datetime.combine(start_session, time.min, tzinfo=UTC),
         datetime.combine(session + timedelta(days=1), time.min, tzinfo=UTC),
     )
+
+
+def required_daily_warmup_sessions(config: StrategyConfig) -> int:
+    """Return the longest configured or technical Daily lookback in trading sessions."""
+
+    rules = config.technical
+    technical_requirements = (
+        200,  # longest moving average
+        252,  # 52-week drawdown
+        126 + 1,  # longest momentum comparison needs the current bar as well
+        20 + rules.sma_slope_lookback,
+        14 + rules.rsi_recovery_lookback + 1,
+        21,  # current volume plus 20 prior sessions
+        15,  # Wilder ATR14 seed plus current observation
+    )
+    return max(config.data_quality.min_market_history_days, *technical_requirements)
+
+
+def daily_warmup_start(start_session: date, warmup_sessions: int) -> date:
+    """Return the first session needed to provide N sessions strictly before start."""
+
+    if warmup_sessions < 1:
+        raise ValueError("warmup_sessions must be positive")
+    calendar = _xnys()
+    anchor = calendar.date_to_session(pd.Timestamp(start_session), direction="next")
+    return calendar.sessions_window(anchor, -warmup_sessions)[0].date()
 
 
 def regular_session_bounds(session: date) -> tuple[datetime, datetime]:

@@ -6,7 +6,7 @@ import json
 import math
 import shutil
 import sqlite3
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -292,6 +292,24 @@ class Database:
                 owned_connection.execute(query, parameters)
         else:
             connection.execute(query, parameters)
+
+    def set_sync_values(self, source: str, values: Mapping[str, Any]) -> None:
+        """Persist many resumable sync cursors in one transaction."""
+
+        if not values:
+            return
+        now = _now()
+        rows = [
+            (source, key, now, json.dumps(value, separators=(",", ":")))
+            for key, value in values.items()
+        ]
+        with self.connect() as connection:
+            connection.executemany(
+                """INSERT INTO sync_state(source,key,updated_at,value) VALUES (?,?,?,?)
+                ON CONFLICT(source,key) DO UPDATE SET
+                updated_at=excluded.updated_at,value=excluded.value""",
+                rows,
+            )
 
     def sync_value(self, source: str, key: str) -> Any | None:
         with self.connect() as connection:
@@ -695,6 +713,82 @@ class Database:
             datetime.fromisoformat(row[0]) if row and row[0] else None,
             datetime.fromisoformat(row[1]) if row and row[1] else None,
         )
+
+    def bar_bounds_by_symbol(
+        self,
+        symbols: Iterable[str],
+        timeframe: BarTimeframe | str,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> dict[str, tuple[datetime, datetime]]:
+        """Return per-symbol edge coverage with one indexed aggregate query."""
+
+        normalized = sorted({symbol.upper() for symbol in symbols})
+        if not normalized:
+            return {}
+        normalized_timeframe = BarTimeframe(timeframe)
+        placeholders = ",".join("?" for _ in normalized)
+        clauses = [f"symbol IN ({placeholders})", "timeframe=?"]
+        parameters: list[Any] = [*normalized, normalized_timeframe.value]
+        if start is not None:
+            clauses.append("timestamp>=?")
+            parameters.append(_iso(start))
+        if end is not None:
+            clauses.append("timestamp<?")
+            parameters.append(_iso(end))
+        with self.read_only() as connection:
+            rows = connection.execute(
+                f"""SELECT symbol,MIN(timestamp) AS first_timestamp,
+                MAX(timestamp) AS last_timestamp FROM bars
+                WHERE {' AND '.join(clauses)} GROUP BY symbol""",
+                parameters,
+            ).fetchall()
+        return {
+            str(row["symbol"]): (
+                datetime.fromisoformat(row["first_timestamp"]),
+                datetime.fromisoformat(row["last_timestamp"]),
+            )
+            for row in rows
+            if row["first_timestamp"] and row["last_timestamp"]
+        }
+
+    def bar_counts_before(
+        self,
+        symbols: Iterable[str],
+        before: date | datetime,
+        *,
+        timeframe: BarTimeframe | str = BarTimeframe.DAY_1,
+    ) -> dict[str, int]:
+        """Count stored bars strictly before a boundary for each requested symbol."""
+
+        normalized = sorted({symbol.upper() for symbol in symbols})
+        if not normalized:
+            return {}
+        normalized_timeframe = BarTimeframe(timeframe)
+        cutoff = (
+            datetime.combine(before, datetime.min.time(), tzinfo=UTC)
+            if isinstance(before, date) and not isinstance(before, datetime)
+            else before
+        )
+        placeholders = ",".join("?" for _ in normalized)
+        with self.read_only() as connection:
+            rows = connection.execute(
+                f"""SELECT symbol,COUNT(*) AS bars FROM bars
+                WHERE symbol IN ({placeholders}) AND timeframe=? AND timestamp<?
+                GROUP BY symbol""",
+                [*normalized, normalized_timeframe.value, _iso(cutoff)],
+            ).fetchall()
+        return {str(row["symbol"]): int(row["bars"]) for row in rows}
+
+    def bar_count(self, timeframe: BarTimeframe | str = BarTimeframe.DAY_1) -> int:
+        normalized_timeframe = BarTimeframe(timeframe)
+        with self.read_only() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS bars FROM bars WHERE timeframe=?",
+                (normalized_timeframe.value,),
+            ).fetchone()
+        return int(row["bars"])
 
     def bar_inventory(self) -> list[dict[str, Any]]:
         with self.read_only() as connection:

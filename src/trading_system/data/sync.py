@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -15,11 +15,13 @@ from typing import Any
 import requests
 
 from trading_system.data.alpaca_client import AlpacaDataClient
+from trading_system.data.daily_history import boundary_integrity_check
 from trading_system.data.database import Database
 from trading_system.data.market_sessions import (
     full_history_request_window,
     is_regular_session_timestamp,
     latest_completed_trading_session,
+    trading_sessions_between,
 )
 from trading_system.data.sec_client import SecClient, SecResourceNotFound
 from trading_system.data.sec_identity import (
@@ -190,15 +192,40 @@ def _incremental_bar_ranges(
     earliest, latest = database.bar_bounds(
         symbol, timeframe, start=start, end=end
     )
+    return _bar_edge_ranges(earliest, latest, timeframe, start, end, overlap_bars)
+
+
+def _bar_edge_ranges(
+    earliest: datetime | None,
+    latest: datetime | None,
+    timeframe: BarTimeframe,
+    start: datetime,
+    end: datetime,
+    overlap_bars: int,
+    *,
+    previously_verified: bool = False,
+) -> list[tuple[datetime, datetime]]:
+    """Plan missing leading/trailing coverage while retaining a correction overlap."""
+
+    overlap = timeframe.duration * overlap_bars
+    if previously_verified:
+        if earliest is None or latest is None or not overlap_bars:
+            return []
+        correction_start = max(start, end - overlap)
+        return [(correction_start, end)] if correction_start < end else []
     if earliest is None or latest is None:
         return [(start, end)]
-    overlap = timeframe.duration * overlap_bars
     ranges: list[tuple[datetime, datetime]] = []
-    if earliest > start:
+    if earliest > start and not previously_verified:
         ranges.append((start, min(end, earliest + overlap)))
-    tail_start = max(start, latest - overlap)
-    if tail_start < end:
+    following = latest + timeframe.duration
+    if following < end:
+        tail_start = max(start, following - overlap)
         ranges.append((tail_start, end))
+    elif overlap_bars:
+        tail_start = max(start, following - overlap)
+        if tail_start < end:
+            ranges.append((tail_start, end))
     if not ranges:
         return []
     ranges.sort()
@@ -210,6 +237,56 @@ def _incremental_bar_ranges(
         else:
             merged.append((range_start, range_end))
     return merged
+
+
+def _enum_text(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return str(getattr(value, "value", value))
+
+
+def _daily_range_verified(
+    value: Any,
+    start: datetime,
+    end: datetime,
+    feed: str | None,
+    adjustment: str | None,
+) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    if value.get("feed") != feed or value.get("adjustment") != adjustment:
+        return False
+    try:
+        checked_start = datetime.fromisoformat(str(value["start"]))
+        checked_end = datetime.fromisoformat(str(value["end_exclusive"]))
+    except (KeyError, TypeError, ValueError):
+        return False
+    return checked_start <= start and checked_end >= end
+
+
+def _daily_coverage_value(
+    previous: Any,
+    start: datetime,
+    end: datetime,
+    feed: str | None,
+    adjustment: str | None,
+    checked_at: str,
+) -> dict[str, str | None]:
+    if isinstance(previous, Mapping) and (
+        previous.get("feed") == feed and previous.get("adjustment") == adjustment
+    ):
+        try:
+            start = min(start, datetime.fromisoformat(str(previous["start"])))
+            end = max(end, datetime.fromisoformat(str(previous["end_exclusive"])))
+        except (KeyError, TypeError, ValueError):
+            pass
+    return {
+        "start": start.isoformat(),
+        "end_exclusive": end.isoformat(),
+        "feed": feed,
+        "adjustment": adjustment,
+        "checked_at": checked_at,
+    }
 
 
 def _recent_accessions(submissions: Mapping[str, Any]) -> set[str]:
@@ -246,6 +323,7 @@ class DataSynchronizer:
         intraday_overlap_bars: int = 2,
         intraday_symbol_batch_size: int = 25,
         intraday_request_window_days: int = 7,
+        daily_overlap_bars: int = 2,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         timer: Callable[[], float] = time.perf_counter,
     ) -> None:
@@ -255,6 +333,8 @@ class DataSynchronizer:
             raise ValueError("companyfacts_unavailable_ttl must be positive")
         if intraday_overlap_bars < 0:
             raise ValueError("intraday_overlap_bars cannot be negative")
+        if daily_overlap_bars < 0:
+            raise ValueError("daily_overlap_bars cannot be negative")
         self.database = database
         self.alpaca = alpaca
         self.sec = sec
@@ -270,6 +350,7 @@ class DataSynchronizer:
         self.intraday_overlap_bars = intraday_overlap_bars
         self.intraday_symbol_batch_size = intraday_symbol_batch_size
         self.intraday_request_window_days = intraday_request_window_days
+        self.daily_overlap_bars = daily_overlap_bars
         self.clock = clock
         self.timer = timer
 
@@ -812,6 +893,284 @@ class DataSynchronizer:
                         batch[0],
                         batch[-1],
                     )
+        return counts
+
+    def sync_daily_history(
+        self,
+        requested_symbols: Iterable[str] | None,
+        start: date,
+        end: date,
+        *,
+        incremental: bool = True,
+        include_benchmark: bool = True,
+    ) -> dict[str, Any]:
+        """Backfill an explicit inclusive Daily range with bidirectional edge gaps."""
+
+        if start > end:
+            raise ValueError("Daily history start must not be after end")
+        return self._run_stage(
+            "daily_history",
+            lambda: self._sync_daily_history(
+                requested_symbols,
+                start,
+                end,
+                incremental=incremental,
+                include_benchmark=include_benchmark,
+            ),
+        )
+
+    def _sync_daily_history(
+        self,
+        requested_symbols: Iterable[str] | None,
+        start: date,
+        end: date,
+        *,
+        incremental: bool,
+        include_benchmark: bool,
+    ) -> dict[str, Any]:
+        if self.alpaca is None:
+            raise ValueError("Alpaca client is required for Daily-history synchronization")
+        selected = (
+            {company.symbol for company in self.database.list_tradable_companies()}
+            if requested_symbols is None
+            else {symbol.strip().upper() for symbol in requested_symbols if symbol.strip()}
+        )
+        if include_benchmark:
+            selected.add("SPY")
+        identity_conflicts = self.database.unresolved_sec_identity_conflict_symbols()
+        skipped = sorted((selected - {"SPY"}) & identity_conflicts)
+        symbols = sorted(selected - set(skipped))
+        if not symbols:
+            raise ValueError("Daily-history sync symbol selection is empty")
+
+        start_at = datetime.combine(start, datetime.min.time(), tzinfo=UTC)
+        end_at = datetime.combine(end + timedelta(days=1), datetime.min.time(), tzinfo=UTC)
+        expected_sessions = trading_sessions_between(start, end)
+        if not expected_sessions:
+            raise ValueError("Daily-history sync range contains no XNYS sessions")
+        feed = _enum_text(getattr(self.alpaca, "feed", None))
+        adjustment = _enum_text(getattr(self.alpaca, "adjustment", None))
+        file_size_before = self.database.path.stat().st_size if self.database.path.exists() else 0
+        bars_before = self.database.bar_count(BarTimeframe.DAY_1)
+        started = self.timer()
+        download_seconds = 0.0
+        database_write_seconds = 0.0
+        bounds_before = self.database.bar_bounds_by_symbol(
+            symbols,
+            BarTimeframe.DAY_1,
+            start=start_at,
+            end=end_at,
+        )
+        coverage_state = self.database.sync_values("daily_history_coverage")
+        grouped_ranges: dict[tuple[datetime, datetime], list[str]] = defaultdict(list)
+        planned_ranges: Counter[str] = Counter()
+        for symbol in symbols:
+            earliest, latest = bounds_before.get(symbol, (None, None))
+            verified = _daily_range_verified(
+                coverage_state.get(symbol), start_at, end_at, feed, adjustment
+            )
+            ranges = (
+                (
+                    [(start_at, end_at)]
+                    if symbol == "SPY" and include_benchmark and not verified
+                    else _bar_edge_ranges(
+                        earliest,
+                        latest,
+                        BarTimeframe.DAY_1,
+                        start_at,
+                        end_at,
+                        self.daily_overlap_bars,
+                        previously_verified=verified,
+                    )
+                )
+                if incremental
+                else [(start_at, end_at)]
+            )
+            for requested_range in ranges:
+                grouped_ranges[requested_range].append(symbol)
+                planned_ranges[symbol] += 1
+
+        total_batches = sum(
+            (len(items) + self.market_data_batch_size - 1) // self.market_data_batch_size
+            for items in grouped_ranges.values()
+        )
+        successful_ranges: Counter[str] = Counter()
+        symbols_received: set[str] = set()
+        first_received: datetime | None = None
+        last_received: datetime | None = None
+        counts: dict[str, Any] = {
+            "timeframe": BarTimeframe.DAY_1.value,
+            "requested_start": start.isoformat(),
+            "requested_end": end.isoformat(),
+            "incremental": incremental,
+            "feed": feed,
+            "adjustment": adjustment,
+            "symbols_requested": len(symbols),
+            "identity_conflicts_skipped": len(skipped),
+            "identity_conflict_sample": skipped[:10],
+            "symbols_with_data": 0,
+            "symbols_without_data": 0,
+            "symbols_without_older_data": 0,
+            "bars_before": bars_before,
+            "bars_received": 0,
+            "bars_inserted": 0,
+            "bars_updated": 0,
+            "bars_unchanged": 0,
+            "duplicate_bars": 0,
+            "invalid_bars": 0,
+            "request_batches": 0,
+            "sqlite_write_batches": 0,
+            "errors": 0,
+        }
+        LOGGER.info(
+            "DAILY HISTORY BACKFILL requested=%s -> %s symbols=%d feed=%s adjustment=%s",
+            start,
+            end,
+            len(symbols),
+            feed,
+            adjustment,
+        )
+        progress = 0
+        for (range_start, range_end), grouped_symbols in sorted(grouped_ranges.items()):
+            for batch in _chunks(grouped_symbols, self.market_data_batch_size):
+                progress += 1
+                counts["request_batches"] += 1
+                try:
+                    download_started = self.timer()
+                    downloaded = self.alpaca.daily_bars(batch, range_start, range_end)
+                    download_seconds += self.timer() - download_started
+                    counts["bars_received"] += len(downloaded)
+                    symbols_received.update(bar.symbol for bar in downloaded)
+                    diagnostics = getattr(self.alpaca, "last_bar_diagnostics", {})
+                    counts["invalid_bars"] += int(diagnostics.get("invalid_bars", 0))
+                    if downloaded:
+                        batch_first = min(bar.timestamp for bar in downloaded)
+                        batch_last = max(bar.timestamp for bar in downloaded)
+                        first_received = (
+                            batch_first
+                            if first_received is None
+                            else min(first_received, batch_first)
+                        )
+                        last_received = (
+                            batch_last if last_received is None else max(last_received, batch_last)
+                        )
+                    write_started = self.timer()
+                    write_counts = self.database.upsert_bars_with_stats(downloaded)
+                    database_write_seconds += self.timer() - write_started
+                    counts["sqlite_write_batches"] += 1
+                    for key in (
+                        "bars_inserted",
+                        "bars_updated",
+                        "bars_unchanged",
+                        "duplicate_bars",
+                        "invalid_bars",
+                    ):
+                        counts[key] += write_counts[key]
+                    successful_ranges.update(batch)
+                except Exception:
+                    counts["errors"] += 1
+                    LOGGER.exception(
+                        "Failed Daily-history batch symbols=%d first=%s last=%s start=%s end=%s",
+                        len(batch),
+                        batch[0],
+                        batch[-1],
+                        range_start.isoformat(),
+                        range_end.isoformat(),
+                    )
+                LOGGER.info(
+                    "DAILY HISTORY progress [%d/%d] batches bars=%d inserted=%d "
+                    "updated=%d errors=%d",
+                    progress,
+                    total_batches,
+                    counts["bars_received"],
+                    counts["bars_inserted"],
+                    counts["bars_updated"],
+                    counts["errors"],
+                )
+
+        completed_symbols = {
+            symbol
+            for symbol in symbols
+            if planned_ranges[symbol] == successful_ranges[symbol]
+        }
+        checked_at = self.clock().isoformat()
+        self.database.set_sync_values(
+            "daily_history_coverage",
+            {
+                symbol: _daily_coverage_value(
+                    coverage_state.get(symbol),
+                    start_at,
+                    end_at,
+                    feed,
+                    adjustment,
+                    checked_at,
+                )
+                for symbol in completed_symbols
+            },
+        )
+        bounds_after = self.database.bar_bounds_by_symbol(
+            symbols,
+            BarTimeframe.DAY_1,
+            start=start_at,
+            end=end_at,
+        )
+        global_first, global_last = self.database.bar_bounds(
+            "SPY", BarTimeframe.DAY_1
+        )
+        daily_first, daily_last = self.database.bar_date_bounds(
+            timeframe=BarTimeframe.DAY_1
+        )
+        first_expected = expected_sessions[0]
+        without_older = [
+            symbol
+            for symbol, (first, _last) in bounds_after.items()
+            if first.date() > first_expected
+        ]
+        boundary_counts = Counter(
+            first.date()
+            for first, _last in bounds_before.values()
+            if first > start_at
+        )
+        integrity = []
+        for boundary, _occurrences in boundary_counts.most_common(3):
+            boundary_symbols = [
+                symbol
+                for symbol, (first, _last) in bounds_before.items()
+                if first.date() == boundary
+            ]
+            integrity.append(
+                boundary_integrity_check(self.database, boundary_symbols, boundary)
+            )
+        elapsed = max(self.timer() - started, 1e-12)
+        file_size_after = self.database.path.stat().st_size if self.database.path.exists() else 0
+        bars_after = self.database.bar_count(BarTimeframe.DAY_1)
+        counts.update(
+            {
+                "symbols_with_data": len(bounds_after),
+                "symbols_without_data": len(set(symbols) - set(bounds_after)),
+                "symbols_without_older_data": len(without_older),
+                "symbols_without_older_data_sample": without_older[:20],
+                "symbols_received": len(symbols_received),
+                "bars_after": bars_after,
+                "records_updated": counts["bars_inserted"] + counts["bars_updated"],
+                "first_received_timestamp": (
+                    first_received.isoformat() if first_received else None
+                ),
+                "last_received_timestamp": last_received.isoformat() if last_received else None,
+                "first_daily_timestamp": daily_first.isoformat() if daily_first else None,
+                "last_daily_timestamp": daily_last.isoformat() if daily_last else None,
+                "spy_first_timestamp": global_first.isoformat() if global_first else None,
+                "spy_last_timestamp": global_last.isoformat() if global_last else None,
+                "download_seconds": round(download_seconds, 3),
+                "database_write_seconds": round(database_write_seconds, 3),
+                "total_seconds": round(elapsed, 3),
+                "bars_per_second": round(counts["bars_received"] / elapsed, 3),
+                "database_size_before": file_size_before,
+                "database_size_after": file_size_after,
+                "database_size_delta_bytes": file_size_after - file_size_before,
+                "boundary_integrity": integrity,
+            }
+        )
         return counts
 
     def sync_intraday(

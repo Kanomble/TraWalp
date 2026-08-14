@@ -111,6 +111,18 @@ class RoutedSynchronizer:
         self.called = "bars"
         return {"records_updated": 1}
 
+    def sync_daily_history(
+        self, symbols, start, end, *, incremental, include_benchmark
+    ):
+        self.called = "daily_history"
+        return {
+            "symbols": symbols,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "incremental": incremental,
+            "include_benchmark": include_benchmark,
+        }
+
     def refresh_market(self, _symbols):
         self.called = "market"
         return {"symbols_updated": 1}
@@ -137,6 +149,18 @@ class RoutedSynchronizer:
         (["sync", "--incremental"], "incremental"),
         (["sync-assets"], "assets"),
         (["update-bars"], "bars"),
+        (
+            [
+                "sync-daily-history",
+                "--start",
+                "2024-01-01",
+                "--end",
+                "2026-08-12",
+                "--symbols",
+                "AAPL,SPY",
+            ],
+            "daily_history",
+        ),
         (["refresh-market"], "market"),
     ],
 )

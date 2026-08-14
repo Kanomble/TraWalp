@@ -14,6 +14,10 @@ import numpy as np
 
 from trading_system.config import StrategyConfig
 from trading_system.data.database import Database
+from trading_system.data.market_sessions import (
+    daily_warmup_start,
+    required_daily_warmup_sessions,
+)
 from trading_system.data.universe import is_financial_or_reit, is_reit
 from trading_system.fundamentals.metrics import shares_outstanding_as_of
 from trading_system.fundamentals.quality import accounting_state_as_of, attach_market_price
@@ -182,7 +186,13 @@ class HistoricalFeatureScreenSource:
         self.diagnostics.sqlite_query_count += 2
         required_start = max(
             earliest_bar or self.start,
-            self.start - timedelta(days=max(550, self.config.universe.market_data_days * 2)),
+            daily_warmup_start(
+                self.start,
+                max(
+                    required_daily_warmup_sessions(self.config),
+                    self.config.universe.market_data_days,
+                ),
+            ),
         )
         bars_started = time.perf_counter()
         grouped_bars: dict[str, list[_HistoricalBar]] = defaultdict(list)

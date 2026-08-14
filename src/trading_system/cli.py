@@ -28,10 +28,12 @@ from trading_system.backtest.report import (
 )
 from trading_system.config import load_settings
 from trading_system.data.alpaca_client import AlpacaDataClient
+from trading_system.data.daily_history import warmup_coverage_at
 from trading_system.data.database import Database
 from trading_system.data.market_sessions import (
     effective_trading_session,
     intraday_warmup_start,
+    required_daily_warmup_sessions,
 )
 from trading_system.data.sec_client import SecClient
 from trading_system.data.sync import DataSynchronizer
@@ -91,6 +93,21 @@ def _parser() -> argparse.ArgumentParser:
         "update-bars", help="Incrementally update completed historical daily bars"
     )
     update_bars.add_argument("--symbols", nargs="*")
+    daily_history = commands.add_parser(
+        "sync-daily-history",
+        help="Backfill an inclusive adjusted Daily range with backward and forward gaps",
+    )
+    daily_history.add_argument("--start", type=date.fromisoformat, required=True)
+    daily_history.add_argument("--end", type=date.fromisoformat, required=True)
+    daily_history.add_argument(
+        "--symbols",
+        help="Optional comma-separated symbols; omit for the current tradable company universe",
+    )
+    daily_history.add_argument(
+        "--full-window",
+        action="store_true",
+        help="Force the complete provider range instead of incremental edge gaps",
+    )
     intraday = commands.add_parser(
         "sync-intraday", help="Backfill or incrementally update provider-native intraday bars"
     )
@@ -130,6 +147,11 @@ def _parser() -> argparse.ArgumentParser:
     refresh_market.add_argument("--symbols", nargs="*")
     commands.add_parser("status", help="Show local dataset freshness and bar inventory")
     commands.add_parser("data-status", help="Alias for status")
+    warmup_coverage = commands.add_parser(
+        "daily-history-coverage",
+        help="Measure prior-session Daily warmup for the current tradable company universe",
+    )
+    warmup_coverage.add_argument("--as-of", type=date.fromisoformat, required=True)
     commands.add_parser("storage-report", help="Inspect SQLite allocation and table usage")
     cleanup = commands.add_parser(
         "db-cleanup", help="Explicitly remove guarded legacy SEC Company Facts payloads"
@@ -259,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
         "sync",
         "sync-assets",
         "update-bars",
+        "sync-daily-history",
         "refresh-market",
         "sync-intraday",
     }:
@@ -301,6 +324,39 @@ def main(argv: list[str] | None = None) -> int:
             result["warmup_start"] = requested_start.isoformat()
             print(json.dumps(result, indent=2))
             return 0
+        if args.command == "sync-daily-history":
+            if args.start > args.end:
+                print(
+                    "Daily-history sync refused: --start must not be after --end",
+                    file=sys.stderr,
+                )
+                return 2
+            requested = (
+                sorted(
+                    {
+                        symbol.strip().upper()
+                        for symbol in args.symbols.split(",")
+                        if symbol.strip()
+                    }
+                )
+                if args.symbols
+                else None
+            )
+            synchronizer = _synchronizer(
+                settings, database, with_alpaca=True, with_sec=False
+            )
+            result = synchronizer.sync_daily_history(
+                requested,
+                args.start,
+                args.end,
+                incremental=not args.full_window,
+                include_benchmark=True,
+            )
+            result["required_daily_warmup_sessions"] = required_daily_warmup_sessions(
+                settings.strategy
+            )
+            print(json.dumps(result, indent=2))
+            return 0
         requested = [symbol.upper() for symbol in args.symbols] if args.symbols else None
         needs_alpaca = args.command != "sync" or not args.incremental
         synchronizer = _synchronizer(
@@ -325,7 +381,23 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, indent=2))
         return 0
     if args.command in {"status", "data-status"}:
-        print(_format_data_status(database.dataset_states(), database.bar_inventory()))
+        print(
+            _format_data_status(
+                database.dataset_states(),
+                database.bar_inventory(),
+                spy_bounds=database.bar_date_bounds("SPY"),
+            )
+        )
+        return 0
+    if args.command == "daily-history-coverage":
+        symbols = [company.symbol for company in database.list_tradable_companies()]
+        report = warmup_coverage_at(
+            database,
+            symbols,
+            args.as_of,
+            required_daily_warmup_sessions(settings.strategy),
+        )
+        print(json.dumps(report, indent=2))
         return 0
     if args.command == "screen":
         _warn_data_freshness(database.dataset_states())
@@ -547,12 +619,16 @@ def _symbols_in_json(value) -> set[str]:
 
 
 def _format_data_status(
-    states: dict[str, dict], bar_inventory: list[dict] | None = None
+    states: dict[str, dict],
+    bar_inventory: list[dict] | None = None,
+    *,
+    spy_bounds: tuple[date | None, date | None] | None = None,
 ) -> str:
     labels = {
         "asset_universe": "Asset universe",
         "sec": "SEC fundamentals",
         "historical_bars": "Historical bars",
+        "daily_history": "Historical Daily backfill",
         "intraday_bars": "Intraday bars",
         "market_snapshot": "Market snapshot",
     }
@@ -618,6 +694,13 @@ def _format_data_status(
             "other_failures",
             "symbols_requested",
             "symbols_updated",
+            "symbols_with_data",
+            "symbols_without_data",
+            "symbols_without_older_data",
+            "bars_before",
+            "bars_after",
+            "bars_received",
+            "bars_inserted",
             "bars_updated",
             "errors",
             "elapsed_seconds",
@@ -632,6 +715,16 @@ def _format_data_status(
         )
     if not bar_inventory:
         lines.append("  (empty)")
+    if spy_bounds is not None:
+        spy_first, spy_last = spy_bounds
+        lines.extend(
+            [
+                "",
+                "SPY Daily benchmark",
+                f"  first: {spy_first.isoformat() if spy_first else 'N/A'}",
+                f"  last:  {spy_last.isoformat() if spy_last else 'N/A'}",
+            ]
+        )
     return "\n".join(lines)
 
 
