@@ -5,6 +5,7 @@ import pytest
 
 from trading_system.backtest import engine as engine_module
 from trading_system.backtest.engine import BacktestEngine, HistoricalScreenSource
+from trading_system.backtest.presets import position_management_preset
 from trading_system.backtest.report import export_backtest, export_comparison
 from trading_system.config import (
     MaxHoldConfig,
@@ -17,9 +18,19 @@ from trading_system.config import (
     load_settings,
 )
 from trading_system.data.database import Database
-from trading_system.models.backtest import StrategyVariant
+from trading_system.data.market_sessions import regular_session_bounds, trading_sessions_between
+from trading_system.models.backtest import (
+    PositionManagementPreset,
+    StrategyComparisonKind,
+    StrategyVariant,
+)
 from trading_system.models.fundamentals import CompanyIdentity, FundamentalFact, FundamentalMetrics
-from trading_system.models.market_data import DailyBar, MarketSnapshot, TradableAsset
+from trading_system.models.market_data import (
+    BarTimeframe,
+    DailyBar,
+    MarketSnapshot,
+    TradableAsset,
+)
 from trading_system.models.scores import ScoreBreakdown, StockScores
 from trading_system.models.screening import ScreenRecord, ScreenReport
 from trading_system.models.signals import TechnicalSnapshot
@@ -373,6 +384,7 @@ def test_strategy_comparison_reuses_each_session_screen(monkeypatch, tmp_path) -
         _config(),
         sessions[0],
         sessions[-1],
+        comparison_kind=StrategyComparisonKind.SCORE_VARIANTS,
         clock=lambda: datetime(2024, 1, 5, tzinfo=UTC),
     )
 
@@ -386,6 +398,183 @@ def test_strategy_comparison_reuses_each_session_screen(monkeypatch, tmp_path) -
     )
     paths = export_comparison(comparison, tmp_path / "reports")
     assert all(path.exists() for path in paths.values())
+
+
+def test_unified_strategy_comparison_includes_score_and_position_strategies(
+    monkeypatch, tmp_path
+) -> None:
+    sessions = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
+    database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
+    source = FixtureScreens({sessions[0]: (_record(),)})
+    monkeypatch.setattr(engine_module, "HistoricalFeatureScreenSource", lambda *_args: source)
+
+    comparison = engine_module.compare_strategies(
+        database,
+        _config(),
+        sessions[0],
+        sessions[-1],
+        comparison_kind=StrategyComparisonKind.ALL,
+        clock=lambda: datetime(2024, 1, 5, tzinfo=UTC),
+    )
+
+    assert comparison.comparison_kind is StrategyComparisonKind.ALL
+    assert len(comparison.variants) == 13
+    assert comparison.shared_screen_sessions == 2
+    assert source.calls == sessions[:-1]
+    assert comparison.skipped_strategies == {
+        "C/intraday-dynamic": (
+            "Missing historical 15m bars for: AAA. Run: "
+            "python -m trading_system.cli sync-intraday --symbols AAA "
+            "--start 2024-01-02 --end 2024-01-04 --timeframes 15m"
+        )
+    }
+    labels = {
+        (result.strategy_variant.value, result.position_management_preset.value)
+        for result in comparison.variants
+    }
+    assert ("A", "configured") in labels
+    assert ("C", "dynamic-hold") in labels
+    assert ("C", "atr-trailing") in labels
+
+    paths = export_comparison(comparison, tmp_path / "reports")
+    csv_text = paths["csv"].read_text(encoding="utf-8")
+    assert "score_variant,position_management" in csv_text
+    assert "C/atr-trailing,C,atr-trailing" in csv_text
+
+
+@pytest.mark.parametrize(
+    "timeframe",
+    [BarTimeframe.MINUTES_5, BarTimeframe.MINUTES_15, BarTimeframe.HOUR_1],
+)
+def test_intraday_dynamic_uses_real_position_bars_and_daily_screening(
+    tmp_path, timeframe: BarTimeframe
+) -> None:
+    signal_session = date(2024, 1, 2)
+    entry_session = date(2024, 1, 3)
+    final_session = date(2024, 1, 4)
+    database = _database(
+        tmp_path,
+        [
+            _bar("AAA", signal_session),
+            _bar("AAA", entry_session, high="102", low="98", close="99"),
+            _bar("AAA", final_session, opening="99", high="100", low="98", close="99"),
+        ],
+    )
+    duration = timeframe.duration
+    history: list[DailyBar] = []
+    for session in trading_sessions_between(date(2023, 12, 1), signal_session):
+        opening, closing = regular_session_bounds(session)
+        timestamp = opening
+        while timestamp < closing:
+            history.append(
+                DailyBar(
+                    symbol="AAA",
+                    timeframe=timeframe,
+                    timestamp=timestamp,
+                    open=Decimal("100"),
+                    high=Decimal("101"),
+                    low=Decimal("99"),
+                    close=Decimal("100"),
+                    volume=100,
+                )
+            )
+            timestamp += duration
+    opening, _ = regular_session_bounds(entry_session)
+    monitoring = [
+        DailyBar(
+            symbol="AAA",
+            timeframe=timeframe,
+            timestamp=opening,
+            open=Decimal("100"),
+            high=Decimal("101"),
+            low=Decimal("99"),
+            close=Decimal("101"),
+            volume=100,
+        ),
+        DailyBar(
+            symbol="AAA",
+            timeframe=timeframe,
+            timestamp=opening + duration,
+            open=Decimal("101"),
+            high=Decimal("101"),
+            low=Decimal("98.5"),
+            close=Decimal("99"),
+            volume=100,
+        ),
+        DailyBar(
+            symbol="AAA",
+            timeframe=timeframe,
+            timestamp=opening + duration * 2,
+            open=Decimal("99"),
+            high=Decimal("200"),
+            low=Decimal("99"),
+            close=Decimal("200"),
+            volume=100,
+        ),
+    ]
+    database.upsert_bars([*history, *monitoring])
+    base = _config(slippage_bps=0, commission_bps=0)
+    config = base.model_copy(
+        update={
+            "position_management": base.position_management.model_copy(
+                update={"bar_timeframe": timeframe}
+            ),
+            "intraday": base.intraday.model_copy(update={"warmup_bars": 14}),
+        }
+    )
+    source = FixtureScreens({signal_session: (_record(),)})
+
+    result = BacktestEngine(database, config, screen_source=source).run(
+        signal_session,
+        final_session,
+        preset=PositionManagementPreset.INTRADAY_DYNAMIC,
+    )
+
+    assert len(result.positions) == 1
+    assert result.trades[0].exit_reason == "atr_trailing_stop"
+    assert result.trades[0].exit_reference_price == pytest.approx(99)
+    assert result.trades[0].entry_timestamp == opening
+    assert result.trades[0].exit_timestamp == opening + duration
+    assert result.positions[0].maximum_favorable_excursion < 0.02
+    assert source.calls == [signal_session, entry_session]
+    assert result.configuration["execution"]["screening_timeframe"] == "1d"
+    assert result.configuration["execution"]["position_management_timeframe"] == timeframe
+    assert any(f"position management timeframe: {timeframe}" in item for item in result.warnings)
+    assert not any("daily OHLC cannot order" in item for item in result.warnings)
+
+
+def test_intraday_backtest_refuses_incomplete_warmup_without_daily_fallback(tmp_path) -> None:
+    sessions = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
+    database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
+    opening, _ = regular_session_bounds(sessions[1])
+    database.upsert_bars(
+        [
+            DailyBar(
+                symbol="AAA",
+                timeframe=BarTimeframe.MINUTES_15,
+                timestamp=opening,
+                open=Decimal("100"),
+                high=Decimal("101"),
+                low=Decimal("99"),
+                close=Decimal("100"),
+                volume=100,
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError, match="including configured warmup history") as error:
+        BacktestEngine(
+            database,
+            _config(),
+            screen_source=FixtureScreens({sessions[0]: (_record(),)}),
+        ).run(
+            sessions[0],
+            sessions[-1],
+            preset=PositionManagementPreset.INTRADAY_DYNAMIC,
+        )
+
+    assert "sync-intraday" in str(error.value)
+    assert "--timeframes 15m" in str(error.value)
 
 
 def test_backtest_reports_export_structured_json_trades_and_equity(tmp_path) -> None:
@@ -404,7 +593,12 @@ def test_backtest_reports_export_structured_json_trades_and_equity(tmp_path) -> 
     assert '"strategy_variant": "C"' in paths["json"].read_text(encoding="utf-8")
     assert '"data_diagnostics"' in paths["json"].read_text(encoding="utf-8")
     assert '"strategy"' in paths["json"].read_text(encoding="utf-8")
+    assert '"positions"' in paths["json"].read_text(encoding="utf-8")
+    assert '"position_metrics"' in paths["json"].read_text(encoding="utf-8")
     assert "entry_reference_price" in paths["trades"].read_text(encoding="utf-8")
+    assert "position_id" in paths["positions"].read_text(encoding="utf-8")
+    assert "execution_leg_id" in paths["execution_legs"].read_text(encoding="utf-8")
+    assert "post_exit_return_5d" in paths["post_exit"].read_text(encoding="utf-8")
     assert "portfolio_equity" in paths["equity"].read_text(encoding="utf-8")
 
 
@@ -477,6 +671,46 @@ def test_signal_exit_can_reenter_only_through_fresh_ranking(tmp_path) -> None:
     assert [trade.symbol for trade in result.trades] == ["AAA", "AAA"]
     assert result.trades[0].exit_reason == "signal_decay"
     assert result.trades[1].entry_date == sessions[-1]
+    second_position = result.positions[1]
+    assert second_position.is_reentry is True
+    assert second_position.previous_exit_date == sessions[1]
+    assert second_position.days_since_previous_exit == 2
+    assert second_position.previous_exit_reason == "signal_decay"
+    assert second_position.previous_position_return == pytest.approx(
+        result.positions[0].position_return
+    )
+    assert second_position.fresh_trigger_since_previous_exit is True
+
+
+def test_reentry_without_trigger_reset_is_diagnosed_as_not_fresh(tmp_path) -> None:
+    sessions = [date(2024, 1, day) for day in (2, 3, 4)]
+    database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
+    weak_but_still_triggered = _record(
+        quality=40, valuation=40, opportunity=40, timing=40
+    )
+    strategy = _config().model_copy(
+        update={
+            "position_management": PositionManagementConfig(
+                stop_loss=StopLossConfig(enabled=False),
+                take_profit=TakeProfitConfig(enabled=False),
+                signal_decay=SignalDecayConfig(enabled=True, minimum_score_ratio=0.75),
+                max_hold=MaxHoldConfig(enabled=False, days=10, mode="disabled"),
+            )
+        }
+    )
+    source = FixtureScreens(
+        {sessions[0]: (_record(),), sessions[1]: (weak_but_still_triggered,)}
+    )
+
+    result = BacktestEngine(database, strategy, screen_source=source).run(
+        sessions[0], sessions[-1]
+    )
+
+    assert len(result.positions) == 2
+    assert result.positions[1].is_reentry is True
+    assert result.positions[1].fresh_trigger_since_previous_exit is False
+    assert result.position_metrics.reentry_positions == 1
+    assert result.position_metrics.reentries_without_fresh_trigger == 1
 
 
 def test_partial_exit_applies_cost_model_once_per_fill_and_leaves_remainder(tmp_path) -> None:
@@ -512,3 +746,166 @@ def test_partial_exit_applies_cost_model_once_per_fill_and_leaves_remainder(tmp_
     assert partial.quantity == pytest.approx(remainder.quantity)
     assert partial.exit_reason == "partial_take_profit"
     assert partial.transaction_cost > 0 and remainder.transaction_cost > 0
+    assert partial.position_id == remainder.position_id
+    assert partial.execution_leg_id != remainder.execution_leg_id
+    assert result.execution_metrics.execution_legs == 2
+    assert result.position_metrics.positions_opened == 1
+    assert result.position_metrics.positions_closed == 1
+    assert result.position_metrics.winning_positions == 1
+    assert result.position_metrics.position_win_rate == 1
+    assert len(result.positions) == 1
+    assert result.positions[0].execution_legs == 2
+
+
+def test_score_diagnostics_use_only_available_session_screens(tmp_path) -> None:
+    sessions = [date(2024, 1, day) for day in (2, 3, 4, 5)]
+    database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
+    low = _record(quality=60, valuation=60, opportunity=60, timing=60)
+    high = _record(quality=90, valuation=90, opportunity=90, timing=90)
+    strategy = _config().model_copy(
+        update={
+            "position_management": PositionManagementConfig(
+                stop_loss=StopLossConfig(enabled=False),
+                take_profit=TakeProfitConfig(enabled=False),
+                max_hold=MaxHoldConfig(enabled=False, days=10, mode="disabled"),
+            )
+        }
+    )
+    source = FixtureScreens(
+        {sessions[0]: (_record(),), sessions[1]: (low,), sessions[2]: (high,)}
+    )
+
+    result = BacktestEngine(database, strategy, screen_source=source).run(
+        sessions[0], sessions[-1]
+    )
+    position = result.positions[0]
+
+    assert [point.date for point in position.score_history] == sessions[:-1]
+    assert position.minimum_score_during_trade == 60
+    assert position.maximum_score_during_trade == 90
+    assert position.exit_score == 90
+
+
+def test_forward_bars_change_only_post_exit_diagnostics(tmp_path) -> None:
+    sessions = [date(2024, 1, day) for day in (2, 3, 4, 5, 8, 9, 10)]
+    prefix = [
+        _bar("AAA", sessions[0]),
+        _bar("AAA", sessions[1], high="103", low="99", close="102"),
+    ]
+    rising = prefix + [
+        _bar(
+            "AAA",
+            session,
+            opening=str(103 + index),
+            high=str(104 + index),
+            low="101",
+            close=str(103 + index),
+        )
+        for index, session in enumerate(sessions[2:])
+    ]
+    falling = prefix + [
+        _bar("AAA", session, high="101", low=str(98 - index), close=str(99 - index))
+        for index, session in enumerate(sessions[2:])
+    ]
+    strategy = _config(slippage_bps=0).model_copy(
+        update={
+            "position_management": PositionManagementConfig(
+                stop_loss=StopLossConfig(enabled=False),
+                take_profit=TakeProfitConfig(enabled=True, percent=0.02),
+                max_hold=MaxHoldConfig(enabled=False, days=10, mode="disabled"),
+            )
+        }
+    )
+
+    def run(name: str, bars: list[DailyBar]):
+        database = Database(tmp_path / f"{name}.sqlite3")
+        database.initialize()
+        database.upsert_bars(bars)
+        source = FixtureScreens({sessions[0]: (_record(),)})
+        return BacktestEngine(database, strategy, screen_source=source).run(
+            sessions[0], sessions[-1]
+        )
+
+    rising_result = run("rising", rising)
+    falling_result = run("falling", falling)
+
+    assert rising_result.trades == falling_result.trades
+    assert rising_result.equity_curve == falling_result.equity_curve
+    # The take-profit bar's low may occur after the full exit and therefore must
+    # not be retroactively counted as position MAE on daily OHLC data.
+    assert rising_result.positions[0].maximum_adverse_excursion == 0
+    assert rising_result.positions[0].post_exit_return_5d > 0
+    assert falling_result.positions[0].post_exit_return_5d < 0
+
+
+def test_full_take_profit_does_not_use_unknown_later_intrabar_low(tmp_path) -> None:
+    signal, exit_session, final_session = (
+        date(2024, 1, 2),
+        date(2024, 1, 3),
+        date(2024, 1, 4),
+    )
+    database = _database(
+        tmp_path,
+        [
+            _bar("AAA", signal),
+            _bar(
+                "AAA",
+                exit_session,
+                opening="100",
+                high="103",
+                low="98",
+                close="101",
+            ),
+            _bar("AAA", final_session),
+        ],
+    )
+    strategy = _config(slippage_bps=0).model_copy(
+        update={
+            "position_management": PositionManagementConfig(
+                stop_loss=StopLossConfig(enabled=False),
+                take_profit=TakeProfitConfig(enabled=True, percent=0.02),
+                max_hold=MaxHoldConfig(enabled=False, days=10, mode="disabled"),
+            )
+        }
+    )
+
+    result = BacktestEngine(
+        database,
+        strategy,
+        screen_source=FixtureScreens({signal: (_record(),)}),
+    ).run(signal, final_session)
+
+    assert result.positions[0].exit_reason == "take_profit"
+    assert result.positions[0].maximum_favorable_excursion == pytest.approx(0.02)
+    assert result.positions[0].maximum_adverse_excursion == pytest.approx(0)
+
+
+def test_fixed_stop_baselines_isolate_only_requested_exit_rule() -> None:
+    config = _config()
+    baseline = position_management_preset(
+        config.position_management,
+        PositionManagementPreset.BASELINE_FIXED_STOP,
+        legacy_max_holding_days=10,
+    )
+    max_hold = position_management_preset(
+        config.position_management,
+        PositionManagementPreset.FIXED_STOP_MAX_HOLD,
+        legacy_max_holding_days=10,
+    )
+    take_profit = position_management_preset(
+        config.position_management,
+        PositionManagementPreset.FIXED_STOP_TAKE_PROFIT,
+        legacy_max_holding_days=10,
+    )
+    atr = position_management_preset(
+        config.position_management,
+        PositionManagementPreset.FIXED_STOP_ATR_TRAILING,
+        legacy_max_holding_days=10,
+    )
+
+    assert baseline.stop_loss.percent == 0.03
+    assert max_hold.stop_loss == take_profit.stop_loss == atr.stop_loss == baseline.stop_loss
+    assert not baseline.signal_decay.enabled
+    assert max_hold.max_hold.enabled and max_hold.max_hold.mode == "hard"
+    assert take_profit.take_profit.enabled and take_profit.take_profit.percent == 0.02
+    assert atr.atr_trailing_stop.enabled

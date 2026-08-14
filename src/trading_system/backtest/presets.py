@@ -13,6 +13,7 @@ from trading_system.config import (
     TakeProfitConfig,
 )
 from trading_system.models.backtest import PositionManagementPreset
+from trading_system.models.market_data import BarTimeframe
 
 
 def position_management_preset(
@@ -65,7 +66,50 @@ def position_management_preset(
     if preset is PositionManagementPreset.PARTIAL_PROFIT:
         return partial
     if preset is PositionManagementPreset.INTRADAY_DYNAMIC:
-        return partial.model_copy(update={"bar_timeframe": "15m"})
+        configured = BarTimeframe(base.bar_timeframe)
+        timeframe = configured if configured.intraday else BarTimeframe.MINUTES_15
+        return partial.model_copy(update={"bar_timeframe": timeframe})
+
+    fixed_baseline = PositionManagementConfig(
+        stop_loss=StopLossConfig(enabled=True, percent=0.03),
+        take_profit=TakeProfitConfig(enabled=False),
+        signal_decay=SignalDecayConfig(enabled=False),
+        max_hold=MaxHoldConfig(
+            enabled=False, days=legacy_max_holding_days, mode="disabled"
+        ),
+    )
+    if preset is PositionManagementPreset.BASELINE_FIXED_STOP:
+        return fixed_baseline
+    if preset is PositionManagementPreset.FIXED_STOP_MAX_HOLD:
+        return fixed_baseline.model_copy(
+            update={
+                "max_hold": MaxHoldConfig(
+                    enabled=True, days=legacy_max_holding_days, mode="hard"
+                )
+            }
+        )
+    if preset is PositionManagementPreset.FIXED_STOP_TAKE_PROFIT:
+        return fixed_baseline.model_copy(
+            update={"take_profit": TakeProfitConfig(enabled=True, percent=0.02)}
+        )
+    fixed_atr = fixed_baseline.model_copy(
+        update={
+            "atr_trailing_stop": AtrTrailingStopConfig(
+                enabled=True, atr_period=14, atr_multiplier=1.0, activation_profit=0.0
+            )
+        }
+    )
+    if preset is PositionManagementPreset.FIXED_STOP_ATR_TRAILING:
+        return fixed_atr
+    if preset is PositionManagementPreset.FIXED_STOP_PARTIAL_ATR:
+        return fixed_atr.model_copy(
+            update={
+                "partial_take_profit": PartialTakeProfitConfig(
+                    enabled=True,
+                    levels=[PartialTakeProfitLevel(profit=0.015, sell_fraction=0.5)],
+                )
+            }
+        )
     raise ValueError(f"Unknown position-management preset: {preset}")
 
 

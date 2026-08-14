@@ -177,9 +177,14 @@ Asset-Universum, historische Bars und aktuelle Snapshots lassen sich unabhängig
 ```bash
 python -m trading_system.cli sync-assets
 python -m trading_system.cli update-bars
+python -m trading_system.cli sync-intraday --symbols AAPL,MSFT --start 2026-07-01 --end 2026-08-12 --timeframes 5m,15m,1h
 python -m trading_system.cli refresh-market
-python -m trading_system.cli status
+python -m trading_system.cli data-status
 ```
+
+Der Intraday-Backfill ist explizit, inkrementell und provider-nativ; der normale Sync lädt nicht
+unbeabsichtigt 5-Minuten-Daten für das Gesamtuniversum. Schema, Warmup, Sessions und Strategy-F-
+Integration beschreibt [`docs/intraday-market-data.md`](docs/intraday-market-data.md).
 
 `sync-assets` behandelt Alpacas vollständige Liste aktiver, handelbarer US-Aktien als aktuellen
 Snapshot. Alle enthaltenen Symbole werden eingefügt oder aktualisiert und erhalten `tradable=1`;
@@ -390,9 +395,11 @@ am Valuation-Datenqualitätsfilter scheitern.
 Das Backtesting unterstützt zusätzlich ein konfigurierbares dynamisches Position Management mit
 Stop Loss, Take/Partial Profit, profit- und ATR-basierten Trailing Stops, Signal Decay, optionalem
 Max-Hold-Review, Re-Entry und Portfolio Rotation. Presets werden mit `backtest --strategy ...`
-gewählt; `backtest-compare` vergleicht die Daily-fähigen Position-Presets auf identischen
-Point-in-Time-Screens. Details, Exit-Prioritäten und Lookahead-Regeln stehen in
+gewählt; `compare-strategies` vergleicht standardmäßig A/B/C und alle Position-Presets auf
+identischen Point-in-Time-Screens. Details, Exit-Prioritäten und Lookahead-Regeln stehen in
 [`docs/position-management.md`](docs/position-management.md).
+Trade-Ideen, Partial-Exit-Legs, Profit Capture, Post-Exit-, Re-Entry-, Stop- und Score-Diagnostik
+sind in [`docs/position-diagnostics.md`](docs/position-diagnostics.md) dokumentiert.
 
 Ein Backtest läuft ausschließlich auf den lokal gespeicherten, adjustierten Daily Bars und
 Fundamentaldaten. Er erzeugt keine Netzwerkaufrufe:

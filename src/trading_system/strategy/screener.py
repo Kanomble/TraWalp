@@ -380,7 +380,7 @@ class Screener:
                 if diagnostic.selected_group
                 else diagnostic.two_digit_peer_count
             )
-            LOGGER.info(
+            LOGGER.debug(
                 "Peer group sic=%s group=%s companies=%d valid_pe=%d "
                 "valid_ev_ebitda=%d median_pe=%s median_ev_ebitda=%s",
                 sic,
@@ -420,7 +420,7 @@ class Screener:
             candidate.data_warnings.append("insufficient_peer_group")
         eligible = not exclusions
         if scores.total is not None:
-            LOGGER.info(
+            LOGGER.debug(
                 "Candidate %s score=%.1f eligible=%s",
                 candidate.company.symbol,
                 scores.total,

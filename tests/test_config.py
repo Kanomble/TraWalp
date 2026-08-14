@@ -14,7 +14,8 @@ def test_config_loads_without_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.enable_order_submission is False
     assert settings.strategy.universe.market_data_days >= 300
     assert settings.strategy.sec.companyfacts_unavailable_ttl_days == 7
-    assert settings.strategy.portfolio.max_positions == 5
+    # The checked-in research profile intentionally runs one fully allocated position.
+    assert settings.strategy.portfolio.max_positions == 1
     assert settings.strategy.risk.risk_per_trade == 0.01
     assert settings.strategy.backtest.profit_target_pct == 0.12
     assert settings.strategy.backtest.max_holding_days == 10

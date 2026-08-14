@@ -2,8 +2,10 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from alpaca.data.enums import Adjustment
+from alpaca.data.timeframe import TimeFrameUnit
 
 from trading_system.data.alpaca_client import AlpacaDataClient
+from trading_system.models.market_data import BarTimeframe
 
 
 class HistoricalClient:
@@ -78,6 +80,27 @@ def test_adjustment_policy_is_explicitly_configurable() -> None:
     )
     client.daily_bars(["TEST"], datetime(2023, 1, 1, tzinfo=UTC), datetime(2024, 1, 3, tzinfo=UTC))
     assert historical.request.adjustment == Adjustment.SPLIT
+
+
+def test_provider_native_intraday_timeframe_is_requested_and_preserved() -> None:
+    historical = HistoricalClient()
+    client = AlpacaDataClient(
+        "key",
+        "secret",
+        historical_client=historical,  # type: ignore[arg-type]
+        trading_client=SimpleNamespace(),  # type: ignore[arg-type]
+    )
+
+    bars = client.bars(
+        ["TEST"],
+        datetime(2024, 1, 2, tzinfo=UTC),
+        datetime(2024, 1, 3, tzinfo=UTC),
+        timeframe="15m",
+    )
+
+    assert historical.request.timeframe.amount_value == 15
+    assert historical.request.timeframe.unit_value is TimeFrameUnit.Minute
+    assert bars[0].timeframe is BarTimeframe.MINUTES_15
 
 
 def test_zero_trade_placeholder_bar_normalizes_zero_vwap_to_missing() -> None:

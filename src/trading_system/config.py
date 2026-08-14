@@ -12,6 +12,8 @@ from typing import Any, Literal
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from trading_system.models.market_data import BarTimeframe
+
 
 class UniverseConfig(BaseModel):
     min_price: float = Field(5.0, gt=0)
@@ -148,10 +150,35 @@ class ReentryConfig(BaseModel):
     cooldown_days: int = Field(0, ge=0)
 
 
+class IntradaySyncConfig(BaseModel):
+    incremental: bool = True
+    overlap_bars: int = Field(2, ge=0, le=100)
+    symbol_batch_size: int = Field(25, ge=1, le=200)
+    request_window_days: int = Field(7, ge=1, le=31)
+
+
+class IntradayConfig(BaseModel):
+    enabled: bool = False
+    timeframes: list[BarTimeframe] = Field(
+        default_factory=lambda: [BarTimeframe.MINUTES_15]
+    )
+    extended_hours: bool = False
+    warmup_bars: int = Field(50, ge=1)
+    sync: IntradaySyncConfig = IntradaySyncConfig()
+
+    @model_validator(mode="after")
+    def validate_timeframes(self) -> IntradayConfig:
+        if any(not timeframe.intraday for timeframe in self.timeframes):
+            raise ValueError("intraday.timeframes may contain only 5m, 15m, and 1h")
+        if len(self.timeframes) != len(set(self.timeframes)):
+            raise ValueError("intraday.timeframes must be unique")
+        return self
+
+
 class PositionManagementConfig(BaseModel):
     """Composable position rules. Defaults reproduce the original backtester."""
 
-    bar_timeframe: Literal["5m", "15m", "1h", "1d"] = "1d"
+    bar_timeframe: BarTimeframe = BarTimeframe.DAY_1
     stop_loss: StopLossConfig = StopLossConfig()
     take_profit: TakeProfitConfig = TakeProfitConfig()
     trailing_stop: TrailingStopConfig = TrailingStopConfig()
@@ -349,6 +376,7 @@ class StrategyConfig(BaseModel):
     portfolio: PortfolioConfig = PortfolioConfig()
     risk: RiskConfig = RiskConfig()
     backtest: BacktestConfig = BacktestConfig()
+    intraday: IntradayConfig = IntradayConfig()
     position_management: PositionManagementConfig = PositionManagementConfig()
 
 

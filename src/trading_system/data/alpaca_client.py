@@ -10,12 +10,19 @@ from decimal import Decimal, InvalidOperation
 from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest, StockSnapshotRequest
-from alpaca.data.timeframe import TimeFrame
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import AssetClass, AssetStatus
 from alpaca.trading.requests import GetAssetsRequest
 
-from trading_system.models.market_data import DailyBar, MarketSnapshot, TradableAsset
+from trading_system.models.market_data import (
+    BarTimeframe,
+    DailyBar,
+    MarketDataBar,
+    MarketSnapshot,
+    TradableAsset,
+    validate_market_bar,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -41,6 +48,7 @@ class AlpacaDataClient:
         self.historical = historical_client or StockHistoricalDataClient(api_key, secret_key)
         self.feed = feed
         self.adjustment = adjustment
+        self.last_bar_diagnostics: dict[str, int] = {"invalid_bars": 0}
         # Explicit paper=True is defense in depth, though only read operations are exposed.
         self.trading = trading_client or TradingClient(api_key, secret_key, paper=True)
 
@@ -73,14 +81,35 @@ class AlpacaDataClient:
         *,
         batch_size: int = 200,
     ) -> list[DailyBar]:
-        """Fetch adjusted daily bars and isolate malformed provider observations."""
+        """Backward-compatible adjusted Daily-bar request."""
+
+        return self.bars(
+            symbols,
+            start,
+            end,
+            timeframe=BarTimeframe.DAY_1,
+            batch_size=batch_size,
+        )
+
+    def bars(
+        self,
+        symbols: Iterable[str],
+        start: datetime,
+        end: datetime,
+        *,
+        timeframe: BarTimeframe | str,
+        batch_size: int = 200,
+    ) -> list[MarketDataBar]:
+        """Fetch provider-native bars; alpaca-py handles page tokens and retry codes."""
 
         normalized = sorted({symbol.upper() for symbol in symbols})
-        output: list[DailyBar] = []
+        normalized_timeframe = BarTimeframe(timeframe)
+        output: list[MarketDataBar] = []
+        total_invalid = 0
         for batch in _chunks(normalized, batch_size):
             request = StockBarsRequest(
                 symbol_or_symbols=batch,
-                timeframe=TimeFrame.Day,
+                timeframe=_alpaca_timeframe(normalized_timeframe),
                 start=start,
                 end=end,
                 adjustment=self.adjustment,
@@ -103,19 +132,20 @@ class AlpacaDataClient:
                             vwap = None
                             normalized_vwap_count += 1
                             normalized_vwap_symbols.add(symbol)
-                        output.append(
-                            DailyBar(
-                                symbol=symbol,
-                                timestamp=bar.timestamp,
-                                open=Decimal(str(bar.open)),
-                                high=Decimal(str(bar.high)),
-                                low=Decimal(str(bar.low)),
-                                close=Decimal(str(bar.close)),
-                                volume=volume,
-                                trade_count=trade_count,
-                                vwap=vwap,
-                            )
+                        normalized_bar = MarketDataBar(
+                            symbol=symbol,
+                            timeframe=normalized_timeframe,
+                            timestamp=bar.timestamp,
+                            open=Decimal(str(bar.open)),
+                            high=Decimal(str(bar.high)),
+                            low=Decimal(str(bar.low)),
+                            close=Decimal(str(bar.close)),
+                            volume=volume,
+                            trade_count=trade_count,
+                            vwap=vwap,
                         )
+                        validate_market_bar(normalized_bar)
+                        output.append(normalized_bar)
                     except (AttributeError, InvalidOperation, TypeError, ValueError) as exc:
                         invalid_count += 1
                         if len(invalid_samples) < 3:
@@ -137,6 +167,8 @@ class AlpacaDataClient:
                     len(batch),
                     invalid_samples,
                 )
+            total_invalid += invalid_count
+        self.last_bar_diagnostics = {"invalid_bars": total_invalid}
         return sorted(output, key=lambda bar: (bar.symbol, bar.timestamp))
 
     def stock_snapshots(self, symbols: Iterable[str]) -> list[MarketSnapshot]:
@@ -206,3 +238,12 @@ def _snapshot_bar(symbol: str, bar: object | None) -> DailyBar | None:
         trade_count=trade_count,
         vwap=vwap,
     )
+
+
+def _alpaca_timeframe(timeframe: BarTimeframe) -> TimeFrame:
+    return {
+        BarTimeframe.MINUTES_5: TimeFrame(5, TimeFrameUnit.Minute),
+        BarTimeframe.MINUTES_15: TimeFrame(15, TimeFrameUnit.Minute),
+        BarTimeframe.HOUR_1: TimeFrame.Hour,
+        BarTimeframe.DAY_1: TimeFrame.Day,
+    }[timeframe]

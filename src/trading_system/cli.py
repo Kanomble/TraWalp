@@ -26,11 +26,19 @@ from trading_system.backtest.report import (
 from trading_system.config import load_settings
 from trading_system.data.alpaca_client import AlpacaDataClient
 from trading_system.data.database import Database
-from trading_system.data.market_sessions import effective_trading_session
+from trading_system.data.market_sessions import (
+    effective_trading_session,
+    intraday_warmup_start,
+)
 from trading_system.data.sec_client import SecClient
 from trading_system.data.sync import DataSynchronizer
 from trading_system.fundamentals.debug import debug_fundamentals
-from trading_system.models.backtest import PositionManagementPreset, StrategyVariant
+from trading_system.models.backtest import (
+    PositionManagementPreset,
+    StrategyComparisonKind,
+    StrategyVariant,
+)
+from trading_system.models.market_data import BarTimeframe
 from trading_system.strategy.reporting import (
     export_report,
     format_explanation,
@@ -80,11 +88,45 @@ def _parser() -> argparse.ArgumentParser:
         "update-bars", help="Incrementally update completed historical daily bars"
     )
     update_bars.add_argument("--symbols", nargs="*")
+    intraday = commands.add_parser(
+        "sync-intraday", help="Backfill or incrementally update provider-native intraday bars"
+    )
+    intraday.add_argument("--start", type=date.fromisoformat, required=True)
+    intraday.add_argument("--end", type=date.fromisoformat, required=True)
+    intraday.add_argument(
+        "--timeframes",
+        required=True,
+        help="Comma-separated provider timeframes: 5m,15m,1h",
+    )
+    scope = intraday.add_mutually_exclusive_group(required=True)
+    scope.add_argument("--symbols", help="Comma-separated explicit symbol list")
+    scope.add_argument(
+        "--universe",
+        choices=("all",),
+        help="Explicitly allow the complete synchronized tradable company universe",
+    )
+    scope.add_argument(
+        "--candidates-report",
+        type=Path,
+        help="Read required symbols from an existing JSON screen/backtest report",
+    )
+    intraday.add_argument(
+        "--extended-hours",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Include provider pre-/after-market bars (default from config)",
+    )
+    intraday.add_argument(
+        "--full-window",
+        action="store_true",
+        help="Request the complete interval instead of incremental local overlap ranges",
+    )
     refresh_market = commands.add_parser(
         "refresh-market", help="Refresh batched current snapshots without downloading history"
     )
     refresh_market.add_argument("--symbols", nargs="*")
-    commands.add_parser("status", help="Show local dataset freshness")
+    commands.add_parser("status", help="Show local dataset freshness and bar inventory")
+    commands.add_parser("data-status", help="Alias for status")
     commands.add_parser("storage-report", help="Inspect SQLite allocation and table usage")
     cleanup = commands.add_parser(
         "db-cleanup", help="Explicitly remove guarded legacy SEC Company Facts payloads"
@@ -113,10 +155,17 @@ def _parser() -> argparse.ArgumentParser:
         help="Position-management preset (configured uses position_management from YAML)",
     )
     comparison = commands.add_parser(
-        "compare-strategies", help="Compare strategy variants A/B/C on shared historical screens"
+        "compare-strategies",
+        help="Compare score variants and position-management strategies on shared screens",
     )
     comparison.add_argument("--start", type=date.fromisoformat, required=True)
     comparison.add_argument("--end", type=date.fromisoformat, required=True)
+    comparison.add_argument(
+        "--include",
+        choices=("all", "score-variants", "position-management"),
+        default="all",
+        help="Select all strategies or one comparison family (default: all)",
+    )
     position_comparison = commands.add_parser(
         "backtest-compare", help="Compare the daily position-management presets"
     )
@@ -179,7 +228,52 @@ def main(argv: list[str] | None = None) -> int:
                 print("\nVACUUM completed.")
         return 0
     database.initialize()
-    if args.command in {"sync", "sync-assets", "update-bars", "refresh-market"}:
+    if args.command in {
+        "sync",
+        "sync-assets",
+        "update-bars",
+        "refresh-market",
+        "sync-intraday",
+    }:
+        if args.command == "sync-intraday":
+            if args.start > args.end:
+                print("Intraday sync refused: --start must not be after --end", file=sys.stderr)
+                return 2
+            try:
+                timeframes = _parse_intraday_timeframes(args.timeframes)
+                requested = _intraday_symbols(args, database)
+            except ValueError as exc:
+                print(f"Intraday sync refused: {exc}", file=sys.stderr)
+                return 2
+            synchronizer = _synchronizer(
+                settings, database, with_alpaca=True, with_sec=False
+            )
+            extended_hours = (
+                settings.strategy.intraday.extended_hours
+                if args.extended_hours is None
+                else args.extended_hours
+            )
+            requested_start = min(
+                intraday_warmup_start(
+                    args.start,
+                    timeframe,
+                    settings.strategy.intraday.warmup_bars,
+                    extended_hours=extended_hours,
+                )
+                for timeframe in timeframes
+            )
+            result = synchronizer.sync_intraday(
+                requested,
+                timeframes,
+                requested_start,
+                datetime.combine(args.end + timedelta(days=1), datetime.min.time(), tzinfo=UTC),
+                incremental=not args.full_window,
+                extended_hours=extended_hours,
+            )
+            result["requested_backtest_start"] = args.start.isoformat()
+            result["warmup_start"] = requested_start.isoformat()
+            print(json.dumps(result, indent=2))
+            return 0
         requested = [symbol.upper() for symbol in args.symbols] if args.symbols else None
         needs_alpaca = args.command != "sync" or not args.incremental
         synchronizer = _synchronizer(
@@ -203,8 +297,8 @@ def main(argv: list[str] | None = None) -> int:
             result = synchronizer.refresh_market(requested)
         print(json.dumps(result, indent=2))
         return 0
-    if args.command == "status":
-        print(_format_data_status(database.dataset_states()))
+    if args.command in {"status", "data-status"}:
+        print(_format_data_status(database.dataset_states(), database.bar_inventory()))
         return 0
     if args.command == "screen":
         _warn_data_freshness(database.dataset_states())
@@ -249,7 +343,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "compare-strategies":
         try:
             comparison_result = compare_strategies(
-                database, settings.strategy, args.start, args.end
+                database,
+                settings.strategy,
+                args.start,
+                args.end,
+                comparison_kind=StrategyComparisonKind(args.include.replace("-", "_")),
             )
         except ValueError as exc:
             print(f"Strategy comparison refused: {exc}", file=sys.stderr)
@@ -347,14 +445,69 @@ def _synchronizer(
         exclude_financials=universe.exclude_financials,
         exclude_reits=universe.exclude_reits,
         companyfacts_unavailable_ttl=companyfacts_unavailable_ttl,
+        intraday_enabled=settings.strategy.intraday.enabled,
+        intraday_timeframes=settings.strategy.intraday.timeframes,
+        intraday_extended_hours=settings.strategy.intraday.extended_hours,
+        intraday_incremental=settings.strategy.intraday.sync.incremental,
+        intraday_overlap_bars=settings.strategy.intraday.sync.overlap_bars,
+        intraday_symbol_batch_size=settings.strategy.intraday.sync.symbol_batch_size,
+        intraday_request_window_days=settings.strategy.intraday.sync.request_window_days,
     )
 
 
-def _format_data_status(states: dict[str, dict]) -> str:
+def _parse_intraday_timeframes(raw: str) -> tuple[BarTimeframe, ...]:
+    try:
+        parsed = tuple(
+            dict.fromkeys(
+                BarTimeframe(item.strip().lower())
+                for item in raw.split(",")
+                if item.strip()
+            )
+        )
+    except ValueError as exc:
+        raise ValueError("--timeframes accepts only 5m,15m,1h") from exc
+    if not parsed or any(not item.intraday for item in parsed):
+        raise ValueError("--timeframes accepts only 5m,15m,1h")
+    return parsed
+
+
+def _intraday_symbols(args, database: Database) -> list[str]:
+    if args.symbols:
+        symbols = sorted(
+            {item.strip().upper() for item in args.symbols.split(",") if item.strip()}
+        )
+    elif args.universe == "all":
+        symbols = [company.symbol for company in database.list_tradable_companies()]
+    else:
+        payload = json.loads(args.candidates_report.read_text(encoding="utf-8"))
+        symbols = sorted(_symbols_in_json(payload))
+    if not symbols:
+        raise ValueError("symbol selection is empty")
+    return symbols
+
+
+def _symbols_in_json(value) -> set[str]:
+    output: set[str] = set()
+    if isinstance(value, dict):
+        symbol = value.get("symbol")
+        if isinstance(symbol, str) and symbol.strip():
+            output.add(symbol.strip().upper())
+        for nested in value.values():
+            output.update(_symbols_in_json(nested))
+    elif isinstance(value, list):
+        for nested in value:
+            output.update(_symbols_in_json(nested))
+    return output
+
+
+def _format_data_status(
+    states: dict[str, dict], bar_inventory: list[dict] | None = None
+) -> str:
     labels = {
         "asset_universe": "Asset universe",
         "sec": "SEC fundamentals",
         "historical_bars": "Historical bars",
+        "intraday_bars": "Intraday bars",
         "market_snapshot": "Market snapshot",
     }
     lines = ["TraWalp data status"]
@@ -425,6 +578,14 @@ def _format_data_status(states: dict[str, dict]) -> str:
         ):
             if key in state:
                 lines.append(f"  {key.replace('_', ' ')}: {state[key]}")
+    lines.extend(["", "Bar inventory", "  Timeframe  Symbols          Bars  First / Last"])
+    for item in bar_inventory or []:
+        lines.append(
+            f"  {item['timeframe']:<9} {item['symbols']:>7,} {item['bars']:>13,}  "
+            f"{item['first_timestamp']} / {item['last_timestamp']}"
+        )
+    if not bar_inventory:
+        lines.append("  (empty)")
     return "\n".join(lines)
 
 
@@ -445,6 +606,12 @@ def _format_storage_report(report: dict) -> str:
         report["row_counts"].items(), key=lambda item: item[1], reverse=True
     ):
         lines.append(f"  {table:<36} {count:>14,}")
+    lines.extend(["", "Bars by timeframe"])
+    for item in report.get("bar_timeframes", []):
+        lines.append(
+            f"  {item['timeframe']:<5} symbols={item['symbols']:>6,} bars={item['bars']:>12,} "
+            f"first={item['first_timestamp']} last={item['last_timestamp']}"
+        )
     lines.extend(["", "Raw SEC cache by endpoint"])
     if report["raw_sec_cache"]:
         for endpoint in report["raw_sec_cache"]:

@@ -15,7 +15,14 @@ from typing import Any
 
 from trading_system.data.sec_identity import resolve_sec_identities
 from trading_system.models.fundamentals import CompanyIdentity, FundamentalFact
-from trading_system.models.market_data import DailyBar, MarketSnapshot, TradableAsset
+from trading_system.models.market_data import (
+    BarTimeframe,
+    DailyBar,
+    MarketDataBar,
+    MarketSnapshot,
+    TradableAsset,
+    validate_market_bar,
+)
 
 
 class Database:
@@ -64,13 +71,17 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS ix_facts_pit
                     ON fundamental_facts(symbol, metric, filed, period_end);
-                CREATE TABLE IF NOT EXISTS daily_bars (
-                    symbol TEXT NOT NULL, timestamp TEXT NOT NULL,
+                CREATE TABLE IF NOT EXISTS bars (
+                    symbol TEXT NOT NULL, timeframe TEXT NOT NULL, timestamp TEXT NOT NULL,
                     open TEXT NOT NULL, high TEXT NOT NULL, low TEXT NOT NULL,
                     close TEXT NOT NULL, volume INTEGER NOT NULL,
                     trade_count INTEGER, vwap TEXT,
-                    PRIMARY KEY(symbol, timestamp)
+                    PRIMARY KEY(symbol, timeframe, timestamp)
                 );
+                CREATE INDEX IF NOT EXISTS ix_bars_timeframe_timestamp
+                    ON bars(timeframe, timestamp);
+                CREATE INDEX IF NOT EXISTS ix_bars_symbol_timeframe_timestamp
+                    ON bars(symbol, timeframe, timestamp);
                 CREATE TABLE IF NOT EXISTS market_snapshots (
                     symbol TEXT PRIMARY KEY,
                     observed_at TEXT NOT NULL,
@@ -89,6 +100,7 @@ class Database:
                 );
                 """
             )
+            _migrate_daily_bars(connection)
 
     def upsert_assets(self, assets: Iterable[TradableAsset]) -> int:
         rows = [
@@ -422,11 +434,29 @@ class Database:
             rows = connection.execute("SELECT symbol,cik FROM companies").fetchall()
         return {str(row["symbol"]): str(row["cik"]) for row in rows}
 
-    def upsert_bars(self, bars: Iterable[DailyBar]) -> int:
+    def upsert_bars(self, bars: Iterable[MarketDataBar]) -> int:
+        return self.upsert_bars_with_stats(bars)["records_updated"]
+
+    def upsert_bars_with_stats(self, bars: Iterable[MarketDataBar]) -> dict[str, int]:
+        received = list(bars)
+        valid: list[MarketDataBar] = []
+        invalid_bars = 0
+        for bar in received:
+            try:
+                validate_market_bar(bar)
+            except ValueError:
+                invalid_bars += 1
+            else:
+                valid.append(bar)
+        unique = {
+            (bar.symbol.upper(), bar.timeframe.value, _iso(bar.timestamp)): bar
+            for bar in valid
+        }
         rows = [
             (
-                b.symbol,
-                _iso(b.timestamp),
+                symbol,
+                timeframe,
+                timestamp,
                 str(b.open),
                 str(b.high),
                 str(b.low),
@@ -435,38 +465,88 @@ class Database:
                 b.trade_count,
                 str(b.vwap) if b.vwap is not None else None,
             )
-            for b in bars
+            for (symbol, timeframe, timestamp), b in unique.items()
         ]
+        if not rows:
+            return {
+                "bars_received": len(received),
+                "bars_inserted": 0,
+                "bars_updated": 0,
+                "bars_unchanged": 0,
+                "duplicate_bars": 0,
+                "invalid_bars": invalid_bars,
+                "records_updated": 0,
+            }
         with self.connect() as connection:
+            connection.execute(
+                """CREATE TEMP TABLE incoming_bar_keys (
+                symbol TEXT NOT NULL,timeframe TEXT NOT NULL,timestamp TEXT NOT NULL,
+                PRIMARY KEY(symbol,timeframe,timestamp)) WITHOUT ROWID"""
+            )
             connection.executemany(
-                """INSERT INTO daily_bars VALUES (?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(symbol,timestamp) DO UPDATE SET open=excluded.open,high=excluded.high,
+                "INSERT INTO incoming_bar_keys VALUES (?,?,?)",
+                ((row[0], row[1], row[2]) for row in rows),
+            )
+            existing_rows = connection.execute(
+                """SELECT stored.* FROM bars AS stored JOIN incoming_bar_keys AS incoming
+                USING(symbol,timeframe,timestamp)"""
+            ).fetchall()
+            existing_values = {
+                (row["symbol"], row["timeframe"], row["timestamp"]): tuple(row)[3:]
+                for row in existing_rows
+            }
+            incoming_values = {(row[0], row[1], row[2]): tuple(row[3:]) for row in rows}
+            updated = sum(
+                existing_values[key] != incoming_values[key] for key in existing_values
+            )
+            existing = len(existing_rows)
+            connection.executemany(
+                """INSERT INTO bars VALUES (?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(symbol,timeframe,timestamp) DO UPDATE SET
+                open=excluded.open,high=excluded.high,
                 low=excluded.low,close=excluded.close,volume=excluded.volume,
                 trade_count=excluded.trade_count,vwap=excluded.vwap""",
                 rows,
             )
-        return len(rows)
+        inserted = len(rows) - existing
+        return {
+            "bars_received": len(received),
+            "bars_inserted": inserted,
+            "bars_updated": updated,
+            "bars_unchanged": existing - updated,
+            "duplicate_bars": len(valid) - len(rows),
+            "invalid_bars": invalid_bars,
+            "records_updated": len(rows),
+        }
 
-    def latest_bar_timestamp(self, symbol: str) -> datetime | None:
+    def latest_bar_timestamp(
+        self, symbol: str, timeframe: BarTimeframe | str = BarTimeframe.DAY_1
+    ) -> datetime | None:
+        normalized_timeframe = BarTimeframe(timeframe)
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT MAX(timestamp) AS timestamp FROM daily_bars WHERE symbol=?",
-                (symbol.upper(),),
+                "SELECT MAX(timestamp) AS timestamp FROM bars WHERE symbol=? AND timeframe=?",
+                (symbol.upper(), normalized_timeframe.value),
             ).fetchone()
         return datetime.fromisoformat(row["timestamp"]) if row and row["timestamp"] else None
 
-    def latest_bar_timestamps(self, symbols: Iterable[str]) -> dict[str, datetime]:
+    def latest_bar_timestamps(
+        self,
+        symbols: Iterable[str],
+        timeframe: BarTimeframe | str = BarTimeframe.DAY_1,
+    ) -> dict[str, datetime]:
         """Return latest timestamps in one indexed query instead of one query per symbol."""
 
         normalized = sorted({symbol.upper() for symbol in symbols})
         if not normalized:
             return {}
+        normalized_timeframe = BarTimeframe(timeframe)
         placeholders = ",".join("?" for _ in normalized)
         with self.connect() as connection:
             rows = connection.execute(
-                f"""SELECT symbol,MAX(timestamp) AS timestamp FROM daily_bars
-                WHERE symbol IN ({placeholders}) GROUP BY symbol""",
-                normalized,
+                f"""SELECT symbol,MAX(timestamp) AS timestamp FROM bars
+                WHERE symbol IN ({placeholders}) AND timeframe=? GROUP BY symbol""",
+                [*normalized, normalized_timeframe.value],
             ).fetchall()
         return {
             row["symbol"]: datetime.fromisoformat(row["timestamp"])
@@ -477,17 +557,24 @@ class Database:
     def bars_available_as_of(
         self,
         symbol: str,
-        as_of: date,
+        as_of: date | datetime,
         *,
+        timeframe: BarTimeframe | str = BarTimeframe.DAY_1,
         limit: int | None = None,
         connection: sqlite3.Connection | None = None,
     ) -> list[DailyBar]:
         """Return chronologically ordered bars whose trading date is not after ``as_of``."""
 
-        query = """SELECT * FROM daily_bars
-            WHERE symbol=? AND timestamp<?
+        normalized_timeframe = BarTimeframe(timeframe)
+        query = """SELECT * FROM bars
+            WHERE symbol=? AND timeframe=? AND timestamp<?
             ORDER BY timestamp DESC"""
-        parameters: list[Any] = [symbol.upper(), (as_of + timedelta(days=1)).isoformat()]
+        cutoff = (
+            datetime.combine(as_of + timedelta(days=1), datetime.min.time(), tzinfo=UTC)
+            if isinstance(as_of, date) and not isinstance(as_of, datetime)
+            else as_of
+        )
+        parameters: list[Any] = [symbol.upper(), normalized_timeframe.value, _iso(cutoff)]
         if limit is not None:
             query += " LIMIT ?"
             parameters.append(limit)
@@ -498,14 +585,22 @@ class Database:
             rows = connection.execute(query, parameters).fetchall()
         return [_bar_from_row(row) for row in reversed(rows)]
 
-    def bar_date_bounds(self, symbol: str | None = None) -> tuple[date | None, date | None]:
+    def bar_date_bounds(
+        self,
+        symbol: str | None = None,
+        timeframe: BarTimeframe | str = BarTimeframe.DAY_1,
+    ) -> tuple[date | None, date | None]:
         """Return local adjusted-bar coverage without modifying dataset state."""
 
-        query = "SELECT MIN(substr(timestamp,1,10)),MAX(substr(timestamp,1,10)) FROM daily_bars"
-        parameters: tuple[str, ...] = ()
+        normalized_timeframe = BarTimeframe(timeframe)
+        query = (
+            "SELECT MIN(substr(timestamp,1,10)),MAX(substr(timestamp,1,10)) "
+            "FROM bars WHERE timeframe=?"
+        )
+        parameters: tuple[str, ...] = (normalized_timeframe.value,)
         if symbol is not None:
-            query += " WHERE symbol=?"
-            parameters = (symbol.upper(),)
+            query += " AND symbol=?"
+            parameters = (normalized_timeframe.value, symbol.upper())
         with self.connect() as connection:
             row = connection.execute(query, parameters).fetchone()
         return (
@@ -518,9 +613,9 @@ class Database:
 
         with self.connect() as connection:
             rows = connection.execute(
-                """SELECT DISTINCT substr(timestamp,1,10) AS session FROM daily_bars
-                WHERE substr(timestamp,1,10) BETWEEN ? AND ? ORDER BY session""",
-                (start.isoformat(), end.isoformat()),
+                """SELECT DISTINCT substr(timestamp,1,10) AS session FROM bars
+                WHERE timeframe=? AND substr(timestamp,1,10) BETWEEN ? AND ? ORDER BY session""",
+                (BarTimeframe.DAY_1.value, start.isoformat(), end.isoformat()),
             ).fetchall()
         return [date.fromisoformat(row["session"]) for row in rows]
 
@@ -535,11 +630,82 @@ class Database:
         end_exclusive = (session + timedelta(days=1)).isoformat()
         with self.connect() as connection:
             rows = connection.execute(
-                f"""SELECT * FROM daily_bars WHERE symbol IN ({placeholders})
-                AND timestamp>=? AND timestamp<? ORDER BY symbol,timestamp""",
-                [*normalized, start_inclusive, end_exclusive],
+                f"""SELECT * FROM bars WHERE symbol IN ({placeholders})
+                AND timeframe=? AND timestamp>=? AND timestamp<? ORDER BY symbol,timestamp""",
+                [*normalized, BarTimeframe.DAY_1.value, start_inclusive, end_exclusive],
             ).fetchall()
         return {str(row["symbol"]): _bar_from_row(row) for row in rows}
+
+    def bars_between(
+        self,
+        symbols: Iterable[str],
+        start: datetime,
+        end: datetime,
+        *,
+        timeframe: BarTimeframe | str,
+    ) -> list[MarketDataBar]:
+        """Load a bounded multi-symbol timeframe range in one indexed query."""
+
+        if start.tzinfo is None or end.tzinfo is None:
+            raise ValueError("bar query boundaries must be timezone-aware")
+        if start >= end:
+            return []
+        normalized = sorted({symbol.upper() for symbol in symbols})
+        if not normalized:
+            return []
+        normalized_timeframe = BarTimeframe(timeframe)
+        placeholders = ",".join("?" for _ in normalized)
+        with self.read_only() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM bars WHERE symbol IN ({placeholders})
+                AND timeframe=? AND timestamp>=? AND timestamp<?
+                ORDER BY timestamp,symbol""",
+                [
+                    *normalized,
+                    normalized_timeframe.value,
+                    _iso(start),
+                    _iso(end),
+                ],
+            ).fetchall()
+        return [_bar_from_row(row) for row in rows]
+
+    def bar_bounds(
+        self,
+        symbol: str,
+        timeframe: BarTimeframe | str,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> tuple[datetime | None, datetime | None]:
+        normalized_timeframe = BarTimeframe(timeframe)
+        clauses = ["symbol=?", "timeframe=?"]
+        parameters: list[Any] = [symbol.upper(), normalized_timeframe.value]
+        if start is not None:
+            clauses.append("timestamp>=?")
+            parameters.append(_iso(start))
+        if end is not None:
+            clauses.append("timestamp<?")
+            parameters.append(_iso(end))
+        with self.read_only() as connection:
+            row = connection.execute(
+                f"SELECT MIN(timestamp),MAX(timestamp) FROM bars WHERE {' AND '.join(clauses)}",
+                parameters,
+            ).fetchone()
+        return (
+            datetime.fromisoformat(row[0]) if row and row[0] else None,
+            datetime.fromisoformat(row[1]) if row and row[1] else None,
+        )
+
+    def bar_inventory(self) -> list[dict[str, Any]]:
+        with self.read_only() as connection:
+            rows = connection.execute(
+                """SELECT timeframe,COUNT(DISTINCT symbol) AS symbols,COUNT(*) AS bars,
+                MIN(timestamp) AS first_timestamp,MAX(timestamp) AS last_timestamp
+                FROM bars GROUP BY timeframe ORDER BY
+                CASE timeframe WHEN '1d' THEN 1 WHEN '1h' THEN 2
+                WHEN '15m' THEN 3 WHEN '5m' THEN 4 ELSE 5 END"""
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def iter_bar_batches(
         self,
@@ -559,9 +725,9 @@ class Database:
                 batch = normalized[offset : offset + batch_size]
                 placeholders = ",".join("?" for _ in batch)
                 rows = connection.execute(
-                    f"""SELECT * FROM daily_bars WHERE symbol IN ({placeholders})
-                    AND timestamp>=? AND timestamp<? ORDER BY symbol,timestamp""",
-                    [*batch, start_inclusive, end_exclusive],
+                    f"""SELECT * FROM bars WHERE symbol IN ({placeholders})
+                    AND timeframe=? AND timestamp>=? AND timestamp<? ORDER BY symbol,timestamp""",
+                    [*batch, BarTimeframe.DAY_1.value, start_inclusive, end_exclusive],
                 ).fetchall()
                 yield [_bar_from_row(row) for row in rows]
 
@@ -584,9 +750,9 @@ class Database:
                 placeholders = ",".join("?" for _ in batch)
                 rows = connection.execute(
                     f"""SELECT symbol,timestamp,high,low,close,volume
-                    FROM daily_bars WHERE symbol IN ({placeholders})
+                    FROM bars WHERE symbol IN ({placeholders}) AND timeframe=?
                     AND timestamp>=? AND timestamp<? ORDER BY symbol,timestamp""",
-                    [*batch, start_inclusive, end_exclusive],
+                    [*batch, BarTimeframe.DAY_1.value, start_inclusive, end_exclusive],
                 ).fetchall()
                 yield [tuple(row) for row in rows]
 
@@ -809,6 +975,7 @@ class Database:
             "freelist_pages": freelist_count,
             "estimated_reclaimable_bytes": freelist_count * page_size,
             "row_counts": row_counts,
+            "bar_timeframes": self.bar_inventory(),
             "raw_sec_cache": raw_endpoints,
             "object_sizes": object_sizes,
             "dbstat_error": dbstat_error,
@@ -993,7 +1160,9 @@ def _raw_sec_cleanup_plan(connection: sqlite3.Connection, endpoint: str) -> dict
     safe_rows = int(row["safe_rows"])
     safe_bytes = int(row["safe_bytes"])
     fact_count = int(connection.execute("SELECT COUNT(*) FROM fundamental_facts").fetchone()[0])
-    bar_count = int(connection.execute("SELECT COUNT(*) FROM daily_bars").fetchone()[0])
+    bar_count = int(
+        connection.execute("SELECT COUNT(*) FROM bars WHERE timeframe='1d'").fetchone()[0]
+    )
     return {
         "endpoint": endpoint,
         "total_rows": total_rows,
@@ -1034,6 +1203,7 @@ def _fact_from_row(row: sqlite3.Row) -> FundamentalFact:
 def _bar_from_row(row: sqlite3.Row) -> DailyBar:
     return DailyBar(
         symbol=row["symbol"],
+        timeframe=BarTimeframe(row["timeframe"]),
         timestamp=datetime.fromisoformat(row["timestamp"]),
         open=Decimal(row["open"]),
         high=Decimal(row["high"]),
@@ -1043,3 +1213,39 @@ def _bar_from_row(row: sqlite3.Row) -> DailyBar:
         trade_count=row["trade_count"],
         vwap=Decimal(row["vwap"]) if row["vwap"] else None,
     )
+
+
+def _migrate_daily_bars(connection: sqlite3.Connection) -> None:
+    """Migrate the legacy daily-only table once and retain a read compatibility view."""
+
+    legacy = connection.execute(
+        "SELECT type FROM sqlite_master WHERE name='daily_bars'"
+    ).fetchone()
+    if legacy is not None and legacy["type"] == "table":
+        legacy_count = int(connection.execute("SELECT COUNT(*) FROM daily_bars").fetchone()[0])
+        connection.execute(
+            """INSERT INTO bars(
+            symbol,timeframe,timestamp,open,high,low,close,volume,trade_count,vwap)
+            SELECT symbol,'1d',timestamp,open,high,low,close,volume,trade_count,vwap
+            FROM daily_bars WHERE true
+            ON CONFLICT(symbol,timeframe,timestamp) DO UPDATE SET
+            open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,
+            volume=excluded.volume,trade_count=excluded.trade_count,vwap=excluded.vwap"""
+        )
+        migrated_count = int(
+            connection.execute("SELECT COUNT(*) FROM bars WHERE timeframe='1d'").fetchone()[0]
+        )
+        if migrated_count < legacy_count:
+            raise RuntimeError(
+                "Daily-bar migration validation failed: "
+                f"legacy={legacy_count} migrated={migrated_count}"
+            )
+        connection.execute("DROP TABLE daily_bars")
+    elif legacy is not None and legacy["type"] == "view":
+        connection.execute("DROP VIEW daily_bars")
+    connection.execute(
+        """CREATE VIEW daily_bars AS
+        SELECT symbol,timestamp,open,high,low,close,volume,trade_count,vwap
+        FROM bars WHERE timeframe='1d'"""
+    )
+    connection.execute("PRAGMA user_version = 1")

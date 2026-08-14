@@ -40,6 +40,7 @@ def _bar(*, opening=100, high=101, low=99, close=100) -> DailyBar:
 def _position(**updates) -> PositionState:
     values = {
         "symbol": "AAA",
+        "position_id": "position-1",
         "signal_date": date(2024, 1, 1),
         "entry_date": date(2024, 1, 2),
         "entry_reference_price": 100,
@@ -50,6 +51,7 @@ def _position(**updates) -> PositionState:
         "stop_price": None,
         "target_price": None,
         "entry_commission": 0,
+        "initial_entry_commission": 0,
         "entry_slippage": 0,
         "quality_score": 80,
         "valuation_score": 80,

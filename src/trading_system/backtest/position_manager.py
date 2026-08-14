@@ -5,11 +5,11 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from enum import StrEnum
 
 from trading_system.config import PositionManagementConfig
-from trading_system.models.backtest import StrategyVariant
+from trading_system.models.backtest import EntryTriggerInfo, ScoreObservation, StrategyVariant
 from trading_system.models.market_data import DailyBar
 
 LOGGER = logging.getLogger(__name__)
@@ -39,6 +39,7 @@ class PositionState:
     """Mutable state belonging to one simulated position, never to a symbol globally."""
 
     symbol: str
+    position_id: str
     signal_date: date
     entry_date: date
     entry_reference_price: float
@@ -49,6 +50,7 @@ class PositionState:
     stop_price: float | None
     target_price: float | None
     entry_commission: float
+    initial_entry_commission: float
     entry_slippage: float
     quality_score: float
     valuation_score: float
@@ -69,6 +71,18 @@ class PositionState:
     atr_trailing_stop_price: float | None = None
     partial_exit_levels_triggered: set[int] = field(default_factory=set)
     realized_profit: float = 0.0
+    entry_triggers: EntryTriggerInfo = field(default_factory=EntryTriggerInfo)
+    score_history: list[ScoreObservation] = field(default_factory=list)
+    is_reentry: bool = False
+    previous_exit_date: date | None = None
+    previous_exit_reason: str | None = None
+    previous_position_return: float | None = None
+    previous_position_mfe: float | None = None
+    previous_position_mae: float | None = None
+    previous_entry_score: float | None = None
+    fresh_trigger_since_previous_exit: bool | None = None
+    execution_legs_count: int = 0
+    entry_timestamp: datetime | None = None
 
     def __post_init__(self) -> None:
         if self.highest_price_since_entry <= 0:

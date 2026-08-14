@@ -115,6 +115,19 @@ class RoutedSynchronizer:
         self.called = "market"
         return {"symbols_updated": 1}
 
+    def sync_intraday(
+        self, symbols, timeframes, start, end, *, incremental, extended_hours
+    ):
+        self.called = "intraday"
+        return {
+            "symbols": list(symbols),
+            "timeframes": [str(item) for item in timeframes],
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "incremental": incremental,
+            "extended_hours": extended_hours,
+        }
+
 
 @pytest.mark.parametrize(
     ("arguments", "expected"),
@@ -148,6 +161,48 @@ def test_data_cli_commands_route_to_independent_stages(
 
     assert cli.main(arguments) == 0
     assert routed.called == expected
+
+
+def test_sync_intraday_cli_routes_explicit_symbols_and_multiple_timeframes(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    load_settings.cache_clear()
+    settings = load_settings()
+    strategy = settings.strategy.model_copy(
+        update={
+            "storage": StorageConfig(
+                database_path=tmp_path / "intraday.sqlite3",
+                reports_path=tmp_path / "reports",
+            )
+        }
+    )
+    routed = RoutedSynchronizer()
+    monkeypatch.setattr(
+        cli, "load_settings", lambda _path: settings.model_copy(update={"strategy": strategy})
+    )
+    monkeypatch.setattr(cli, "_synchronizer", lambda *_args, **_kwargs: routed)
+
+    result = cli.main(
+        [
+            "sync-intraday",
+            "--symbols",
+            "nvda,AAPL,nvda",
+            "--start",
+            "2026-07-01",
+            "--end",
+            "2026-07-05",
+            "--timeframes",
+            "5m,15m,1h",
+        ]
+    )
+
+    assert result == 0
+    assert routed.called == "intraday"
+    payload = capsys.readouterr().out
+    assert '"symbols": [' in payload
+    assert '"AAPL"' in payload and '"NVDA"' in payload
+    assert '"timeframes": [' in payload
+    assert '"5m"' in payload and '"15m"' in payload and '"1h"' in payload
 
 
 def test_status_cli_reads_persisted_freshness_without_credentials(

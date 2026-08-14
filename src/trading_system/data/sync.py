@@ -18,6 +18,7 @@ from trading_system.data.alpaca_client import AlpacaDataClient
 from trading_system.data.database import Database
 from trading_system.data.market_sessions import (
     full_history_request_window,
+    is_regular_session_timestamp,
     latest_completed_trading_session,
 )
 from trading_system.data.sec_client import SecClient, SecResourceNotFound
@@ -29,7 +30,7 @@ from trading_system.data.sec_identity import (
 from trading_system.data.universe import is_financial_or_reit, is_reit
 from trading_system.data.xbrl_parser import VALID_FORMS, parse_company_facts
 from trading_system.models.fundamentals import CompanyIdentity
-from trading_system.models.market_data import TradableAsset
+from trading_system.models.market_data import BarTimeframe, TradableAsset
 
 LOGGER = logging.getLogger(__name__)
 # The change detector must match the forms that parse_company_facts can persist.
@@ -167,6 +168,50 @@ def _chunks(items: list[str], size: int) -> Iterable[list[str]]:
         yield items[index : index + size]
 
 
+def _time_windows(
+    start: datetime, end: datetime, window_days: int
+) -> Iterable[tuple[datetime, datetime]]:
+    current = start
+    step = timedelta(days=window_days)
+    while current < end:
+        following = min(current + step, end)
+        yield current, following
+        current = following
+
+
+def _incremental_bar_ranges(
+    database: Database,
+    symbol: str,
+    timeframe: BarTimeframe,
+    start: datetime,
+    end: datetime,
+    overlap_bars: int,
+) -> list[tuple[datetime, datetime]]:
+    earliest, latest = database.bar_bounds(
+        symbol, timeframe, start=start, end=end
+    )
+    if earliest is None or latest is None:
+        return [(start, end)]
+    overlap = timeframe.duration * overlap_bars
+    ranges: list[tuple[datetime, datetime]] = []
+    if earliest > start:
+        ranges.append((start, min(end, earliest + overlap)))
+    tail_start = max(start, latest - overlap)
+    if tail_start < end:
+        ranges.append((tail_start, end))
+    if not ranges:
+        return []
+    ranges.sort()
+    merged = [ranges[0]]
+    for range_start, range_end in ranges[1:]:
+        previous_start, previous_end = merged[-1]
+        if range_start <= previous_end:
+            merged[-1] = (previous_start, max(previous_end, range_end))
+        else:
+            merged.append((range_start, range_end))
+    return merged
+
+
 def _recent_accessions(submissions: Mapping[str, Any]) -> set[str]:
     recent = submissions.get("filings", {}).get("recent", {})
     if not isinstance(recent, Mapping):
@@ -194,6 +239,13 @@ class DataSynchronizer:
         exclude_financials: bool = False,
         exclude_reits: bool = False,
         companyfacts_unavailable_ttl: timedelta = timedelta(days=7),
+        intraday_enabled: bool = False,
+        intraday_timeframes: Iterable[BarTimeframe | str] = (BarTimeframe.MINUTES_15,),
+        intraday_extended_hours: bool = False,
+        intraday_incremental: bool = True,
+        intraday_overlap_bars: int = 2,
+        intraday_symbol_batch_size: int = 25,
+        intraday_request_window_days: int = 7,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         timer: Callable[[], float] = time.perf_counter,
     ) -> None:
@@ -201,6 +253,8 @@ class DataSynchronizer:
             raise ValueError("market_data_batch_size must be positive")
         if companyfacts_unavailable_ttl <= timedelta(0):
             raise ValueError("companyfacts_unavailable_ttl must be positive")
+        if intraday_overlap_bars < 0:
+            raise ValueError("intraday_overlap_bars cannot be negative")
         self.database = database
         self.alpaca = alpaca
         self.sec = sec
@@ -209,6 +263,13 @@ class DataSynchronizer:
         self.exclude_financials = exclude_financials
         self.exclude_reits = exclude_reits
         self.companyfacts_unavailable_ttl = companyfacts_unavailable_ttl
+        self.intraday_enabled = intraday_enabled
+        self.intraday_timeframes = tuple(BarTimeframe(item) for item in intraday_timeframes)
+        self.intraday_extended_hours = intraday_extended_hours
+        self.intraday_incremental = intraday_incremental
+        self.intraday_overlap_bars = intraday_overlap_bars
+        self.intraday_symbol_batch_size = intraday_symbol_batch_size
+        self.intraday_request_window_days = intraday_request_window_days
         self.clock = clock
         self.timer = timer
 
@@ -224,6 +285,18 @@ class DataSynchronizer:
         symbols = sorted(available if not requested_symbols else available & set(requested_symbols))
         sec = self.sync_sec_full(symbols)
         bars = self.sync_historical_bars(symbols)
+        intraday = None
+        if self.intraday_enabled:
+            completed = latest_completed_trading_session(self.clock())
+            intraday_start, intraday_end = full_history_request_window(
+                completed, self.market_data_days
+            )
+            intraday = self.sync_intraday(
+                symbols,
+                self.intraday_timeframes,
+                intraday_start,
+                intraday_end,
+            )
         result = {
             "mode": "full",
             "assets": assets["records_updated"],
@@ -231,9 +304,14 @@ class DataSynchronizer:
             "market_symbols": bars["symbols_checked"],
             "facts": sec["facts_processed"],
             "bars": bars["records_updated"],
-            "errors": sec["errors"] + bars["errors"],
+            "errors": sec["errors"] + bars["errors"] + (intraday or {}).get("errors", 0),
             "elapsed_seconds": round(self.timer() - started, 3),
-            "stages": {"assets": assets, "sec": sec, "historical_bars": bars},
+            "stages": {
+                "assets": assets,
+                "sec": sec,
+                "historical_bars": bars,
+                **({"intraday_bars": intraday} if intraday is not None else {}),
+            },
         }
         return result
 
@@ -734,6 +812,221 @@ class DataSynchronizer:
                         batch[0],
                         batch[-1],
                     )
+        return counts
+
+    def sync_intraday(
+        self,
+        requested_symbols: Iterable[str],
+        timeframes: Iterable[BarTimeframe | str],
+        start: datetime,
+        end: datetime,
+        *,
+        incremental: bool | None = None,
+        extended_hours: bool | None = None,
+    ) -> dict[str, Any]:
+        normalized_timeframes = tuple(dict.fromkeys(BarTimeframe(item) for item in timeframes))
+        if not normalized_timeframes or any(not item.intraday for item in normalized_timeframes):
+            raise ValueError("Intraday sync requires one or more of: 5m, 15m, 1h")
+        return self._run_stage(
+            "intraday_bars",
+            lambda: self._sync_intraday(
+                requested_symbols,
+                normalized_timeframes,
+                start,
+                end,
+                incremental=self.intraday_incremental if incremental is None else incremental,
+                extended_hours=(
+                    self.intraday_extended_hours
+                    if extended_hours is None
+                    else extended_hours
+                ),
+            ),
+        )
+
+    def _sync_intraday(
+        self,
+        requested_symbols: Iterable[str],
+        timeframes: tuple[BarTimeframe, ...],
+        start: datetime,
+        end: datetime,
+        *,
+        incremental: bool,
+        extended_hours: bool,
+    ) -> dict[str, Any]:
+        if self.alpaca is None:
+            raise ValueError("Alpaca client is required for intraday synchronization")
+        if start.tzinfo is None or end.tzinfo is None:
+            raise ValueError("Intraday sync boundaries must be timezone-aware")
+        start = start.astimezone(UTC)
+        end = end.astimezone(UTC)
+        if start >= end:
+            raise ValueError("Intraday sync start must be before end")
+        symbols = sorted({symbol.upper() for symbol in requested_symbols if symbol.strip()})
+        if not symbols:
+            raise ValueError(
+                "Intraday sync requires explicit symbols; use --universe all intentionally"
+            )
+        file_size_before = self.database.path.stat().st_size if self.database.path.exists() else 0
+        started = self.timer()
+        download_seconds = 0.0
+        database_write_seconds = 0.0
+        symbols_with_data: set[str] = set()
+        first_timestamp: datetime | None = None
+        last_timestamp: datetime | None = None
+        counts: dict[str, Any] = {
+            "timeframes": [item.value for item in timeframes],
+            "extended_hours": extended_hours,
+            "incremental": incremental,
+            "symbols_requested": len(symbols),
+            "symbols_with_data": 0,
+            "symbols_without_data": 0,
+            "bars_downloaded": 0,
+            "bars_received": 0,
+            "bars_inserted": 0,
+            "bars_updated": 0,
+            "bars_unchanged": 0,
+            "duplicate_bars": 0,
+            "invalid_bars": 0,
+            "request_batches": 0,
+            "sqlite_write_batches": 0,
+            "errors": 0,
+        }
+        for timeframe in timeframes:
+            grouped_ranges: dict[tuple[datetime, datetime], list[str]] = defaultdict(list)
+            for symbol in symbols:
+                ranges = (
+                    _incremental_bar_ranges(
+                        self.database,
+                        symbol,
+                        timeframe,
+                        start,
+                        end,
+                        self.intraday_overlap_bars,
+                    )
+                    if incremental
+                    else [(start, end)]
+                )
+                for requested_range in ranges:
+                    grouped_ranges[requested_range].append(symbol)
+            total_groups = sum(
+                (len(items) + self.intraday_symbol_batch_size - 1)
+                // self.intraday_symbol_batch_size
+                for items in grouped_ranges.values()
+            )
+            progress = 0
+            LOGGER.info(
+                "INTRADAY SYNC timeframe=%s symbols=%d start=%s end=%s extended_hours=%s",
+                timeframe.value,
+                len(symbols),
+                start.isoformat(),
+                end.isoformat(),
+                extended_hours,
+            )
+            for (range_start, range_end), grouped_symbols in sorted(grouped_ranges.items()):
+                for batch in _chunks(grouped_symbols, self.intraday_symbol_batch_size):
+                    progress += 1
+                    batch_failed = False
+                    for window_start, window_end in _time_windows(
+                        range_start, range_end, self.intraday_request_window_days
+                    ):
+                        counts["request_batches"] += 1
+                        try:
+                            download_started = self.timer()
+                            downloaded = self.alpaca.bars(
+                                batch,
+                                window_start,
+                                window_end,
+                                timeframe=timeframe,
+                                batch_size=len(batch),
+                            )
+                            download_seconds += self.timer() - download_started
+                            counts["bars_downloaded"] += len(downloaded)
+                            diagnostics = getattr(self.alpaca, "last_bar_diagnostics", {})
+                            counts["invalid_bars"] += int(diagnostics.get("invalid_bars", 0))
+                            selected = (
+                                downloaded
+                                if extended_hours
+                                else [
+                                    bar
+                                    for bar in downloaded
+                                    if is_regular_session_timestamp(bar.timestamp)
+                                ]
+                            )
+                            counts["bars_received"] += len(selected)
+                            symbols_with_data.update(bar.symbol for bar in selected)
+                            if selected:
+                                local_first = min(bar.timestamp for bar in selected)
+                                local_last = max(bar.timestamp for bar in selected)
+                                first_timestamp = (
+                                    local_first
+                                    if first_timestamp is None
+                                    else min(first_timestamp, local_first)
+                                )
+                                last_timestamp = (
+                                    local_last
+                                    if last_timestamp is None
+                                    else max(last_timestamp, local_last)
+                                )
+                            write_started = self.timer()
+                            write_counts = self.database.upsert_bars_with_stats(selected)
+                            database_write_seconds += self.timer() - write_started
+                            counts["sqlite_write_batches"] += 1
+                            for key in (
+                                "bars_inserted",
+                                "bars_updated",
+                                "bars_unchanged",
+                                "duplicate_bars",
+                                "invalid_bars",
+                            ):
+                                counts[key] += write_counts[key]
+                        except Exception:
+                            counts["errors"] += 1
+                            batch_failed = True
+                            LOGGER.exception(
+                                "Failed intraday batch timeframe=%s symbols=%s start=%s end=%s",
+                                timeframe.value,
+                                ",".join(batch),
+                                window_start.isoformat(),
+                                window_end.isoformat(),
+                            )
+                            # Do not jump past a failed time window. Keeping the local
+                            # high-water mark before the failure makes the next incremental
+                            # run resume from the last durable batch without a silent hole.
+                            break
+                    LOGGER.info(
+                        "INTRADAY SYNC progress timeframe=%s [%d/%d] symbol_batches bars=%d",
+                        timeframe.value,
+                        progress,
+                        total_groups,
+                        counts["bars_received"],
+                    )
+                    if batch_failed:
+                        continue
+        elapsed = max(self.timer() - started, 1e-12)
+        file_size_after = self.database.path.stat().st_size if self.database.path.exists() else 0
+        counts.update(
+            {
+                "symbols_with_data": len(symbols_with_data),
+                "symbols_without_data": len(set(symbols) - symbols_with_data),
+                "first_timestamp": first_timestamp.isoformat() if first_timestamp else None,
+                "last_timestamp": last_timestamp.isoformat() if last_timestamp else None,
+                "records_updated": counts["bars_inserted"] + counts["bars_updated"],
+                "download_seconds": round(download_seconds, 3),
+                "database_write_seconds": round(database_write_seconds, 3),
+                "bars_per_second": round(counts["bars_received"] / elapsed, 3),
+                "database_size_delta_bytes": file_size_after - file_size_before,
+                "sqlite_query_count": len(symbols) * len(timeframes)
+                + counts["sqlite_write_batches"] * 4,
+            }
+        )
+        LOGGER.info(
+            "INTRADAY SYNC COMPLETE timeframes=%s bars=%d inserted=%d updated=%d errors=%d",
+            ",".join(item.value for item in timeframes),
+            counts["bars_received"],
+            counts["bars_inserted"],
+            counts["bars_updated"],
+            counts["errors"],
+        )
         return counts
 
     def refresh_market(self, requested_symbols: list[str] | None = None) -> dict[str, Any]:
