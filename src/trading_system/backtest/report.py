@@ -305,6 +305,20 @@ def format_comparison_table(comparison: StrategyComparison) -> str:
             f"{_percent(position.average_post_exit_mfe_5d)}"
         )
     rows.append(f"Shared point-in-time screens: {comparison.shared_screen_sessions}")
+    prefetch = comparison.intraday_prefetch
+    if not prefetch.required:
+        rows.append("Intraday prefetch: not required")
+    else:
+        state = "enabled" if prefetch.enabled else "disabled"
+        rows.append(
+            f"Intraday prefetch: {state} | candidate symbols: "
+            f"{prefetch.candidate_symbols}"
+        )
+        for timeframe, details in prefetch.timeframes.items():
+            rows.append(
+                f"  {timeframe}: complete={details.already_complete_symbols} "
+                f"sync={details.sync_requested_symbols} bars_added={details.bars_added}"
+            )
     if comparison.skipped_strategies:
         rows.append("Skipped strategies:")
         rows.extend(

@@ -374,6 +374,32 @@ class BacktestResult(BaseModel):
     exits_by_reason: dict[str, int] = Field(default_factory=dict)
 
 
+class IntradayPrefetchTimeframe(BaseModel):
+    """Compact, serializable diagnostics for one comparison timeframe."""
+
+    model_config = ConfigDict(frozen=True)
+
+    candidate_symbols: int = Field(ge=0)
+    already_complete_symbols: int = Field(ge=0)
+    sync_requested_symbols: int = Field(ge=0)
+    warmup_bars: int = Field(ge=1)
+    extended_hours: bool
+    bars_added: int = Field(default=0, ge=0)
+    provider_requests: int = Field(default=0, ge=0)
+    failure_reasons: tuple[str, ...] = ()
+
+
+class IntradayPrefetch(BaseModel):
+    """Preparation metadata kept alongside a strategy comparison report."""
+
+    model_config = ConfigDict(frozen=True)
+
+    required: bool = False
+    enabled: bool = False
+    candidate_symbols: int = Field(default=0, ge=0)
+    timeframes: dict[str, IntradayPrefetchTimeframe] = Field(default_factory=dict)
+
+
 class StrategyComparison(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -386,4 +412,5 @@ class StrategyComparison(BaseModel):
     shared_screen_sessions: int = Field(ge=0)
     comparison_kind: StrategyComparisonKind = StrategyComparisonKind.SCORE_VARIANTS
     skipped_strategies: dict[str, str] = Field(default_factory=dict)
+    intraday_prefetch: IntradayPrefetch = IntradayPrefetch()
     warnings: tuple[str, ...] = ()

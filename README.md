@@ -404,14 +404,43 @@ identischen Point-in-Time-Screens. Details, Exit-Prioritäten und Lookahead-Rege
 Trade-Ideen, Partial-Exit-Legs, Profit Capture, Post-Exit-, Re-Entry-, Stop- und Score-Diagnostik
 sind in [`docs/position-diagnostics.md`](docs/position-diagnostics.md) dokumentiert.
 
-Ein Backtest läuft ausschließlich auf den lokal gespeicherten, adjustierten Daily Bars und
-Fundamentaldaten. Er erzeugt keine Netzwerkaufrufe:
+Der `BacktestEngine` läuft ausschließlich auf lokal gespeicherten Bars und Fundamentaldaten und
+erzeugt selbst keine Netzwerkaufrufe. `compare-strategies` besitzt davor eine getrennte
+Vorbereitungsphase, die bei Bedarf fehlende Intraday-Daten beschafft:
 
 ```bash
 python -m trading_system.cli backtest --start 2025-05-01 --end 2025-06-30
 python -m trading_system.cli backtest --start 2025-05-01 --end 2025-06-30 --variant A
 python -m trading_system.cli compare-strategies --start 2025-05-01 --end 2025-06-30
 ```
+
+### Automatischer Intraday-Prefetch für Vergleiche
+
+`compare-strategies` löst zunächst alle angeforderten Position-Management-Presets auf und erkennt
+daraus generisch die benötigten Timeframes (`5m`, `15m` oder `1h`). Für Intraday-Runs berechnet es
+die historischen Point-in-Time-Screens einmal, verwendet mit `evaluate_variant_entry(...)` denselben
+kanonischen Entry-Funnel wie der Backtester und sammelt nur daraus grundsätzlich entry-fähige
+Symbole. Der letzte Vergleichstag wird nicht als Signal-Tag verwendet, weil daraus innerhalb des
+Backtest-Horizonts kein Next-Session-Entry mehr entstehen kann.
+
+Nur diese deduplizierten Kandidaten werden auf lokale Session-Abdeckung und den konfigurierten
+`intraday.warmup_bars`-Vorlauf geprüft. Fehlende Bereiche werden über den bestehenden inkrementellen
+Alpaca-Sync geladen; vorhandene Daten, `intraday.sync.overlap_bars`, Batching, Request-Fenster und
+`intraday.extended_hours` werden unverändert wiederverwendet. Es findet kein Intraday-Download für
+das gesamte Aktienuniversum statt. Nach der Vorbereitung arbeitet der Engine wieder ausschließlich
+mit dem eingefrorenen lokalen Datenbestand. Providerfehler oder weiterhin unvollständige Coverage
+skippen nur die betroffenen Intraday-Runs mit einer konkreten Ursache; Daily-Runs laufen weiter.
+
+```powershell
+python -m trading_system.cli compare-strategies `
+  --start 2026-05-01 `
+  --end 2026-08-12
+```
+
+Für einen vollständig offline ausgeführten Vergleich deaktiviert
+`--no-intraday-prefetch` die automatische Beschaffung. Dann gilt das bisherige Verhalten:
+Vorhandene lokale Intraday-Bars werden verwendet und Runs mit fehlenden Daten werden als skipped
+ausgewiesen. Der manuelle Befehl `sync-intraday` bleibt unabhängig davon verfügbar.
 
 ### Point-in-Time- und Ausführungsmodell
 

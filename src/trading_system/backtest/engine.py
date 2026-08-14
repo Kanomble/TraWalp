@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from bisect import bisect_right
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ from trading_system.config import PositionManagementConfig, StrategyConfig
 from trading_system.data.database import Database
 from trading_system.data.market_sessions import (
     intraday_session_bounds,
+    intraday_warmup_start,
     is_regular_session_timestamp,
     regular_session_bounds,
     trading_sessions_between,
@@ -46,6 +48,8 @@ from trading_system.models.backtest import (
     BenchmarkResult,
     EntryTriggerInfo,
     EquityPoint,
+    IntradayPrefetch,
+    IntradayPrefetchTimeframe,
     PositionManagementPreset,
     ScoreObservation,
     StrategyComparison,
@@ -81,6 +85,19 @@ class MissingIntradayDataError(ValueError):
 
 class ScreenSource(Protocol):
     def screen(self, session: date) -> ScreenReport: ...
+
+
+class IntradaySynchronizer(Protocol):
+    def sync_intraday(
+        self,
+        requested_symbols,
+        timeframes,
+        start: datetime,
+        end: datetime,
+        *,
+        incremental: bool | None = None,
+        extended_hours: bool | None = None,
+    ) -> dict: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +184,54 @@ class CachedScreenSource:
         return getattr(self.source, "diagnostics", None)
 
 
+@dataclass(frozen=True, slots=True)
+class IntradayPrefetchRequirement:
+    """Candidate-bounded local data requirement for one position timeframe."""
+
+    timeframe: BarTimeframe
+    variants: tuple[StrategyVariant, ...]
+    symbols: tuple[str, ...]
+    first_execution_sessions: tuple[tuple[str, date], ...]
+    comparison_sessions: tuple[date, ...]
+    requested_start: datetime
+    requested_end: datetime
+    warmup_bars: int
+    extended_hours: bool
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyComparisonPreparation:
+    """Frozen comparison plan whose PIT screen cache is reused by every run."""
+
+    screen_source: CachedScreenSource
+    requested_start: date
+    requested_end: date
+    comparison_kind: StrategyComparisonKind
+    sessions: tuple[date, ...]
+    runs: tuple[tuple[StrategyVariant, PositionManagementPreset], ...]
+    intraday_requirements: tuple[IntradayPrefetchRequirement, ...]
+
+    @property
+    def intraday_candidate_symbols(self) -> int:
+        return len(
+            {
+                symbol
+                for requirement in self.intraday_requirements
+                for symbol in requirement.symbols
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class IntradayCoverageAssessment:
+    """Local execution coverage before a provider synchronization."""
+
+    requirement: IntradayPrefetchRequirement
+    complete_symbols: tuple[str, ...]
+    sync_symbols: tuple[str, ...]
+    incomplete_reasons: tuple[tuple[str, tuple[str, ...]], ...]
+
+
 @dataclass(frozen=True)
 class _PendingEntry:
     record: ScreenRecord
@@ -237,18 +302,7 @@ class BacktestEngine:
             )
         )
         self._position_sequence = 0
-        official_sessions = set(trading_sessions_between(start, end))
-        sessions = [
-            session
-            for session in self.database.bar_sessions(start, end)
-            if session in official_sessions
-        ]
-        if len(sessions) < 2:
-            first, last = self.database.bar_date_bounds()
-            raise ValueError(
-                "Backtest requires at least two local market sessions in the requested range; "
-                f"local bar coverage is {first} through {last}"
-            )
+        sessions = _backtest_sessions(self.database, start, end)
 
         cash = float(self.config.backtest.initial_capital)
         positions: dict[str, PositionState] = {}
@@ -1352,6 +1406,359 @@ class BacktestEngine:
         }
 
 
+def _backtest_sessions(database: Database, start: date, end: date) -> list[date]:
+    official_sessions = set(trading_sessions_between(start, end))
+    sessions = [
+        session
+        for session in database.bar_sessions(start, end)
+        if session in official_sessions
+    ]
+    if len(sessions) < 2:
+        first, last = database.bar_date_bounds()
+        raise ValueError(
+            "Backtest requires at least two local market sessions in the requested range; "
+            f"local bar coverage is {first} through {last}"
+        )
+    return sessions
+
+
+def prepare_strategy_comparison(
+    database: Database,
+    config: StrategyConfig,
+    start: date,
+    end: date,
+    *,
+    comparison_kind: StrategyComparisonKind = StrategyComparisonKind.ALL,
+) -> StrategyComparisonPreparation:
+    """Build one comparison plan and populate its shared screens only when needed."""
+
+    sessions = tuple(_backtest_sessions(database, start, end))
+    runs = _comparison_runs(comparison_kind)
+    shared = CachedScreenSource(HistoricalFeatureScreenSource(database, config, start, end))
+    requirements = determine_intraday_comparison_requirements(
+        config,
+        runs,
+        shared,
+        sessions,
+    )
+    return StrategyComparisonPreparation(
+        screen_source=shared,
+        requested_start=start,
+        requested_end=end,
+        comparison_kind=comparison_kind,
+        sessions=sessions,
+        runs=runs,
+        intraday_requirements=requirements,
+    )
+
+
+def determine_intraday_comparison_requirements(
+    config: StrategyConfig,
+    runs: tuple[tuple[StrategyVariant, PositionManagementPreset], ...],
+    screen_source: ScreenSource,
+    sessions: tuple[date, ...],
+) -> tuple[IntradayPrefetchRequirement, ...]:
+    """Resolve run timeframes and discover eligible PIT candidates without lookahead."""
+
+    timeframes_by_variant: dict[StrategyVariant, set[BarTimeframe]] = {}
+    for variant, preset in runs:
+        resolved = position_management_preset(
+            config.position_management,
+            preset,
+            legacy_max_holding_days=config.backtest.max_holding_days,
+        )
+        timeframe = BarTimeframe(resolved.bar_timeframe)
+        if timeframe.intraday:
+            timeframes_by_variant.setdefault(variant, set()).add(timeframe)
+    if not timeframes_by_variant:
+        return ()
+
+    earliest_execution: dict[BarTimeframe, dict[str, date]] = {
+        timeframe: {}
+        for timeframes in timeframes_by_variant.values()
+        for timeframe in timeframes
+    }
+    for index, signal_session in enumerate(sessions[:-1]):
+        report = screen_source.screen(signal_session)
+        execution_session = sessions[index + 1]
+        for variant, timeframes in timeframes_by_variant.items():
+            eligible_symbols = {
+                record.symbol.upper()
+                for record in report.records
+                if evaluate_variant_entry(record, variant, config).eligible
+            }
+            for timeframe in timeframes:
+                candidates = earliest_execution[timeframe]
+                for symbol in eligible_symbols:
+                    candidates.setdefault(symbol, execution_session)
+
+    requirements: list[IntradayPrefetchRequirement] = []
+    for timeframe in sorted(earliest_execution, key=lambda item: item.value):
+        candidates = earliest_execution[timeframe]
+        first_execution = min(candidates.values(), default=sessions[0])
+        requirements.append(
+            IntradayPrefetchRequirement(
+                timeframe=timeframe,
+                variants=tuple(
+                    sorted(
+                        (
+                            variant
+                            for variant, timeframes in timeframes_by_variant.items()
+                            if timeframe in timeframes
+                        ),
+                        key=lambda item: item.value,
+                    )
+                ),
+                symbols=tuple(sorted(candidates)),
+                first_execution_sessions=tuple(sorted(candidates.items())),
+                comparison_sessions=sessions,
+                requested_start=intraday_warmup_start(
+                    first_execution,
+                    timeframe,
+                    config.intraday.warmup_bars,
+                    extended_hours=config.intraday.extended_hours,
+                ),
+                requested_end=intraday_session_bounds(
+                    sessions[-1], extended_hours=config.intraday.extended_hours
+                )[1],
+                warmup_bars=config.intraday.warmup_bars,
+                extended_hours=config.intraday.extended_hours,
+            )
+        )
+    return tuple(requirements)
+
+
+def assess_comparison_intraday_coverage(
+    database: Database,
+    requirements: tuple[IntradayPrefetchRequirement, ...],
+) -> tuple[IntradayCoverageAssessment, ...]:
+    """Batch-read candidate bars and identify symbols that the engine cannot consume yet."""
+
+    assessments: list[IntradayCoverageAssessment] = []
+    for requirement in requirements:
+        first_execution = dict(requirement.first_execution_sessions)
+        if not requirement.symbols:
+            assessments.append(
+                IntradayCoverageAssessment(requirement, (), (), ())
+            )
+            continue
+        coverage_sessions = trading_sessions_between(
+            requirement.requested_start.date(), requirement.comparison_sessions[-1]
+        )
+        session_windows = [
+            (
+                session,
+                *intraday_session_bounds(
+                    session, extended_hours=requirement.extended_hours
+                ),
+            )
+            for session in coverage_sessions
+        ]
+        window_starts = [opening for _, opening, _ in session_windows]
+        bars_by_symbol: dict[str, list[tuple[datetime, date]]] = {
+            symbol: [] for symbol in requirement.symbols
+        }
+        bars = database.bars_between(
+            requirement.symbols,
+            requirement.requested_start,
+            requirement.requested_end,
+            timeframe=requirement.timeframe,
+        )
+        for bar in bars:
+            window_index = bisect_right(window_starts, bar.timestamp) - 1
+            if window_index < 0:
+                continue
+            session, opening, closing = session_windows[window_index]
+            if opening <= bar.timestamp < closing:
+                bars_by_symbol[bar.symbol].append((bar.timestamp, session))
+
+        incomplete: dict[str, tuple[str, ...]] = {}
+        comparison_index = {
+            session: index for index, session in enumerate(requirement.comparison_sessions)
+        }
+        for symbol in requirement.symbols:
+            symbol_bars = bars_by_symbol[symbol]
+            execution_session = first_execution[symbol]
+            reasons: list[str] = []
+            if not symbol_bars:
+                reasons.append("no_data")
+            warmup_count = sum(
+                1 for _, bar_session in symbol_bars if bar_session < execution_session
+            )
+            if warmup_count < requirement.warmup_bars:
+                reasons.append("warmup")
+            present_sessions = {bar_session for _, bar_session in symbol_bars}
+            required_sessions = requirement.comparison_sessions[
+                comparison_index[execution_session] :
+            ]
+            missing_sessions = [
+                session for session in required_sessions if session not in present_sessions
+            ]
+            if missing_sessions:
+                reasons.append(
+                    "sessions=" + ",".join(session.isoformat() for session in missing_sessions)
+                )
+            if reasons:
+                incomplete[symbol] = tuple(reasons)
+        sync_symbols = tuple(sorted(incomplete))
+        assessments.append(
+            IntradayCoverageAssessment(
+                requirement=requirement,
+                complete_symbols=tuple(
+                    symbol for symbol in requirement.symbols if symbol not in incomplete
+                ),
+                sync_symbols=sync_symbols,
+                incomplete_reasons=tuple(sorted(incomplete.items())),
+            )
+        )
+    return tuple(assessments)
+
+
+def comparison_intraday_prefetch_metadata(
+    preparation: StrategyComparisonPreparation,
+    *,
+    enabled: bool,
+) -> IntradayPrefetch:
+    """Describe a required-but-not-run prefetch, including the CLI opt-out case."""
+
+    return IntradayPrefetch(
+        required=bool(preparation.intraday_requirements),
+        enabled=enabled,
+        candidate_symbols=preparation.intraday_candidate_symbols,
+        timeframes={
+            requirement.timeframe.value: IntradayPrefetchTimeframe(
+                candidate_symbols=len(requirement.symbols),
+                already_complete_symbols=0,
+                sync_requested_symbols=0,
+                warmup_bars=requirement.warmup_bars,
+                extended_hours=requirement.extended_hours,
+            )
+            for requirement in preparation.intraday_requirements
+        },
+    )
+
+
+def prefetch_comparison_intraday_data(
+    database: Database,
+    config: StrategyConfig,
+    preparation: StrategyComparisonPreparation,
+    assessments: tuple[IntradayCoverageAssessment, ...],
+    synchronizer_factory: Callable[[], IntradaySynchronizer],
+) -> IntradayPrefetch:
+    """Synchronize only deficient candidate/timeframe pairs, then verify local coverage."""
+
+    if tuple(item.requirement for item in assessments) != preparation.intraday_requirements:
+        raise ValueError("Intraday coverage assessments do not match the comparison plan")
+    synchronizer: IntradaySynchronizer | None = None
+    factory_failure: str | None = None
+    timeframes: dict[str, IntradayPrefetchTimeframe] = {}
+    for assessment in assessments:
+        requirement = assessment.requirement
+        bars_added = 0
+        provider_requests = 0
+        failure_reasons: list[str] = []
+        if assessment.sync_symbols:
+            if synchronizer is None and factory_failure is None:
+                try:
+                    synchronizer = synchronizer_factory()
+                except Exception as exc:
+                    factory_failure = (
+                        "intraday prefetch failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+            if factory_failure is not None:
+                failure_reasons.append(factory_failure)
+            else:
+                assert synchronizer is not None
+                try:
+                    sync_result = synchronizer.sync_intraday(
+                        assessment.sync_symbols,
+                        (requirement.timeframe,),
+                        requirement.requested_start,
+                        requirement.requested_end,
+                        incremental=config.intraday.sync.incremental,
+                        extended_hours=requirement.extended_hours,
+                    )
+                except Exception as exc:
+                    failure_reasons.append(
+                        "intraday prefetch failed for "
+                        f"{requirement.timeframe.value}: {type(exc).__name__}: {exc}"
+                    )
+                else:
+                    bars_added = int(sync_result.get("bars_inserted", 0))
+                    provider_requests = int(sync_result.get("request_batches", 0))
+                    provider_errors = int(sync_result.get("errors", 0))
+                    if provider_errors:
+                        failure_reasons.append(
+                            "intraday prefetch failed for "
+                            f"{requirement.timeframe.value}: {provider_errors} provider "
+                            "request batch(es) failed"
+                        )
+                    post_sync = assess_comparison_intraday_coverage(
+                        database, (requirement,)
+                    )[0]
+                    failure_reasons.extend(_coverage_failure_messages(post_sync))
+        timeframes[requirement.timeframe.value] = IntradayPrefetchTimeframe(
+            candidate_symbols=len(requirement.symbols),
+            already_complete_symbols=len(assessment.complete_symbols),
+            sync_requested_symbols=len(assessment.sync_symbols),
+            warmup_bars=requirement.warmup_bars,
+            extended_hours=requirement.extended_hours,
+            bars_added=bars_added,
+            provider_requests=provider_requests,
+            failure_reasons=tuple(dict.fromkeys(failure_reasons)),
+        )
+    return IntradayPrefetch(
+        required=bool(preparation.intraday_requirements),
+        enabled=True,
+        candidate_symbols=preparation.intraday_candidate_symbols,
+        timeframes=timeframes,
+    )
+
+
+def _coverage_failure_messages(
+    assessment: IntradayCoverageAssessment,
+) -> tuple[str, ...]:
+    timeframe = assessment.requirement.timeframe.value
+    reasons = dict(assessment.incomplete_reasons)
+    no_data = [symbol for symbol, items in reasons.items() if "no_data" in items]
+    warmup = [
+        symbol
+        for symbol, items in reasons.items()
+        if "warmup" in items and symbol not in no_data
+    ]
+    session_gaps = [
+        symbol
+        for symbol, items in reasons.items()
+        if any(item.startswith("sessions=") for item in items)
+        and symbol not in no_data
+        and symbol not in warmup
+    ]
+    messages: list[str] = []
+    if no_data:
+        messages.append(
+            f"provider returned no {timeframe} data for {_compact_symbols(no_data)}"
+        )
+    if warmup:
+        messages.append(
+            f"insufficient {timeframe} warmup for {_compact_symbols(warmup)}"
+        )
+    if session_gaps:
+        messages.append(
+            f"local {timeframe} data remains incomplete for "
+            f"{_compact_symbols(session_gaps)}"
+        )
+    return tuple(messages)
+
+
+def _compact_symbols(symbols: list[str], *, limit: int = 10) -> str:
+    selected = sorted(symbols)
+    rendered = ",".join(selected[:limit])
+    if len(selected) > limit:
+        rendered += f" (+{len(selected) - limit} more)"
+    return rendered
+
+
 def compare_strategies(
     database: Database,
     config: StrategyConfig,
@@ -1359,17 +1766,45 @@ def compare_strategies(
     end: date,
     *,
     comparison_kind: StrategyComparisonKind = StrategyComparisonKind.ALL,
+    preparation: StrategyComparisonPreparation | None = None,
+    intraday_prefetch: IntradayPrefetch | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> StrategyComparison:
     """Compare score variants, position presets, or both on shared PIT screens."""
 
-    shared = CachedScreenSource(HistoricalFeatureScreenSource(database, config, start, end))
+    prepared = preparation or prepare_strategy_comparison(
+        database, config, start, end, comparison_kind=comparison_kind
+    )
+    if (
+        prepared.requested_start != start
+        or prepared.requested_end != end
+        or prepared.comparison_kind is not comparison_kind
+    ):
+        raise ValueError("Prepared strategy comparison does not match the requested run")
+    shared = prepared.screen_source
     generated_at = clock().isoformat()
-    runs = _comparison_runs(comparison_kind)
+    runs = prepared.runs
+    prefetch = intraday_prefetch or comparison_intraday_prefetch_metadata(
+        prepared, enabled=False
+    )
     results: list[BacktestResult] = []
     skipped: dict[str, str] = {}
     for variant, preset in runs:
         label = _comparison_label(variant, preset, comparison_kind)
+        resolved = position_management_preset(
+            config.position_management,
+            preset,
+            legacy_max_holding_days=config.backtest.max_holding_days,
+        )
+        timeframe = BarTimeframe(resolved.bar_timeframe)
+        prefetch_timeframe = prefetch.timeframes.get(timeframe.value)
+        if (
+            timeframe.intraday
+            and prefetch_timeframe is not None
+            and prefetch_timeframe.failure_reasons
+        ):
+            skipped[label] = "; ".join(prefetch_timeframe.failure_reasons)
+            continue
         try:
             result = BacktestEngine(
                 database,
@@ -1395,6 +1830,7 @@ def compare_strategies(
         warnings=first.warnings,
         comparison_kind=comparison_kind,
         skipped_strategies=skipped,
+        intraday_prefetch=prefetch,
     )
 
 

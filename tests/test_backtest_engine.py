@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -18,7 +18,13 @@ from trading_system.config import (
     load_settings,
 )
 from trading_system.data.database import Database
-from trading_system.data.market_sessions import regular_session_bounds, trading_sessions_between
+from trading_system.data.market_sessions import (
+    intraday_session_bounds,
+    intraday_warmup_start,
+    regular_session_bounds,
+    trading_sessions_between,
+)
+from trading_system.data.sync import DataSynchronizer
 from trading_system.models.backtest import (
     PositionManagementPreset,
     StrategyComparisonKind,
@@ -138,6 +144,62 @@ def _database(tmp_path, bars: list[DailyBar]) -> Database:
     database.initialize()
     database.upsert_bars(bars)
     return database
+
+
+def _required_intraday_bars(requirement, symbols=None) -> list[DailyBar]:
+    requested = symbols or requirement.symbols
+    output: list[DailyBar] = []
+    for session in trading_sessions_between(
+        requirement.requested_start.date(), requirement.comparison_sessions[-1]
+    ):
+        opening, closing = intraday_session_bounds(
+            session, extended_hours=requirement.extended_hours
+        )
+        timestamp = opening
+        while timestamp < closing:
+            if requirement.requested_start <= timestamp < requirement.requested_end:
+                output.extend(
+                    DailyBar(
+                        symbol=symbol,
+                        timeframe=requirement.timeframe,
+                        timestamp=timestamp,
+                        open=Decimal("100"),
+                        high=Decimal("101"),
+                        low=Decimal("99"),
+                        close=Decimal("100"),
+                        volume=1_000,
+                    )
+                    for symbol in requested
+                )
+            timestamp += requirement.timeframe.duration
+    return output
+
+
+class FillingIntradaySynchronizer:
+    def __init__(self, database: Database, requirement, *, provide_data: bool = True) -> None:
+        self.database = database
+        self.requirement = requirement
+        self.provide_data = provide_data
+        self.calls = []
+
+    def sync_intraday(
+        self, symbols, timeframes, start, end, *, incremental, extended_hours
+    ):
+        selected = tuple(symbols)
+        self.calls.append(
+            (selected, tuple(timeframes), start, end, incremental, extended_hours)
+        )
+        bars = (
+            _required_intraday_bars(self.requirement, selected)
+            if self.provide_data
+            else []
+        )
+        stats = self.database.upsert_bars_with_stats(bars)
+        return {
+            **stats,
+            "request_batches": 1,
+            "errors": 0,
+        }
 
 
 def test_signal_friday_enters_monday_open_with_fractional_size_and_costs(tmp_path) -> None:
@@ -440,6 +502,348 @@ def test_unified_strategy_comparison_includes_score_and_position_strategies(
     csv_text = paths["csv"].read_text(encoding="utf-8")
     assert "score_variant,position_management" in csv_text
     assert "C/atr-trailing,C,atr-trailing" in csv_text
+
+
+def test_score_variant_comparison_does_not_initialize_intraday_sync(
+    monkeypatch, tmp_path
+) -> None:
+    sessions = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
+    database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
+    source = FixtureScreens({sessions[0]: (_record(),)})
+    monkeypatch.setattr(engine_module, "HistoricalFeatureScreenSource", lambda *_args: source)
+    preparation = engine_module.prepare_strategy_comparison(
+        database,
+        _config(),
+        sessions[0],
+        sessions[-1],
+        comparison_kind=StrategyComparisonKind.SCORE_VARIANTS,
+    )
+    factory_calls = 0
+
+    def synchronizer_factory():
+        nonlocal factory_calls
+        factory_calls += 1
+        raise AssertionError("daily comparison must not initialize Alpaca")
+
+    assessments = engine_module.assess_comparison_intraday_coverage(
+        database, preparation.intraday_requirements
+    )
+    prefetch = engine_module.prefetch_comparison_intraday_data(
+        database, _config(), preparation, assessments, synchronizer_factory
+    )
+    comparison = engine_module.compare_strategies(
+        database,
+        _config(),
+        sessions[0],
+        sessions[-1],
+        comparison_kind=StrategyComparisonKind.SCORE_VARIANTS,
+        preparation=preparation,
+        intraday_prefetch=prefetch,
+    )
+
+    assert preparation.intraday_requirements == ()
+    assert factory_calls == 0
+    assert prefetch.required is False
+    assert len(comparison.variants) == 3
+
+
+def test_intraday_prefetch_uses_only_pit_candidates_and_reuses_shared_screens(
+    monkeypatch, tmp_path
+) -> None:
+    sessions = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
+    database = _database(
+        tmp_path,
+        [_bar(symbol, session) for symbol in ("AAA", "BBB") for session in sessions],
+    )
+    source = FixtureScreens(
+        {
+            sessions[0]: (_record("AAA"), _record("BBB", quality=0)),
+            sessions[1]: (_record("AAA"),),
+        }
+    )
+    monkeypatch.setattr(engine_module, "HistoricalFeatureScreenSource", lambda *_args: source)
+    config = _config(min_quality_score=1)
+    preparation = engine_module.prepare_strategy_comparison(
+        database, config, sessions[0], sessions[-1]
+    )
+    requirement = preparation.intraday_requirements[0]
+    assessments = engine_module.assess_comparison_intraday_coverage(
+        database, preparation.intraday_requirements
+    )
+    synchronizer = FillingIntradaySynchronizer(database, requirement)
+    prefetch = engine_module.prefetch_comparison_intraday_data(
+        database, config, preparation, assessments, lambda: synchronizer
+    )
+    comparison = engine_module.compare_strategies(
+        database,
+        config,
+        sessions[0],
+        sessions[-1],
+        preparation=preparation,
+        intraday_prefetch=prefetch,
+    )
+
+    assert requirement.timeframe is BarTimeframe.MINUTES_15
+    assert requirement.symbols == ("AAA",)
+    assert requirement.requested_start == intraday_warmup_start(
+        sessions[1], BarTimeframe.MINUTES_15, config.intraday.warmup_bars
+    )
+    assert synchronizer.calls[0][0] == ("AAA",)
+    assert synchronizer.calls[0][1] == (BarTimeframe.MINUTES_15,)
+    assert synchronizer.calls[0][4] is True
+    assert prefetch.timeframes["15m"].bars_added > 0
+    assert comparison.skipped_strategies == {}
+    assert source.calls == sessions[:-1]
+
+
+def test_intraday_prefetch_never_expands_candidates_to_universe(
+    monkeypatch, tmp_path
+) -> None:
+    sessions = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
+    universe = [f"U{index:03d}" for index in range(100)]
+    database = _database(
+        tmp_path,
+        [_bar(symbol, session) for symbol in universe for session in sessions],
+    )
+    database.upsert_assets(
+        TradableAsset(symbol=symbol, name=symbol, tradable=True, fractionable=True)
+        for symbol in universe
+    )
+    candidates = universe[:3]
+    source = FixtureScreens({sessions[0]: tuple(_record(symbol) for symbol in candidates)})
+    monkeypatch.setattr(engine_module, "HistoricalFeatureScreenSource", lambda *_args: source)
+    config = _config()
+    preparation = engine_module.prepare_strategy_comparison(
+        database, config, sessions[0], sessions[-1]
+    )
+    requirement = preparation.intraday_requirements[0]
+    assessment = engine_module.assess_comparison_intraday_coverage(
+        database, preparation.intraday_requirements
+    )
+    synchronizer = FillingIntradaySynchronizer(database, requirement)
+    engine_module.prefetch_comparison_intraday_data(
+        database, config, preparation, assessment, lambda: synchronizer
+    )
+
+    assert len(universe) == 100
+    assert requirement.symbols == tuple(candidates)
+    assert synchronizer.calls[0][0] == tuple(candidates)
+
+
+def test_complete_intraday_candidate_coverage_needs_no_provider(
+    monkeypatch, tmp_path
+) -> None:
+    sessions = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
+    database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
+    source = FixtureScreens({sessions[0]: (_record(),)})
+    monkeypatch.setattr(engine_module, "HistoricalFeatureScreenSource", lambda *_args: source)
+    config = _config()
+    preparation = engine_module.prepare_strategy_comparison(
+        database, config, sessions[0], sessions[-1]
+    )
+    database.upsert_bars(_required_intraday_bars(preparation.intraday_requirements[0]))
+    assessments = engine_module.assess_comparison_intraday_coverage(
+        database, preparation.intraday_requirements
+    )
+    factory_called = False
+
+    def synchronizer_factory():
+        nonlocal factory_called
+        factory_called = True
+        raise AssertionError("complete local coverage must not initialize Alpaca")
+
+    prefetch = engine_module.prefetch_comparison_intraday_data(
+        database, config, preparation, assessments, synchronizer_factory
+    )
+    comparison = engine_module.compare_strategies(
+        database,
+        config,
+        sessions[0],
+        sessions[-1],
+        preparation=preparation,
+        intraday_prefetch=prefetch,
+    )
+
+    assert assessments[0].complete_symbols == ("AAA",)
+    assert assessments[0].sync_symbols == ()
+    assert factory_called is False
+    assert prefetch.timeframes["15m"].already_complete_symbols == 1
+    assert prefetch.timeframes["15m"].sync_requested_symbols == 0
+    assert "C/intraday-dynamic" not in comparison.skipped_strategies
+
+
+class RecordingIntradayProvider:
+    def __init__(self, bars: list[DailyBar]) -> None:
+        self.bars_available = bars
+        self.calls = []
+        self.last_bar_diagnostics = {"invalid_bars": 0}
+
+    def bars(self, symbols, start, end, *, timeframe, batch_size):
+        selected = tuple(symbols)
+        self.calls.append((selected, start, end, timeframe, batch_size))
+        return [
+            bar
+            for bar in self.bars_available
+            if bar.symbol in selected
+            and bar.timeframe is timeframe
+            and start <= bar.timestamp < end
+        ]
+
+
+def test_partial_intraday_history_uses_existing_incremental_sync(
+    monkeypatch, tmp_path
+) -> None:
+    sessions = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
+    database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
+    source = FixtureScreens({sessions[0]: (_record(),)})
+    monkeypatch.setattr(engine_module, "HistoricalFeatureScreenSource", lambda *_args: source)
+    config = _config()
+    preparation = engine_module.prepare_strategy_comparison(
+        database, config, sessions[0], sessions[-1]
+    )
+    requirement = preparation.intraday_requirements[0]
+    all_bars = _required_intraday_bars(requirement)
+    first_execution = dict(requirement.first_execution_sessions)["AAA"]
+    database.upsert_bars([bar for bar in all_bars if bar.timestamp.date() >= first_execution])
+    provider = RecordingIntradayProvider(all_bars)
+    synchronizer = DataSynchronizer(
+        database,
+        provider,  # type: ignore[arg-type]
+        None,
+        intraday_overlap_bars=2,
+        intraday_request_window_days=31,
+    )
+    assessments = engine_module.assess_comparison_intraday_coverage(
+        database, preparation.intraday_requirements
+    )
+    prefetch = engine_module.prefetch_comparison_intraday_data(
+        database, config, preparation, assessments, lambda: synchronizer
+    )
+
+    assert assessments[0].sync_symbols == ("AAA",)
+    assert provider.calls
+    requested_duration = sum(
+        (end - start for _, start, end, _, _ in provider.calls),
+        start=timedelta(),
+    )
+    assert requested_duration < requirement.requested_end - requirement.requested_start
+    assert prefetch.timeframes["15m"].failure_reasons == ()
+
+
+def test_missing_intraday_warmup_is_prefetched_before_backtest(
+    monkeypatch, tmp_path
+) -> None:
+    sessions = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
+    database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
+    source = FixtureScreens({sessions[0]: (_record(),)})
+    monkeypatch.setattr(engine_module, "HistoricalFeatureScreenSource", lambda *_args: source)
+    config = _config()
+    preparation = engine_module.prepare_strategy_comparison(
+        database, config, sessions[0], sessions[-1]
+    )
+    requirement = preparation.intraday_requirements[0]
+    all_bars = _required_intraday_bars(requirement)
+    execution_session = dict(requirement.first_execution_sessions)["AAA"]
+    database.upsert_bars(
+        [bar for bar in all_bars if bar.timestamp.date() >= execution_session]
+    )
+    assessments = engine_module.assess_comparison_intraday_coverage(
+        database, preparation.intraday_requirements
+    )
+    assert "warmup" in dict(assessments[0].incomplete_reasons)["AAA"]
+    synchronizer = FillingIntradaySynchronizer(database, requirement)
+    prefetch = engine_module.prefetch_comparison_intraday_data(
+        database, config, preparation, assessments, lambda: synchronizer
+    )
+    comparison = engine_module.compare_strategies(
+        database,
+        config,
+        sessions[0],
+        sessions[-1],
+        preparation=preparation,
+        intraday_prefetch=prefetch,
+    )
+
+    assert prefetch.timeframes["15m"].failure_reasons == ()
+    assert "C/intraday-dynamic" not in comparison.skipped_strategies
+
+
+def test_provider_without_candidate_data_skips_only_intraday_run(
+    monkeypatch, tmp_path
+) -> None:
+    sessions = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
+    database = _database(tmp_path, [_bar("XYZ", session) for session in sessions])
+    source = FixtureScreens({sessions[0]: (_record("XYZ"),)})
+    monkeypatch.setattr(engine_module, "HistoricalFeatureScreenSource", lambda *_args: source)
+    config = _config()
+    preparation = engine_module.prepare_strategy_comparison(
+        database, config, sessions[0], sessions[-1]
+    )
+    assessments = engine_module.assess_comparison_intraday_coverage(
+        database, preparation.intraday_requirements
+    )
+    synchronizer = FillingIntradaySynchronizer(
+        database, preparation.intraday_requirements[0], provide_data=False
+    )
+    prefetch = engine_module.prefetch_comparison_intraday_data(
+        database, config, preparation, assessments, lambda: synchronizer
+    )
+    comparison = engine_module.compare_strategies(
+        database,
+        config,
+        sessions[0],
+        sessions[-1],
+        preparation=preparation,
+        intraday_prefetch=prefetch,
+    )
+
+    assert prefetch.timeframes["15m"].failure_reasons == (
+        "provider returned no 15m data for XYZ",
+    )
+    assert comparison.skipped_strategies == {
+        "C/intraday-dynamic": "provider returned no 15m data for XYZ"
+    }
+    assert len(comparison.variants) == 13
+
+
+def test_intraday_requirement_planner_keeps_multiple_timeframes_separate(
+    monkeypatch,
+) -> None:
+    sessions = (date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4))
+    source = FixtureScreens({sessions[0]: (_record("AAA"),)})
+    config = _config()
+    original = position_management_preset
+
+    def multi_timeframe_preset(base, preset, *, legacy_max_holding_days):
+        resolved = original(
+            base, preset, legacy_max_holding_days=legacy_max_holding_days
+        )
+        if preset is PositionManagementPreset.DYNAMIC_HOLD:
+            return resolved.model_copy(
+                update={"bar_timeframe": BarTimeframe.MINUTES_5}
+            )
+        if preset is PositionManagementPreset.INTRADAY_DYNAMIC:
+            return resolved.model_copy(update={"bar_timeframe": BarTimeframe.HOUR_1})
+        return resolved
+
+    monkeypatch.setattr(engine_module, "position_management_preset", multi_timeframe_preset)
+    requirements = engine_module.determine_intraday_comparison_requirements(
+        config,
+        (
+            (StrategyVariant.FULL, PositionManagementPreset.DYNAMIC_HOLD),
+            (StrategyVariant.FULL, PositionManagementPreset.INTRADAY_DYNAMIC),
+        ),
+        source,
+        sessions,
+    )
+
+    assert [item.timeframe for item in requirements] == [
+        BarTimeframe.HOUR_1,
+        BarTimeframe.MINUTES_5,
+    ]
+    assert all(item.symbols == ("AAA",) for item in requirements)
+    assert requirements[0].requested_start != requirements[1].requested_start
+    assert source.calls == list(sessions[:-1])
 
 
 @pytest.mark.parametrize(

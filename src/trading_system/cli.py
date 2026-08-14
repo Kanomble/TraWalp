@@ -15,8 +15,12 @@ from trading_system.ai.export import NoAICandidatesError, export_ai_candidates
 from trading_system.backtest.candidate_audit import run_candidate_audit
 from trading_system.backtest.engine import (
     BacktestEngine,
+    assess_comparison_intraday_coverage,
     compare_position_management,
     compare_strategies,
+    comparison_intraday_prefetch_metadata,
+    prefetch_comparison_intraday_data,
+    prepare_strategy_comparison,
 )
 from trading_system.backtest.report import (
     export_backtest,
@@ -190,6 +194,11 @@ def _parser() -> argparse.ArgumentParser:
         choices=("all", "score-variants", "position-management"),
         default="all",
         help="Select all strategies or one comparison family (default: all)",
+    )
+    comparison.add_argument(
+        "--no-intraday-prefetch",
+        action="store_true",
+        help="Use only local intraday data and skip runs whose data is missing",
     )
     position_comparison = commands.add_parser(
         "backtest-compare", help="Compare the daily position-management presets"
@@ -460,12 +469,89 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "compare-strategies":
         try:
+            comparison_kind = StrategyComparisonKind(args.include.replace("-", "_"))
+            print("Preparing strategy comparison...", flush=True)
+            preparation = prepare_strategy_comparison(
+                database,
+                settings.strategy,
+                args.start,
+                args.end,
+                comparison_kind=comparison_kind,
+            )
+            print(
+                "\nShared PIT screens:"
+                f"\n  Sessions: {len(preparation.sessions) - 1}"
+                f"\n  Intraday candidate symbols: "
+                f"{preparation.intraday_candidate_symbols}"
+            )
+            if not preparation.intraday_requirements:
+                print("\nIntraday prefetch: not required")
+                prefetch = comparison_intraday_prefetch_metadata(
+                    preparation, enabled=not args.no_intraday_prefetch
+                )
+            elif args.no_intraday_prefetch:
+                print("\nIntraday prefetch: disabled (--no-intraday-prefetch)")
+                prefetch = comparison_intraday_prefetch_metadata(
+                    preparation, enabled=False
+                )
+            else:
+                assessments = assess_comparison_intraday_coverage(
+                    database, preparation.intraday_requirements
+                )
+                print("\nIntraday requirements:")
+                for assessment in assessments:
+                    requirement = assessment.requirement
+                    print(
+                        f"  {requirement.timeframe.value}:"
+                        f"\n    Candidates: {len(requirement.symbols)}"
+                        f"\n    Local complete: {len(assessment.complete_symbols)}"
+                        f"\n    Sync required: {len(assessment.sync_symbols)}"
+                        f"\n    Warmup bars: {requirement.warmup_bars}"
+                        f"\n    Extended hours: "
+                        f"{str(requirement.extended_hours).lower()}"
+                    )
+                sync_count = sum(len(item.sync_symbols) for item in assessments)
+                if sync_count:
+                    requested_timeframes = ", ".join(
+                        item.requirement.timeframe.value
+                        for item in assessments
+                        if item.sync_symbols
+                    )
+                    print(
+                        f"\nSynchronizing missing {requested_timeframes} history...",
+                        flush=True,
+                    )
+                else:
+                    print("\nIntraday prefetch: local coverage complete")
+                    print("  No download required")
+                prefetch = prefetch_comparison_intraday_data(
+                    database,
+                    settings.strategy,
+                    preparation,
+                    assessments,
+                    lambda: _synchronizer(
+                        settings, database, with_alpaca=True, with_sec=False
+                    ),
+                )
+                if sync_count:
+                    synchronized_symbols = sum(
+                        item.sync_requested_symbols
+                        for item in prefetch.timeframes.values()
+                    )
+                    print(
+                        f"  Symbols requested: {synchronized_symbols}"
+                        "\n  Bars added: "
+                        f"{sum(item.bars_added for item in prefetch.timeframes.values())}"
+                    )
+            print("\nRunning strategy comparison...", flush=True)
             comparison_result = compare_strategies(
                 database,
                 settings.strategy,
                 args.start,
                 args.end,
-                comparison_kind=StrategyComparisonKind(args.include.replace("-", "_")),
+                comparison_kind=comparison_kind,
+                preparation=preparation,
+                intraday_prefetch=prefetch,
             )
         except ValueError as exc:
             print(f"Strategy comparison refused: {exc}", file=sys.stderr)
