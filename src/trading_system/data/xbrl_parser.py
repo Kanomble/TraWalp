@@ -111,7 +111,7 @@ def parse_company_facts(payload: Mapping[str, Any], symbol: str) -> list[Fundame
     if not isinstance(taxonomy_facts, Mapping):
         return []
     parsed: list[FundamentalFact] = []
-    seen: set[tuple[str, str, str, str, str]] = set()
+    seen: set[tuple[str, str, str | None, str, str, str]] = set()
     for metric, aliases in TAG_ALIASES.items():
         # The alias order is the documented semantic preference, not a fallback
         # that discards other tags. Dedupe removes identical filing observations.
@@ -136,7 +136,14 @@ def parse_company_facts(payload: Mapping[str, Any], symbol: str) -> list[Fundame
                 except (InvalidOperation, ValueError, KeyError, TypeError):
                     continue
                 accession = raw.get("accn")
-                key = (metric, raw["filed"], raw["end"], str(accession), unit)
+                key = (
+                    metric,
+                    raw["filed"],
+                    raw.get("start"),
+                    raw["end"],
+                    str(accession),
+                    unit,
+                )
                 if key in seen:
                     continue
                 seen.add(key)

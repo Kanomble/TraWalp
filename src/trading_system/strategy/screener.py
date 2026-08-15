@@ -16,6 +16,7 @@ from trading_system.data.database import Database
 from trading_system.data.market_sessions import (
     effective_trading_session,
     full_history_request_window,
+    regular_session_bounds,
 )
 from trading_system.data.universe import (
     UniverseSnapshot,
@@ -275,14 +276,35 @@ class Screener:
                 else None
             )
             snapshot_price_selected = False
+            snapshot_timestamp = (
+                market_snapshot.latest_trade_timestamp
+                if market_snapshot is not None
+                else None
+            )
+            snapshot_timestamp_utc = (
+                snapshot_timestamp.astimezone(UTC)
+                if snapshot_timestamp is not None
+                and snapshot_timestamp.tzinfo is not None
+                and snapshot_timestamp.utcoffset() is not None
+                else None
+            )
+            snapshot_in_regular_session = False
+            if snapshot_timestamp_utc is not None:
+                try:
+                    regular_open, regular_close = regular_session_bounds(analysis_date)
+                except ValueError:
+                    pass
+                else:
+                    snapshot_in_regular_session = (
+                        regular_open <= snapshot_timestamp_utc <= regular_close
+                    )
             if (
                 market_snapshot is not None
                 and market_snapshot.latest_trade_price is not None
-                and market_snapshot.latest_trade_timestamp is not None
-                and market_snapshot.latest_trade_timestamp.date() == analysis_date
+                and snapshot_in_regular_session
             ):
-                # A snapshot may contain an intraday trade from a later session.
-                # Only a trade from the completed analysis session is point-in-time safe.
+                # The official close print belongs to the completed session; later
+                # same-date after-hours trades must not rewrite a historical screen.
                 price = market_snapshot.latest_trade_price
                 snapshot_price_selected = True
             fundamentals = analyze_fundamentals(facts, analysis_date, price)

@@ -58,15 +58,6 @@ def percentile_score(
     return clip_score(percentile if higher_is_better else 100 - percentile)
 
 
-def robust_z_scores(values: Sequence[float | None]) -> pd.Series:
-    series = pd.Series(values, dtype=float)
-    median = series.median(skipna=True)
-    mad = (series - median).abs().median(skipna=True)
-    if pd.isna(median) or pd.isna(mad) or mad == 0:
-        return pd.Series(np.where(series.notna(), 0.0, np.nan), index=series.index)
-    return 0.67448975 * (series - median) / mad
-
-
 def _breakdown(
     name: str,
     factors: list[tuple[str, float | bool | None, float | None, float, str]],

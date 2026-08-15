@@ -345,3 +345,23 @@ def test_screener_uses_only_snapshot_trade_from_completed_analysis_session(tmp_p
     assert by_symbol["AAA"].fundamentals.market_cap == Decimal("4000000000")
     assert by_symbol["AAA"].technical.price == 200
     assert by_symbol["BBB"].fundamentals.market_cap != Decimal("19980000000")
+
+
+def test_screener_rejects_after_hours_snapshot_from_same_session_date(tmp_path) -> None:
+    database = _database(tmp_path)
+    database.upsert_market_snapshots(
+        [
+            MarketSnapshot(
+                symbol="AAA",
+                observed_at=datetime(2025, 2, 15, 8, tzinfo=UTC),
+                latest_trade_price=Decimal("999"),
+                latest_trade_timestamp=datetime(2025, 2, 14, 23, tzinfo=UTC),
+            )
+        ]
+    )
+
+    report = Screener(database, _test_config()).run(date(2025, 2, 14))
+    record = next(item for item in report.records if item.symbol == "AAA")
+
+    assert record.technical.price != 999
+    assert record.fundamentals.market_cap != Decimal("19980000000")

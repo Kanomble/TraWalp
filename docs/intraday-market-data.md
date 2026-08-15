@@ -44,8 +44,9 @@ fordert den vollständigen Zeitraum erneut an, löscht aber ebenfalls keine Date
 Große Zeiträume werden nach Zeitfenstern und Symbolgruppen begrenzt. Jede Provider-Antwort wird direkt
 validiert und per Bulk-Transaktion persistiert. Alpaca-py übernimmt seine Page-Token- und Retry-Logik;
 TraWalp begrenzt zusätzlich die Request-Fenster, damit ein Backfill nicht sämtliche Bars im RAM hält.
-Nach einem fehlerhaften Fenster werden spätere Fenster derselben Gruppe nicht übersprungen, sodass
-der nächste Lauf keine versteckte Lücke hinter einem vorgerückten lokalen Cursor hinterlässt.
+Nach einem fehlerhaften Fenster beendet TraWalp die weiteren Fenster derselben Gruppe für diesen
+Lauf. Dadurch rückt der lokale High-Water-Mark nicht über den Fehler hinweg; der nächste Lauf setzt
+vor dem letzten dauerhaft gespeicherten Fenster fort.
 
 Die wichtigsten Konfigurationswerte sind:
 
@@ -91,7 +92,8 @@ Resampling-Schicht ein.
 1. Daily Signal nach abgeschlossenem Session-Close.
 2. Entry an der ersten verfügbaren Regular-Session-Bar des Folgetags.
 3. Stop-/Target-/Partial-/Trailing-Auswertung auf chronologisch gespeicherten Intraday-Bars.
-4. Daily Score Decay, Rotation und Max Hold erst nach dem abgeschlossenen Daily Screen.
+4. Daily Score Decay, Rotation und Max Hold erst nach dem abgeschlossenen Daily Screen; ein daraus
+   entstehender Exit verwendet Preis und Timestamp des letzten zulässigen nativen Intraday-Bars.
 
 ATR 14 bedeutet dabei 14 Bars des Position-Timeframes. Vor dem Entry werden ausschließlich frühere
 Bars bis zur konfigurierten Warmup-Grenze verwendet. Trail-Marken aus einer abgeschlossenen Bar gelten

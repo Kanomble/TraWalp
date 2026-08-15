@@ -111,6 +111,76 @@ def test_fixed_stop_and_take_profit_use_stop_first() -> None:
     assert profited.reason is ExitReason.TAKE_PROFIT
 
 
+@pytest.mark.parametrize(
+    ("bar", "expected_reference"),
+    [
+        (_bar(opening=106, high=107, low=90, close=95), 105),
+        (_bar(opening=95, high=96, low=90, close=92), 95),
+    ],
+)
+def test_highest_active_long_stop_wins_when_multiple_stops_are_breached(
+    bar: DailyBar, expected_reference: float
+) -> None:
+    manager = PositionManager(
+        _config(
+            stop_loss=StopLossConfig(enabled=True, percent=0.03),
+            trailing_stop=TrailingStopConfig(enabled=True),
+            atr_trailing_stop=AtrTrailingStopConfig(enabled=True),
+        )
+    )
+    position = _position(
+        stop_price=97,
+        trailing_stop_price=105,
+        atr_trailing_stop_price=103,
+    )
+
+    decision = (
+        manager.evaluate_open(position, bar)
+        if float(bar.open) < 105
+        else manager.evaluate_intrabar(position, bar)
+    )
+
+    assert decision.reason is ExitReason.TRAILING_STOP
+    assert decision.reference_price == expected_reference
+
+
+def test_lower_partial_profit_executes_before_higher_full_target() -> None:
+    manager = PositionManager(
+        _config(
+            take_profit=TakeProfitConfig(enabled=True, percent=0.12),
+            partial_take_profit=PartialTakeProfitConfig(
+                enabled=True,
+                levels=[PartialTakeProfitLevel(profit=0.015, sell_fraction=0.5)],
+            ),
+        )
+    )
+    position = _position(target_price=112)
+
+    partial = manager.evaluate_intrabar(position, _bar(high=115, low=99))
+    assert partial.reason is ExitReason.PARTIAL_TAKE_PROFIT
+    assert partial.reference_price == pytest.approx(101.5)
+    assert partial.quantity == 50
+
+    position.partial_exit_levels_triggered.add(0)
+    full = manager.evaluate_intrabar(position, _bar(high=115, low=99))
+    assert full.reason is ExitReason.TAKE_PROFIT
+    assert full.reference_price == 112
+
+    gap_position = _position(target_price=112)
+    gap_partial = manager.evaluate_open(
+        gap_position, _bar(opening=115, high=116, low=114, close=115)
+    )
+    assert gap_partial.reason is ExitReason.PARTIAL_TAKE_PROFIT
+    assert gap_partial.reference_price == 115
+    gap_position.partial_exit_levels_triggered.add(0)
+    gap_position.quantity = 50
+    gap_full = manager.evaluate_open(
+        gap_position, _bar(opening=115, high=116, low=114, close=115)
+    )
+    assert gap_full.reason is ExitReason.TAKE_PROFIT
+    assert gap_full.reference_price == 115
+
+
 def test_profit_trailing_stop_raises_only_and_never_uses_same_bar_low() -> None:
     manager = PositionManager(
         _config(

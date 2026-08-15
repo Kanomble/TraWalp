@@ -12,7 +12,11 @@ from trading_system.data.market_sessions import (
     required_daily_warmup_sessions,
     trading_sessions_between,
 )
-from trading_system.data.sync import DataSynchronizer, _bar_edge_ranges
+from trading_system.data.sync import (
+    DataSynchronizer,
+    _bar_edge_ranges,
+    _daily_coverage_value,
+)
 from trading_system.models.fundamentals import CompanyIdentity
 from trading_system.models.market_data import BarTimeframe, DailyBar, TradableAsset
 
@@ -164,6 +168,54 @@ def test_spy_first_complete_target_request_fills_internal_benchmark_gap(tmp_path
         for bar in database.bars_available_as_of("SPY", sessions[-1])
     ]
     assert stored_sessions == sessions
+
+
+def test_first_complete_target_request_fills_internal_symbol_gap(tmp_path) -> None:
+    database = Database(tmp_path / "symbol-gap.sqlite3")
+    database.initialize()
+    sessions = trading_sessions_between(date(2025, 4, 14), date(2025, 4, 22))
+    provider = DailyAlpaca([_bar("AAPL", session) for session in sessions])
+    database.upsert_bars([_bar("AAPL", sessions[0]), _bar("AAPL", sessions[-1])])
+    synchronizer = DataSynchronizer(database, provider, None)  # type: ignore[arg-type]
+
+    result = synchronizer.sync_daily_history(
+        ["AAPL"], sessions[0], sessions[-1], include_benchmark=False
+    )
+
+    assert result["bars_inserted"] == len(sessions) - 2
+    assert provider.calls == [
+        (
+            ("AAPL",),
+            datetime.combine(sessions[0], datetime.min.time(), tzinfo=UTC),
+            datetime.combine(sessions[-1] + timedelta(days=1), datetime.min.time(), tzinfo=UTC),
+        )
+    ]
+    stored_sessions = [
+        bar.timestamp.date()
+        for bar in database.bars_available_as_of("AAPL", sessions[-1])
+    ]
+    assert stored_sessions == sessions
+
+
+def test_disjoint_daily_coverage_is_not_recorded_as_one_continuous_range() -> None:
+    previous = {
+        "start": datetime(2025, 1, 1, tzinfo=UTC).isoformat(),
+        "end_exclusive": datetime(2025, 2, 1, tzinfo=UTC).isoformat(),
+        "feed": "iex",
+        "adjustment": "all",
+    }
+
+    value = _daily_coverage_value(
+        previous,
+        datetime(2025, 3, 1, tzinfo=UTC),
+        datetime(2025, 4, 1, tzinfo=UTC),
+        "iex",
+        "all",
+        datetime(2025, 4, 1, tzinfo=UTC).isoformat(),
+    )
+
+    assert value["start"] == datetime(2025, 3, 1, tzinfo=UTC).isoformat()
+    assert value["end_exclusive"] == datetime(2025, 4, 1, tzinfo=UTC).isoformat()
 
 
 def test_warmup_coverage_distinguishes_299_from_300_prior_sessions(tmp_path) -> None:

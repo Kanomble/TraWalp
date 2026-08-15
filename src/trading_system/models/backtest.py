@@ -413,4 +413,5 @@ class StrategyComparison(BaseModel):
     comparison_kind: StrategyComparisonKind = StrategyComparisonKind.SCORE_VARIANTS
     skipped_strategies: dict[str, str] = Field(default_factory=dict)
     intraday_prefetch: IntradayPrefetch = IntradayPrefetch()
+    data_qualification: dict = Field(default_factory=dict)
     warnings: tuple[str, ...] = ()

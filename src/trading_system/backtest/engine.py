@@ -296,9 +296,12 @@ class BacktestEngine:
             commission_bps=self.config.backtest.commission_bps,
         )
         self._legacy_reason_compat = (
-            preset is PositionManagementPreset.CONFIGURED
-            and _uses_legacy_position_defaults(
-                self.config.position_management, self.config.backtest.max_holding_days
+            preset is PositionManagementPreset.LEGACY
+            or (
+                preset is PositionManagementPreset.CONFIGURED
+                and _uses_legacy_position_defaults(
+                    self.config.position_management, self.config.backtest.max_holding_days
+                )
             )
         )
         self._position_sequence = 0
@@ -460,13 +463,16 @@ class BacktestEngine:
 
                     # Existing overnight positions first see the first enabled-session open.
                     for symbol in sorted(awaiting_open & set(timestamp_bars)):
-                        decision = self.position_manager.evaluate_open(
-                            positions[symbol], timestamp_bars[symbol]
-                        )
-                        if decision.action is not PositionAction.HOLD:
-                            execute_position_decision(
-                                symbol, session, decision, timestamp_bars[symbol]
+                        while symbol in positions:
+                            decision = self.position_manager.evaluate_open(
+                                positions[symbol], timestamp_bars[symbol]
                             )
+                            if decision.action is PositionAction.HOLD:
+                                break
+                            if execute_position_decision(
+                                symbol, session, decision, timestamp_bars[symbol]
+                            ):
+                                break
                         awaiting_open.remove(symbol)
 
                     # Prior-close signals enter at each symbol's first regular-session bar.
@@ -567,9 +573,12 @@ class BacktestEngine:
                     bar = bars.get(symbol)
                     if bar is None:
                         continue
-                    decision = self.position_manager.evaluate_open(positions[symbol], bar)
-                    if decision.action is not PositionAction.HOLD:
-                        execute_position_decision(symbol, session, decision, bar)
+                    while symbol in positions:
+                        decision = self.position_manager.evaluate_open(positions[symbol], bar)
+                        if decision.action is PositionAction.HOLD:
+                            break
+                        if execute_position_decision(symbol, session, decision, bar):
+                            break
 
                 # 2. Signals from the prior close execute only now, at this session's open.
                 for order in sorted(
@@ -644,7 +653,11 @@ class BacktestEngine:
             best_symbol, best_score = self._best_candidate(report, variant, positions)
             for symbol in list(positions):
                 position = positions[symbol]
-                bar = bars.get(symbol)
+                bar = (
+                    last_intraday_bars.get(symbol)
+                    if intraday_monitoring
+                    else bars.get(symbol)
+                )
                 if bar is None:
                     continue
                 record = records.get(symbol)
@@ -1768,6 +1781,7 @@ def compare_strategies(
     comparison_kind: StrategyComparisonKind = StrategyComparisonKind.ALL,
     preparation: StrategyComparisonPreparation | None = None,
     intraday_prefetch: IntradayPrefetch | None = None,
+    data_qualification: dict | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> StrategyComparison:
     """Compare score variants, position presets, or both on shared PIT screens."""
@@ -1819,6 +1833,19 @@ def compare_strategies(
     if not results:
         raise ValueError("Strategy comparison produced no executable strategies")
     first = results[0]
+    qualification_warnings: list[str] = []
+    qualification = data_qualification or {}
+    daily_qualification = qualification.get("daily", {})
+    if daily_qualification.get("internal_missing_sessions", 0):
+        qualification_warnings.append(
+            "Daily qualification found internal missing sessions; see data qualification report"
+        )
+    for timeframe, report in qualification.get("intraday", {}).items():
+        if report.get("missing_sessions", 0) or report.get("partial_sessions", 0):
+            qualification_warnings.append(
+                f"{timeframe} qualification contains missing/partial sessions; no Daily "
+                "fallback or synthetic bars were used"
+            )
     return StrategyComparison(
         requested_start=start,
         requested_end=end,
@@ -1827,10 +1854,11 @@ def compare_strategies(
         generated_at=generated_at,
         variants=tuple(results),
         shared_screen_sessions=len(shared.cache),
-        warnings=first.warnings,
+        warnings=tuple(dict.fromkeys((*first.warnings, *qualification_warnings))),
         comparison_kind=comparison_kind,
         skipped_strategies=skipped,
         intraday_prefetch=prefetch,
+        data_qualification=qualification,
     )
 
 

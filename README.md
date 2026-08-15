@@ -5,7 +5,7 @@ Price Dislocation + Recovery Signal**. Die erste Zielversion ist ausschließlich
 Backtests, Dry Runs und Alpaca Paper Trading vorgesehen. Live-Trading ist weder implementiert
 noch zulässig.
 
-## Aktueller Stand: Milestone 4
+## Aktueller Stand: Research-Baseline nach Milestone 4
 
 Implementiert sind die Projektstruktur, validierte zentrale Konfiguration, ein ausschließlich
 lesender Alpaca-Adapter, SEC-EDGAR-/Company-Facts-Zugriff, robustes US-GAAP-Tag-Mapping,
@@ -27,6 +27,12 @@ Management, nachvollziehbare Trade-/Equity-Reports, einen lokalen SPY-Benchmark 
 Vergleich der Strategievarianten A/B/C. Noch **nicht** implementiert ist Milestone 5: Paper Orders.
 Es existiert weiterhin kein Codepfad, der eine Alpaca-Order absendet.
 
+Die aktuelle Research-Baseline umfasst darüber hinaus historischen Daily-Backfill, Candidate-
+Funnel-Audits, Position- und Execution-Leg-Diagnostik, MFE/MAE, Profit Capture, Re-Entry- und
+Post-Exit-Analysen sowie native `5m`-/`15m`-/`1h`-Bars, Strategy F und Multi-Timeframe-
+Strategy-Compare. Diese Erweiterungen ändern nicht die Grenze zu Milestone 5: TraWalp sendet
+weiterhin keine Orders.
+
 ## Strategie
 
 Das spätere Ranking kombiniert vier erklärbare Teilbereiche:
@@ -38,6 +44,9 @@ Das spätere Ranking kombiniert vier erklärbare Teilbereiche:
 
 Alle Gewichte, Score-Kurven und technischen Recovery-Grenzen liegen zentral in
 `config/strategy.yaml` und werden beim Laden validiert. Fehlende Faktoren werden nicht zu null.
+Der Default-Pfad sowie relative Datenbank-/Reportpfade werden gegen die Repository-/Config-Basis
+aufgelöst; CLI-Aufrufe sind deshalb nicht vom aktuellen Working Directory abhängig. Eine explizite
+Datei kann weiterhin mit `--config <pfad>` gewählt werden.
 Die Gewichte aller berechenbaren Faktoren werden immer proportional als
 `normalized_available_weight` ausgewiesen. Erst wenn die konfigurierte Mindestanzahl erreicht
 ist, werden sie als `effective_weight` für den Gesamtscore wirksam. Andernfalls nennt die
@@ -217,8 +226,9 @@ Universum in einer Abfrage gelesen, und API-Aufrufe erfolgen in Batches.
 werden getrennt von der adjustierten historischen OHLCV-Serie gespeichert; der Befehl lädt keine
 Kurshistorie. Finanzwerte und REITs, die bereits durch die bestehende Konfiguration ausgeschlossen
 sind, werden vor dem Snapshot-Abruf entfernt. Ein Snapshot-Trade wird im Screening nur verwendet,
-wenn sein Datum exakt der vollständig abgeschlossenen Analyse-Session entspricht. Dadurch gelangen
-weder Intraday- noch Zukunftspreise in historische Screens.
+wenn sein timezone-aware Timestamp innerhalb der offiziellen regulären XNYS-Session bis
+einschließlich des offiziellen Close liegt. Same-Day-After-Hours-Trades und Trades späterer Sessions
+gelangen dadurch nicht in abgeschlossene historische Screens.
 
 Der empfohlene Tagesablauf lautet:
 
@@ -625,5 +635,7 @@ fehlgeschlagenen Batches ab.
 - Milestone 1 (fertig): Struktur, Config, Alpaca/SEC, lokale Datenbank.
 - Milestone 2 (fertig): Fundamentals, technische Indikatoren, Peer-Gruppen und Scoring.
 - Milestone 3 (fertig): Screener, CLI-Ausgaben und Explainability.
-- Milestone 4: Point-in-Time-Backtester, Reports und Strategie-Vergleich.
+- Milestone 4 (fertig): Point-in-Time-Backtester, Reports und Strategie-Vergleich.
+- Research-Erweiterungen (fertig): Audits/Diagnostik, Presets, Daily-Backfill und native
+  Multi-Timeframe-/Strategy-F-Pfade.
 - Milestone 5: ausschließlich Alpaca Paper Trading, Risk Management und Daily Runner.

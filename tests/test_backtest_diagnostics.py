@@ -149,6 +149,35 @@ def test_partial_legs_aggregate_to_one_weighted_economic_position() -> None:
     assert execution_metrics.execution_leg_win_rate == 0.5
 
 
+def test_equal_partial_legs_have_exact_weighted_position_pnl() -> None:
+    legs = [
+        _leg(
+            leg=1,
+            quantity=50,
+            position_value=5_000,
+            exit_reference=102,
+            pnl=100,
+            reason="partial_take_profit",
+            partial=True,
+        ),
+        _leg(
+            leg=2,
+            quantity=50,
+            position_value=5_000,
+            exit_reference=97,
+            pnl=-150,
+            reason="stop_loss",
+            partial=False,
+        ),
+    ]
+
+    position = finalize_position(_state(quantity=50, position_value=5_000), legs)
+
+    assert position.gross_pnl == -50
+    assert position.net_pnl == -50
+    assert position.position_return == pytest.approx(-0.005)
+
+
 def test_never_profitable_position_metric_includes_gap_stop() -> None:
     position = finalize_position(
         _state(highest_price_since_entry=100),

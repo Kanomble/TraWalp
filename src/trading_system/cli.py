@@ -15,6 +15,7 @@ from trading_system.ai.export import NoAICandidatesError, export_ai_candidates
 from trading_system.backtest.candidate_audit import run_candidate_audit
 from trading_system.backtest.engine import (
     BacktestEngine,
+    StrategyComparisonPreparation,
     assess_comparison_intraday_coverage,
     compare_position_management,
     compare_strategies,
@@ -26,11 +27,13 @@ from trading_system.backtest.report import (
     export_backtest,
     export_candidate_audit,
     export_comparison,
+    export_data_qualification,
     format_backtest_summary,
     format_candidate_audit_summary,
     format_comparison_table,
+    format_data_qualification_header,
 )
-from trading_system.config import load_settings
+from trading_system.config import StrategyConfig, load_settings
 from trading_system.data.alpaca_client import AlpacaDataClient
 from trading_system.data.daily_history import warmup_coverage_at
 from trading_system.data.database import Database
@@ -38,6 +41,11 @@ from trading_system.data.market_sessions import (
     effective_trading_session,
     intraday_warmup_start,
     required_daily_warmup_sessions,
+)
+from trading_system.data.qualification import (
+    DataQualificationReport,
+    qualify_daily_history,
+    qualify_intraday_history,
 )
 from trading_system.data.sec_client import SecClient
 from trading_system.data.sync import DataSynchronizer
@@ -75,7 +83,12 @@ def _positive_int(value: str) -> int:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="trading-system")
-    parser.add_argument("--config", default="config/strategy.yaml", type=Path)
+    parser.add_argument(
+        "--config",
+        default=None,
+        type=Path,
+        help="Explicit strategy YAML (default: repository config/strategy.yaml)",
+    )
     parser.add_argument("--verbose", action="store_true")
     commands = parser.add_subparsers(dest="command", required=True)
     sync = commands.add_parser("sync", help="Synchronize SEC data or run a complete refresh")
@@ -200,6 +213,10 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use only local intraday data and skip runs whose data is missing",
     )
+    comparison.add_argument(
+        "--output-stem",
+        help="Write comparison and qualification reports under a new non-existing stem",
+    )
     position_comparison = commands.add_parser(
         "backtest-compare", help="Compare the daily position-management presets"
     )
@@ -252,7 +269,11 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     configure_logging(args.verbose)
-    settings = load_settings(args.config)
+    try:
+        settings = load_settings(args.config)
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return 2
     database = Database(settings.strategy.storage.database_path)
     if args.command == "storage-report":
         try:
@@ -478,6 +499,13 @@ def main(argv: list[str] | None = None) -> int:
                 args.end,
                 comparison_kind=comparison_kind,
             )
+            qualification_reports = _comparison_data_qualification(
+                database,
+                settings.strategy,
+                preparation,
+            )
+            qualification_metadata = _qualification_metadata(qualification_reports)
+            print("\n" + format_data_qualification_header(qualification_metadata))
             print(
                 "\nShared PIT screens:"
                 f"\n  Sessions: {len(preparation.sessions) - 1}"
@@ -552,11 +580,29 @@ def main(argv: list[str] | None = None) -> int:
                 comparison_kind=comparison_kind,
                 preparation=preparation,
                 intraday_prefetch=prefetch,
+                data_qualification=qualification_metadata,
             )
         except ValueError as exc:
             print(f"Strategy comparison refused: {exc}", file=sys.stderr)
             return 1
-        paths = export_comparison(comparison_result, settings.strategy.storage.reports_path)
+        try:
+            paths = export_comparison(
+                comparison_result,
+                settings.strategy.storage.reports_path,
+                stem=args.output_stem,
+                overwrite=args.output_stem is None,
+            )
+            if args.output_stem:
+                paths.update(
+                    export_data_qualification(
+                        qualification_reports,
+                        settings.strategy.storage.reports_path,
+                        stem=args.output_stem,
+                    )
+                )
+        except FileExistsError as exc:
+            print(f"Strategy comparison export refused: {exc}", file=sys.stderr)
+            return 1
         print(format_comparison_table(comparison_result))
         print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
         return 0
@@ -812,6 +858,46 @@ def _format_data_status(
             ]
         )
     return "\n".join(lines)
+
+
+def _comparison_data_qualification(
+    database: Database,
+    config: StrategyConfig,
+    preparation: StrategyComparisonPreparation,
+) -> dict[str, DataQualificationReport]:
+    symbols = sorted(
+        {company.symbol for company in database.list_tradable_companies()} | {"SPY"}
+    )
+    reports = {
+        "daily": qualify_daily_history(
+            database,
+            symbols,
+            preparation.requested_start,
+            preparation.requested_end,
+            warmup_sessions=required_daily_warmup_sessions(config),
+        )
+    }
+    for requirement in preparation.intraday_requirements:
+        reports[f"intraday_{requirement.timeframe.value}"] = qualify_intraday_history(
+            database,
+            requirement.symbols,
+            requirement.requested_start.date(),
+            preparation.requested_end,
+            requirement.timeframe,
+        )
+    return reports
+
+
+def _qualification_metadata(
+    reports: dict[str, DataQualificationReport],
+) -> dict[str, dict]:
+    daily = reports["daily"].model_dump(mode="json", exclude={"details"})
+    intraday = {
+        report.timeframe.value: report.model_dump(mode="json", exclude={"details"})
+        for key, report in reports.items()
+        if key.startswith("intraday_")
+    }
+    return {"daily": daily, "intraday": intraday}
 
 
 def _format_storage_report(report: dict) -> str:

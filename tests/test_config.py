@@ -28,3 +28,18 @@ def test_live_mode_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     load_settings.cache_clear()
     with pytest.raises(ValueError):
         load_settings(Path("config/strategy.yaml"))
+
+
+def test_default_config_and_storage_paths_do_not_depend_on_working_directory(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    monkeypatch.chdir(tmp_path)
+    load_settings.cache_clear()
+
+    settings = load_settings()
+
+    assert settings.strategy.storage.database_path == (
+        project_root / "data" / "trading_system.sqlite3"
+    )
+    assert settings.strategy.storage.reports_path == project_root / "reports"

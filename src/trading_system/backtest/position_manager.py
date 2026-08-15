@@ -150,14 +150,7 @@ class PositionManager:
         for stop, reason in self._stops(position):
             if opening <= stop:
                 return self._decision(position, PositionAction.SELL, reason, opening)
-        if position.target_price is not None and opening >= position.target_price:
-            return self._decision(
-                position, PositionAction.SELL, ExitReason.TAKE_PROFIT, opening
-            )
-        partial = self._partial_decision(position, opening, opening)
-        if partial is not None:
-            return partial
-        return self._decision(position, PositionAction.HOLD)
+        return self._profit_decision(position, opening, gap_reference=opening)
 
     def evaluate_intrabar(self, position: PositionState, bar: DailyBar) -> PositionDecision:
         low = float(bar.low)
@@ -165,17 +158,7 @@ class PositionManager:
         for stop, reason in self._stops(position):
             if low <= stop:
                 return self._decision(position, PositionAction.SELL, reason, stop)
-        if position.target_price is not None and high >= position.target_price:
-            return self._decision(
-                position,
-                PositionAction.SELL,
-                ExitReason.TAKE_PROFIT,
-                position.target_price,
-            )
-        partial = self._partial_decision(position, high)
-        if partial is not None:
-            return partial
-        return self._decision(position, PositionAction.HOLD)
+        return self._profit_decision(position, high)
 
     def update_after_bar(
         self, position: PositionState, bar: DailyBar, *, next_atr: float | None = None
@@ -296,7 +279,37 @@ class PositionManager:
             candidates.append(
                 (position.atr_trailing_stop_price, ExitReason.ATR_TRAILING_STOP)
             )
-        return tuple(candidates)
+        return tuple(sorted(candidates, key=lambda item: item[0], reverse=True))
+
+    def _profit_decision(
+        self,
+        position: PositionState,
+        observed_high: float,
+        *,
+        gap_reference: float | None = None,
+    ) -> PositionDecision:
+        partial = self._partial_decision(position, observed_high, gap_reference)
+        partial_trigger = (
+            position.entry_price
+            * (1 + self.config.partial_take_profit.levels[partial.partial_level].profit)
+            if partial is not None and partial.partial_level is not None
+            else None
+        )
+        target_reached = (
+            position.target_price is not None and observed_high >= position.target_price
+        )
+        if target_reached and (
+            partial_trigger is None or position.target_price <= partial_trigger
+        ):
+            return self._decision(
+                position,
+                PositionAction.SELL,
+                ExitReason.TAKE_PROFIT,
+                gap_reference if gap_reference is not None else position.target_price,
+            )
+        if partial is not None:
+            return partial
+        return self._decision(position, PositionAction.HOLD)
 
     def _partial_decision(
         self, position: PositionState, observed_high: float, gap_reference: float | None = None

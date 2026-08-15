@@ -81,15 +81,16 @@ nächsten Open gekauft werden kann.
 
 Die Reihenfolge ist deterministisch:
 
-1. klassischer Stop Loss,
-2. prozentualer Trailing Stop,
-3. ATR Trailing Stop,
-4. vollständiger Take Profit,
-5. Partial Take Profit,
-6. Signal Decay,
-7. Portfolio Rotation,
-8. Max Hold,
-9. Liquidation am Backtest-Ende.
+1. der höchste bereits aktive Long-Stop (Fixed, prozentualer Trail oder ATR-Trail),
+2. Profit-Orders aufsteigend nach ihrem Triggerpreis (Partial oder vollständiger Take Profit),
+3. Signal Decay,
+4. Portfolio Rotation,
+5. Max Hold,
+6. Liquidation am Backtest-Ende.
+
+Innerhalb der Preisregeln entscheidet nicht die Konfigurationsreihenfolge, sondern das zuerst
+gekreuzte Schutz- bzw. Profit-Level. Bei identischen Profit-Levels behält der vollständige Take
+Profit Vorrang.
 
 Open-Gaps werden zum Open ausgeführt; sonstige Preislevel zum bekannten Stop/Target. Danach greift
 das vorhandene Sell-Slippage- und Commission-Modell. Weil Daily OHLC die Reihenfolge von High und
@@ -120,7 +121,7 @@ python -m trading_system.cli backtest --start 2025-01-01 --end 2025-12-31 --stra
 python -m trading_system.cli backtest --start 2025-01-01 --end 2025-12-31 --strategy dynamic-hold
 python -m trading_system.cli backtest --start 2025-01-01 --end 2025-12-31 --strategy atr-trailing
 python -m trading_system.cli compare-strategies --start 2025-01-01 --end 2025-12-31
-python -m trading_system.cli compare-strategies --start 2025-01-01 --end 2025-12-31 \
+python -m trading_system.cli compare-strategies --start 2025-01-01 --end 2025-12-31 `
   --include position-management
 ```
 
@@ -143,8 +144,8 @@ als Execution-Leg-Metriken kompatibel; neue `position_metrics` vermeiden die Par
 ## Intraday-Grenze
 
 Die zentrale Config validiert `5m`, `15m`, `1h` und `1d`, und Screening ist architektonisch von der
-Positionsüberwachung getrennt. Der aktuelle persistente Data Layer speichert jedoch ausschließlich
-`DailyBar`-Historie. Ein Intraday-Preset wird deshalb mit einer klaren Fehlermeldung abgewiesen,
-statt Daily-Daten als scheinpräzise 15-Minuten-Daten zu behandeln. Für eine spätere Aktivierung sind
-echte historische Intraday-Bars samt Provider-Synchronisierung und Session-/Zeitzonenregeln nötig;
-Production-Code erzeugt keine Mock-Bars.
+Positionsüberwachung getrennt. Die persistente `bars`-Tabelle trennt alle Timeframes im
+Primärschlüssel. `intraday-dynamic` verwaltet Positionen mit echten provider-nativen Intraday-Bars.
+Fehlende Position-Bars oder Warmup-Daten führen zu einer klaren Fehlermeldung bzw. einem begründet
+übersprungenen Compare-Run. Es gibt keinen Daily-Fallback, kein Resampling und keine Mock-Bars.
+Details stehen in [`intraday-market-data.md`](intraday-market-data.md).

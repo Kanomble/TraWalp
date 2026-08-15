@@ -9,6 +9,7 @@ import tempfile
 from contextlib import suppress
 from pathlib import Path
 
+from trading_system.data.qualification import DataQualificationReport, QualificationDetail
 from trading_system.models.backtest import (
     BacktestPosition,
     BacktestResult,
@@ -59,9 +60,15 @@ def export_backtest(result: BacktestResult, output_directory: Path) -> dict[str,
     return paths
 
 
-def export_comparison(comparison: StrategyComparison, output_directory: Path) -> dict[str, Path]:
+def export_comparison(
+    comparison: StrategyComparison,
+    output_directory: Path,
+    *,
+    stem: str | None = None,
+    overwrite: bool = True,
+) -> dict[str, Path]:
     output_directory.mkdir(parents=True, exist_ok=True)
-    stem = (
+    stem = stem or (
         f"{comparison.comparison_kind}_comparison_"
         f"{comparison.requested_start}_{comparison.requested_end}"
     )
@@ -72,6 +79,10 @@ def export_comparison(comparison: StrategyComparison, output_directory: Path) ->
         "execution_legs": output_directory / f"{stem}_execution_legs.csv",
         "post_exit": output_directory / f"{stem}_post_exit_analysis.csv",
     }
+    if not overwrite:
+        existing = [path for path in paths.values() if path.exists()]
+        if existing:
+            raise FileExistsError(f"Comparison export already exists: {existing[0]}")
     _atomic_text(paths["json"], json.dumps(comparison.model_dump(mode="json"), indent=2))
     rows = []
     position_rows = []
@@ -126,6 +137,44 @@ def export_comparison(comparison: StrategyComparison, output_directory: Path) ->
         paths["post_exit"],
         post_exit_rows,
         ["strategy", *_post_exit_fields()],
+    )
+    return paths
+
+
+def export_data_qualification(
+    reports: dict[str, DataQualificationReport],
+    output_directory: Path,
+    *,
+    stem: str,
+    overwrite: bool = False,
+) -> dict[str, Path]:
+    """Write one bounded qualification JSON and an intraday deviation manifest."""
+
+    output_directory.mkdir(parents=True, exist_ok=True)
+    paths = {
+        "data_qualification": output_directory / f"{stem}_data_qualification.json",
+        "gap_manifest": output_directory / f"{stem}_gap_manifest.csv",
+    }
+    if not overwrite:
+        existing = [path for path in paths.values() if path.exists()]
+        if existing:
+            raise FileExistsError(f"Qualification export already exists: {existing[0]}")
+    payload = {
+        key: report.model_dump(mode="json") for key, report in sorted(reports.items())
+    }
+    _atomic_text(paths["data_qualification"], json.dumps(payload, indent=2))
+    rows = []
+    for key, report in sorted(reports.items()):
+        if not report.timeframe.intraday:
+            continue
+        rows.extend(
+            {"qualification": key, **detail.model_dump(mode="json")}
+            for detail in report.details
+        )
+    _atomic_csv(
+        paths["gap_manifest"],
+        rows,
+        ["qualification", *list(QualificationDetail.model_fields)],
     )
     return paths
 
@@ -265,7 +314,7 @@ def format_backtest_summary(result: BacktestResult) -> str:
         f"SPY return: {benchmark}",
     ]
     if result.exits_by_reason:
-        lines.append("Exit summary:")
+        lines.append("Execution-leg exit summary:")
         lines.extend(
             f"  {reason:<24} {count}" for reason, count in result.exits_by_reason.items()
         )
@@ -276,12 +325,13 @@ def format_backtest_summary(result: BacktestResult) -> str:
 
 
 def format_comparison_table(comparison: StrategyComparison) -> str:
+    qualification = format_data_qualification_header(comparison.data_qualification)
     header = (
         "Strategy                 Return    MaxDD     Pos  PosWin   PosPF  "
         "AvgWin   AvgLoss  MFE     MAE      Capture  Giveback  NeverStop  "
         "ProfitStop  Post5d   PostMFE5"
     )
-    rows = [header]
+    rows = [*(qualification.splitlines() if qualification else ()), "", header]
     for result in comparison.variants:
         metric = result.metrics
         position = result.position_metrics
@@ -328,6 +378,35 @@ def format_comparison_table(comparison: StrategyComparison) -> str:
     if comparison.warnings:
         rows.append(f"Warnings: {len(comparison.warnings)} (see JSON report)")
     return "\n".join(rows)
+
+
+def format_data_qualification_header(metadata: dict) -> str:
+    if not metadata:
+        return ""
+    daily = metadata.get("daily", {})
+    lines = [
+        "Data qualification",
+        "Daily:",
+        f"  symbols checked: {daily.get('symbols_checked', 0)}",
+        f"  expected sessions: {daily.get('sessions_expected', 0)}",
+        f"  missing sessions: {daily.get('missing_sessions', 0)}",
+        f"  unresolved gaps: {daily.get('unresolved_gaps', 0)}",
+    ]
+    for key, intraday in sorted(metadata.get("intraday", {}).items()):
+        lines.extend(
+            [
+                f"Intraday {key}:",
+                f"  candidate symbols: {intraday.get('symbols_checked', 0)}",
+                f"  expected sessions: {intraday.get('sessions_expected', 0)}",
+                f"  complete sessions: {intraday.get('complete_sessions', 0)}",
+                f"  missing sessions: {intraday.get('missing_sessions', 0)}",
+                f"  partial sessions: {intraday.get('partial_sessions', 0)}",
+                "  unknown sessions: "
+                f"{intraday.get('unknown_market_activity_sessions', 0)}",
+                f"  missing bars: {intraday.get('missing_bars', 0)}",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def _comparison_result_label(comparison: StrategyComparison, result: BacktestResult) -> str:

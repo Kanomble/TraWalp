@@ -7,8 +7,13 @@ each provider batch through the existing SQLite bulk upsert.
 
 ## Backward and forward coverage
 
-`sync-daily-history` accepts an inclusive date interval. In incremental mode it plans both edges
-of local coverage:
+`sync-daily-history` accepts an inclusive date interval. The first verification for a symbol,
+feed, adjustment mode, and target interval deliberately requests the complete provider window.
+This repairs internal gaps even when local first and last bars already cover both edges. After that
+successful verification, incremental runs request only the configured correction overlap. Expanding
+the target interval or changing feed/adjustment triggers another complete verification.
+
+Before an interval is verified, local edge diagnostics still describe backward and forward gaps:
 
 ```text
 requested  2024-01-01 ----------------------------- 2026-08-12
@@ -16,12 +21,13 @@ local                    2025-04-21 ---------------- 2026-08-12
 backward   2024-01-01 --- 2025-04-20
 ```
 
-A missing tail is planned in the same way. A small overlap permits provider corrections without
-creating duplicates. Successful ranges are recorded per symbol together with feed and adjustment
-mode. Consequently, an interrupted run resumes from durable batches, and known empty pre-listing
-ranges are not treated as failed requests on every run. `--full-window` deliberately bypasses this
-incremental plan. IPOs and other young symbols can validly start after the requested first session;
-they are reported as `symbols_without_older_data`, not as sync errors.
+A small overlap permits later provider corrections without creating duplicates. Successful complete
+verification ranges are recorded per symbol together with feed and adjustment mode. Disjoint ranges
+are never represented as one continuous verified interval. Consequently, an interrupted run resumes
+from durable batches, and known empty pre-listing ranges are not treated as failed requests on every
+run. `--full-window` deliberately requests the complete interval again. IPOs and other young symbols
+can validly start after the requested first session; they are reported as
+`symbols_without_older_data`, not as sync errors.
 
 The current tradable, SEC-identified company universe is selected automatically when `--symbols`
 is omitted. SPY is always added independently for benchmark coverage. Explicit comma-separated

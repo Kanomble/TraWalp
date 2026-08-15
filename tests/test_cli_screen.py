@@ -22,6 +22,15 @@ class EmptyScreener:
         )
 
 
+def test_cli_reports_missing_explicit_config_without_traceback(tmp_path, capsys) -> None:
+    missing = tmp_path / "missing.yaml"
+
+    result = cli.main(["--config", str(missing), "status"])
+
+    assert result == 2
+    assert "Configuration error" in capsys.readouterr().err
+
+
 def test_screen_cli_exports_without_api_credentials(tmp_path, monkeypatch, capsys) -> None:
     load_settings.cache_clear()
     settings = load_settings()

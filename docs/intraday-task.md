@@ -1755,3 +1755,8 @@ Die Task ist abgeschlossen, wenn:
 12. Unit- und Integrationstests bestehen.
 13. Ein kleiner realer Alpaca-Intraday-Sync erfolgreich validiert wurde, sofern Credentials verfügbar sind.
 14. Ein echter Strategy-F-Smoke-Test mit lokal gespeicherten Intraday-Daten erfolgreich läuft.
+# Historisches Design-/Task-Artefakt
+
+> Diese Datei dokumentiert die ursprüngliche Intraday-Implementierungsaufgabe und ist keine aktuelle
+> CLI-Bedienungsanleitung. Der implementierte Stand steht in `intraday-market-data.md`,
+> `position-management.md` und im README.

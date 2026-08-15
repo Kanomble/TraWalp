@@ -276,8 +276,11 @@ def _daily_coverage_value(
         previous.get("feed") == feed and previous.get("adjustment") == adjustment
     ):
         try:
-            start = min(start, datetime.fromisoformat(str(previous["start"])))
-            end = max(end, datetime.fromisoformat(str(previous["end_exclusive"])))
+            previous_start = datetime.fromisoformat(str(previous["start"]))
+            previous_end = datetime.fromisoformat(str(previous["end_exclusive"]))
+            if previous_start <= end and start <= previous_end:
+                start = min(start, previous_start)
+                end = max(end, previous_end)
         except (KeyError, TypeError, ValueError):
             pass
     return {
@@ -970,20 +973,16 @@ class DataSynchronizer:
                 coverage_state.get(symbol), start_at, end_at, feed, adjustment
             )
             ranges = (
-                (
-                    [(start_at, end_at)]
-                    if symbol == "SPY" and include_benchmark and not verified
-                    else _bar_edge_ranges(
-                        earliest,
-                        latest,
-                        BarTimeframe.DAY_1,
-                        start_at,
-                        end_at,
-                        self.daily_overlap_bars,
-                        previously_verified=verified,
-                    )
+                _bar_edge_ranges(
+                    earliest,
+                    latest,
+                    BarTimeframe.DAY_1,
+                    start_at,
+                    end_at,
+                    self.daily_overlap_bars,
+                    previously_verified=True,
                 )
-                if incremental
+                if incremental and verified
                 else [(start_at, end_at)]
             )
             for requested_range in ranges:

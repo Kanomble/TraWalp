@@ -239,6 +239,18 @@ def test_signal_friday_enters_monday_open_with_fractional_size_and_costs(tmp_pat
     assert result.equity_curve[-1].unrealized_pnl == 0
 
 
+def test_explicit_legacy_preset_preserves_legacy_exit_reason_names(tmp_path) -> None:
+    sessions = [date(2024, 1, 5), date(2024, 1, 8), date(2024, 1, 9)]
+    database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
+    source = FixtureScreens({sessions[0]: (_record(),)})
+
+    result = BacktestEngine(database, _config(max_holding_days=2), screen_source=source).run(
+        sessions[0], sessions[-1], preset=PositionManagementPreset.LEGACY
+    )
+
+    assert result.trades[0].exit_reason == "time_exit"
+
+
 @pytest.mark.parametrize(
     ("high", "low", "expected"),
     [("101", "89", "stop_loss"), ("113", "99", "profit_target"), ("113", "89", "stop_loss")],
@@ -447,6 +459,7 @@ def test_strategy_comparison_reuses_each_session_screen(monkeypatch, tmp_path) -
         sessions[0],
         sessions[-1],
         comparison_kind=StrategyComparisonKind.SCORE_VARIANTS,
+        data_qualification={"daily": {"missing_sessions": 0}},
         clock=lambda: datetime(2024, 1, 5, tzinfo=UTC),
     )
 
@@ -458,8 +471,17 @@ def test_strategy_comparison_reuses_each_session_screen(monkeypatch, tmp_path) -
         result.configuration["backtest"] == comparison.variants[0].configuration["backtest"]
         for result in comparison.variants
     )
-    paths = export_comparison(comparison, tmp_path / "reports")
+    assert comparison.data_qualification["daily"]["missing_sessions"] == 0
+    output = tmp_path / "reports"
+    old_reference = output / "all_comparison_2024-01-02_2024-01-04.csv"
+    output.mkdir()
+    old_reference.write_text("original\n", encoding="utf-8")
+    paths = export_comparison(comparison, output, stem="post_audit", overwrite=False)
     assert all(path.exists() for path in paths.values())
+    assert old_reference.read_text(encoding="utf-8") == "original\n"
+    assert '"data_qualification"' in paths["json"].read_text(encoding="utf-8")
+    with pytest.raises(FileExistsError, match="already exists"):
+        export_comparison(comparison, output, stem="post_audit", overwrite=False)
 
 
 def test_unified_strategy_comparison_includes_score_and_position_strategies(
@@ -945,6 +967,92 @@ def test_intraday_dynamic_uses_real_position_bars_and_daily_screening(
     assert result.configuration["execution"]["position_management_timeframe"] == timeframe
     assert any(f"position management timeframe: {timeframe}" in item for item in result.warnings)
     assert not any("daily OHLC cannot order" in item for item in result.warnings)
+
+
+def test_intraday_close_rule_uses_last_native_bar_price_and_timestamp(tmp_path) -> None:
+    signal_session = date(2024, 1, 2)
+    entry_session = date(2024, 1, 3)
+    final_session = date(2024, 1, 4)
+    database = _database(
+        tmp_path,
+        [
+            _bar("AAA", signal_session),
+            _bar("AAA", entry_session, high="110", low="89", close="90"),
+            _bar("AAA", final_session),
+        ],
+    )
+    timeframe = BarTimeframe.MINUTES_15
+    previous_open, _ = regular_session_bounds(signal_session)
+    entry_open, _ = regular_session_bounds(entry_session)
+    last_timestamp = entry_open + timeframe.duration
+    database.upsert_bars(
+        [
+            DailyBar(
+                symbol="AAA",
+                timeframe=timeframe,
+                timestamp=previous_open,
+                open=Decimal("100"),
+                high=Decimal("101"),
+                low=Decimal("99"),
+                close=Decimal("100"),
+                volume=100,
+            ),
+            DailyBar(
+                symbol="AAA",
+                timeframe=timeframe,
+                timestamp=entry_open,
+                open=Decimal("100"),
+                high=Decimal("101"),
+                low=Decimal("99"),
+                close=Decimal("100"),
+                volume=100,
+            ),
+            DailyBar(
+                symbol="AAA",
+                timeframe=timeframe,
+                timestamp=last_timestamp,
+                open=Decimal("107"),
+                high=Decimal("109"),
+                low=Decimal("106"),
+                close=Decimal("108"),
+                volume=100,
+            ),
+        ]
+    )
+    weak = _record(quality=40, valuation=40, opportunity=40, timing=40)
+    weak = weak.model_copy(
+        update={
+            "technical": weak.technical.model_copy(
+                update={"price": 90, "sma20": 100, "rsi_recovery": False, "momentum5": -0.1}
+            )
+        }
+    )
+    base = _config(slippage_bps=0, commission_bps=0)
+    config = base.model_copy(
+        update={
+            "position_management": PositionManagementConfig(
+                bar_timeframe=timeframe,
+                stop_loss=StopLossConfig(enabled=True, percent=0.03),
+                take_profit=TakeProfitConfig(enabled=False),
+                signal_decay=SignalDecayConfig(enabled=True, minimum_score_ratio=0.75),
+                max_hold=MaxHoldConfig(enabled=False, days=10, mode="disabled"),
+            ),
+            "intraday": base.intraday.model_copy(update={"warmup_bars": 1}),
+        }
+    )
+    source = FixtureScreens(
+        {signal_session: (_record(),), entry_session: (weak,)}
+    )
+
+    result = BacktestEngine(database, config, screen_source=source).run(
+        signal_session, final_session
+    )
+
+    trade = result.trades[0]
+    assert trade.exit_reason == "signal_decay"
+    assert trade.exit_reference_price == 108
+    assert trade.exit_timestamp == last_timestamp
+    assert trade.exit_timestamp >= trade.entry_timestamp
 
 
 def test_intraday_backtest_refuses_incomplete_warmup_without_daily_fallback(tmp_path) -> None:

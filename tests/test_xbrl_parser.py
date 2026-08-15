@@ -60,6 +60,38 @@ def test_missing_metric_is_unavailable_not_zero() -> None:
     assert "net_income" not in metrics
 
 
+def test_same_filing_preserves_discrete_quarter_and_year_to_date_contexts() -> None:
+    payload = _payload()
+    observations = payload["facts"]["us-gaap"][
+        "RevenueFromContractWithCustomerExcludingAssessedTax"
+    ]["units"]["USD"]
+    observations[:] = [
+        {
+            **observations[0],
+            "start": "2024-04-01",
+            "end": "2024-06-30",
+            "val": 120,
+            "fp": "Q2",
+        },
+        {
+            **observations[0],
+            "start": "2024-01-01",
+            "end": "2024-06-30",
+            "val": 220,
+            "fp": "Q2",
+        },
+    ]
+
+    revenue = [
+        fact for fact in parse_company_facts(payload, "X") if fact.metric == "revenue"
+    ]
+
+    assert [(fact.period_start.isoformat(), fact.value) for fact in revenue] == [
+        ("2024-04-01", Decimal("120")),
+        ("2024-01-01", Decimal("220")),
+    ]
+
+
 def test_dei_shares_outstanding_preserves_taxonomy_and_concept() -> None:
     payload = _payload()
     payload["facts"]["dei"] = {

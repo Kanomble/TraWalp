@@ -14,6 +14,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from trading_system.models.market_data import BarTimeframe
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_STRATEGY_PATH = PROJECT_ROOT / "config" / "strategy.yaml"
+
 
 class UniverseConfig(BaseModel):
     min_price: float = Field(5.0, gt=0)
@@ -414,16 +417,42 @@ def _read_yaml(path: Path) -> dict[str, Any]:
             return json.loads(text)
         except json.JSONDecodeError as exc:
             raise RuntimeError("Install PyYAML to read strategy configuration") from exc
-    data = yaml.safe_load(text)
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid strategy YAML: {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"Strategy config must contain a mapping: {path}")
     return data
 
 
 @lru_cache(maxsize=4)
-def load_settings(strategy_path: str | Path = "config/strategy.yaml") -> Settings:
-    load_dotenv()
-    strategy = StrategyConfig.model_validate(_read_yaml(Path(strategy_path)))
+def load_settings(strategy_path: str | Path | None = None) -> Settings:
+    config_path = (
+        DEFAULT_STRATEGY_PATH
+        if strategy_path is None
+        else Path(strategy_path).expanduser().resolve()
+    )
+    config_base = (
+        config_path.parent.parent
+        if config_path.parent.name.casefold() == "config"
+        else config_path.parent
+    )
+    load_dotenv(config_base / ".env")
+    strategy = StrategyConfig.model_validate(_read_yaml(config_path))
+    storage = strategy.storage
+    strategy = strategy.model_copy(
+        update={
+            "storage": storage.model_copy(
+                update={
+                    "database_path": _resolve_config_path(
+                        storage.database_path, config_base
+                    ),
+                    "reports_path": _resolve_config_path(storage.reports_path, config_base),
+                }
+            )
+        }
+    )
     return Settings(
         strategy=strategy,
         alpaca_api_key=os.getenv("ALPACA_API_KEY") or None,
@@ -433,3 +462,7 @@ def load_settings(strategy_path: str | Path = "config/strategy.yaml") -> Setting
         enable_order_submission=os.getenv("ENABLE_ORDER_SUBMISSION", "false").lower()
         in {"1", "true", "yes"},
     )
+
+
+def _resolve_config_path(path: Path, base: Path) -> Path:
+    return path if path.is_absolute() else (base / path).resolve()
