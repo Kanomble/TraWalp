@@ -27,12 +27,19 @@ class PositionManagementPreset(StrEnum):
     FIXED_STOP_TAKE_PROFIT = "fixed-stop-take-profit"
     FIXED_STOP_ATR_TRAILING = "fixed-stop-atr-trailing"
     FIXED_STOP_PARTIAL_ATR = "fixed-stop-partial-atr"
+    D1_SWING_PROFIT_LOCK = "D1-swing-profit-lock"
+    D2_SWING_RUNNER = "D2-swing-runner"
+    D3_INTRADAY_TRAIL_GUARD = "D3-intraday-trail-guard"
+    D4_INTRADAY_CONFIRMED_ENTRY = "D4-intraday-confirmed-entry"
+    D5_HYBRID_CONFIRMED_SWING = "D5-hybrid-confirmed-swing"
 
 
 class StrategyComparisonKind(StrEnum):
     ALL = "all"
     SCORE_VARIANTS = "score_variants"
     POSITION_MANAGEMENT = "position_management"
+    RESEARCH_D1_D5 = "research_d1_d5"
+    EXTENDED_VALIDATION = "extended_validation"
 
 
 class StopLossClassification(StrEnum):
@@ -105,6 +112,47 @@ class BacktestTrade(BaseModel):
     partial_level: int | None = Field(default=None, ge=0)
     position_id: str = ""
     execution_leg_id: str = ""
+    daily_candidate_rank: int | None = Field(default=None, ge=1)
+    daily_candidate_count: int | None = Field(default=None, ge=1)
+    daily_candidate_score: float | None = None
+    daily_candidate_variant: StrategyVariant | None = None
+    confirmation_required: bool = False
+    confirmation_bar_expected_timestamp: datetime | None = None
+    confirmation_bar_timestamp: datetime | None = None
+    confirmation_bar_present: bool = False
+    confirmation_open: float | None = None
+    confirmation_high: float | None = None
+    confirmation_low: float | None = None
+    confirmation_close: float | None = None
+    confirmation_volume: int | None = Field(default=None, ge=0)
+    confirmation_vwap: float | None = None
+    confirmation_passed: bool | None = None
+    confirmation_failure_reason: str | None = None
+    intended_entry_timestamp: datetime | None = None
+    actual_entry_timestamp: datetime | None = None
+    entry_delayed_from_open: bool = False
+    execution_bar_present: bool = False
+    trail_guard_enabled: bool = False
+    completed_bars_before_trail_arm: int | None = Field(default=None, ge=0)
+    trail_armed_timestamp: datetime | None = None
+    trail_armed_reference_price: float | None = None
+    atr_at_trail_activation: float | None = None
+    mfe_at_trail_activation: float | None = None
+    initial_risk_per_share_R: float | None = Field(default=None, gt=0)
+    maximum_mfe_in_R: float | None = None
+    profit_lock_state: str | None = None
+    profit_lock_activation_timestamp: datetime | None = None
+    break_even_lock_timestamp: datetime | None = None
+    one_r_lock_timestamp: datetime | None = None
+    active_profit_lock_stop: float | None = None
+    cooldown_applied: bool = False
+    cooldown_blocked: bool = False
+    cooldown_reason: str | None = None
+    previous_position_net_return: float | None = None
+    intraday_session_status: str | None = None
+    opening_bar_complete: bool | None = None
+    execution_bar_complete: bool | None = None
+    gap_affected_trade: bool = False
 
 
 class BacktestPosition(BaseModel):
@@ -174,6 +222,53 @@ class BacktestPosition(BaseModel):
     post_exit_mae_3d: float | None = None
     post_exit_mae_5d: float | None = None
     post_exit_mae_10d: float | None = None
+    daily_candidate_rank: int | None = Field(default=None, ge=1)
+    daily_candidate_count: int | None = Field(default=None, ge=1)
+    daily_candidate_score: float | None = None
+    daily_candidate_variant: StrategyVariant | None = None
+    confirmation_required: bool = False
+    confirmation_bar_expected_timestamp: datetime | None = None
+    confirmation_bar_timestamp: datetime | None = None
+    confirmation_bar_present: bool = False
+    confirmation_open: float | None = None
+    confirmation_high: float | None = None
+    confirmation_low: float | None = None
+    confirmation_close: float | None = None
+    confirmation_volume: int | None = Field(default=None, ge=0)
+    confirmation_vwap: float | None = None
+    confirmation_passed: bool | None = None
+    confirmation_failure_reason: str | None = None
+    intended_entry_timestamp: datetime | None = None
+    actual_entry_timestamp: datetime | None = None
+    entry_delayed_from_open: bool = False
+    execution_bar_present: bool = False
+    trail_guard_enabled: bool = False
+    completed_bars_before_trail_arm: int | None = Field(default=None, ge=0)
+    trail_armed_timestamp: datetime | None = None
+    trail_armed_reference_price: float | None = None
+    atr_at_trail_activation: float | None = None
+    mfe_at_trail_activation: float | None = None
+    initial_risk_per_share_R: float | None = Field(default=None, gt=0)
+    maximum_mfe_in_R: float | None = None
+    profit_lock_state: str | None = None
+    profit_lock_activation_timestamp: datetime | None = None
+    break_even_lock_timestamp: datetime | None = None
+    one_r_lock_timestamp: datetime | None = None
+    active_profit_lock_stop: float | None = None
+    cooldown_applied: bool = False
+    cooldown_blocked: bool = False
+    cooldown_reason: str | None = None
+    previous_position_net_return: float | None = None
+    intraday_session_status: str | None = None
+    opening_bar_complete: bool | None = None
+    execution_bar_complete: bool | None = None
+    gap_affected_trade: bool = False
+    trade_path_complete: bool | None = None
+    trade_path_missing_bar_count: int | None = Field(default=None, ge=0)
+    trade_path_missing_timestamps: tuple[str, ...] = ()
+    gap_before_exit: bool | None = None
+    gap_after_exit_only: bool | None = None
+    missing_opening_bar_affected_entry: bool | None = None
 
 
 class ExecutionMetrics(BaseModel):
@@ -372,6 +467,8 @@ class BacktestResult(BaseModel):
     annualized_metrics_reliable: bool = False
     warnings: tuple[str, ...] = ()
     exits_by_reason: dict[str, int] = Field(default_factory=dict)
+    strict_coverage_sensitivity: bool = False
+    research_diagnostics: dict = Field(default_factory=dict)
 
 
 class IntradayPrefetchTimeframe(BaseModel):
@@ -415,3 +512,5 @@ class StrategyComparison(BaseModel):
     intraday_prefetch: IntradayPrefetch = IntradayPrefetch()
     data_qualification: dict = Field(default_factory=dict)
     warnings: tuple[str, ...] = ()
+    strict_coverage_sensitivity: bool = False
+    research_diagnostics: dict = Field(default_factory=dict)

@@ -1,4 +1,5 @@
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 
@@ -98,6 +99,94 @@ def test_backtest_cli_rejects_invalid_period_clearly(
 
     assert result == 1
     assert "start must not be after end" in capsys.readouterr().err
+
+
+def test_research_local_only_flag_never_invokes_intraday_prefetch(
+    tmp_path, monkeypatch
+) -> None:
+    load_settings.cache_clear()
+    settings = load_settings()
+    strategy = settings.strategy.model_copy(
+        update={
+            "storage": StorageConfig(
+                database_path=tmp_path / "research.sqlite3",
+                reports_path=tmp_path / "reports",
+            )
+        }
+    )
+    monkeypatch.setattr(
+        cli, "load_settings", lambda _path: settings.model_copy(update={"strategy": strategy})
+    )
+    preparation = SimpleNamespace(
+        intraday_requirements=(object(),),
+        sessions=(date(2026, 5, 1), date(2026, 5, 4)),
+        intraday_candidate_symbols=1,
+    )
+    monkeypatch.setattr(cli, "prepare_strategy_comparison", lambda *_args, **_kwargs: preparation)
+    monkeypatch.setattr(cli, "_comparison_data_qualification", lambda *_args: {})
+    monkeypatch.setattr(cli, "_qualification_metadata", lambda _reports: {})
+    monkeypatch.setattr(cli, "_qualification_session_statuses", lambda *_args: {})
+    monkeypatch.setattr(cli, "format_data_qualification_header", lambda _metadata: "")
+    monkeypatch.setattr(
+        cli,
+        "comparison_intraday_prefetch_metadata",
+        lambda *_args, **_kwargs: SimpleNamespace(required=True, enabled=False),
+    )
+    monkeypatch.setattr(
+        cli,
+        "prefetch_comparison_intraday_data",
+        lambda *_args, **_kwargs: pytest.fail("local-only run attempted intraday prefetch"),
+    )
+    comparison = SimpleNamespace()
+    monkeypatch.setattr(cli, "compare_strategies", lambda *_args, **_kwargs: comparison)
+    monkeypatch.setattr(cli, "export_research_comparison", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cli, "format_comparison_table", lambda _comparison: "research")
+
+    result = cli.main(
+        [
+            "compare-strategies",
+            "--start",
+            "2026-05-01",
+            "--end",
+            "2026-05-04",
+            "--include",
+            "research-d1-d5",
+            "--no-intraday-prefetch",
+        ]
+    )
+
+    assert result == 0
+
+
+def test_extended_validation_cli_never_constructs_a_synchronizer(
+    tmp_path, monkeypatch
+) -> None:
+    load_settings.cache_clear()
+    settings = load_settings()
+    strategy = settings.strategy.model_copy(
+        update={
+            "storage": StorageConfig(
+                database_path=tmp_path / "validation.sqlite3",
+                reports_path=tmp_path / "reports",
+            )
+        }
+    )
+    monkeypatch.setattr(
+        cli, "load_settings", lambda _path: settings.model_copy(update={"strategy": strategy})
+    )
+    monkeypatch.setattr(
+        cli,
+        "_synchronizer",
+        lambda *_args, **_kwargs: pytest.fail("validation attempted network setup"),
+    )
+    bundle = SimpleNamespace()
+    monkeypatch.setattr(cli, "run_extended_validation", lambda *_args: bundle)
+    monkeypatch.setattr(cli, "export_extended_validation", lambda *_args: {})
+    monkeypatch.setattr(
+        cli, "format_extended_validation_summary", lambda _bundle: "validation"
+    )
+
+    assert cli.main(["validate-extended"]) == 0
 
 
 class RoutedSynchronizer:

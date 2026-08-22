@@ -109,6 +109,16 @@ class AtrTrailingStopConfig(BaseModel):
     atr_period: int = Field(14, ge=2)
     atr_multiplier: float = Field(1.0, gt=0)
     activation_profit: float = Field(0.0, ge=0)
+    minimum_completed_bars_before_activation: int = Field(0, ge=0)
+
+
+class ProfitLockConfig(BaseModel):
+    """Research-only R milestones; disabled by every production preset."""
+
+    enabled: bool = False
+    break_even_activation_r: float = Field(1.0, gt=0)
+    one_r_activation_r: float = Field(2.0, gt=0)
+    locked_profit_r: float = Field(1.0, gt=0)
 
 
 class SignalDecayConfig(BaseModel):
@@ -119,6 +129,7 @@ class SignalDecayConfig(BaseModel):
 class PartialTakeProfitLevel(BaseModel):
     profit: float = Field(gt=0)
     sell_fraction: float = Field(gt=0, le=1)
+    quantity_basis: Literal["current", "original"] = "current"
 
 
 class PartialTakeProfitConfig(BaseModel):
@@ -186,6 +197,7 @@ class PositionManagementConfig(BaseModel):
     take_profit: TakeProfitConfig = TakeProfitConfig()
     trailing_stop: TrailingStopConfig = TrailingStopConfig()
     atr_trailing_stop: AtrTrailingStopConfig = AtrTrailingStopConfig()
+    profit_lock: ProfitLockConfig = ProfitLockConfig()
     signal_decay: SignalDecayConfig = SignalDecayConfig()
     partial_take_profit: PartialTakeProfitConfig = PartialTakeProfitConfig()
     max_hold: MaxHoldConfig = MaxHoldConfig()

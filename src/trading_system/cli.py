@@ -28,10 +28,16 @@ from trading_system.backtest.report import (
     export_candidate_audit,
     export_comparison,
     export_data_qualification,
+    export_research_comparison,
     format_backtest_summary,
     format_candidate_audit_summary,
     format_comparison_table,
     format_data_qualification_header,
+)
+from trading_system.backtest.validation import (
+    export_extended_validation,
+    format_extended_validation_summary,
+    run_extended_validation,
 )
 from trading_system.config import StrategyConfig, load_settings
 from trading_system.data.alpaca_client import AlpacaDataClient
@@ -41,6 +47,7 @@ from trading_system.data.market_sessions import (
     effective_trading_session,
     intraday_warmup_start,
     required_daily_warmup_sessions,
+    trading_sessions_between,
 )
 from trading_system.data.qualification import (
     DataQualificationReport,
@@ -204,7 +211,7 @@ def _parser() -> argparse.ArgumentParser:
     comparison.add_argument("--end", type=date.fromisoformat, required=True)
     comparison.add_argument(
         "--include",
-        choices=("all", "score-variants", "position-management"),
+        choices=("all", "score-variants", "position-management", "research-d1-d5"),
         default="all",
         help="Select all strategies or one comparison family (default: all)",
     )
@@ -216,6 +223,27 @@ def _parser() -> argparse.ArgumentParser:
     comparison.add_argument(
         "--output-stem",
         help="Write comparison and qualification reports under a new non-existing stem",
+    )
+    comparison.add_argument(
+        "--strict-intraday-coverage",
+        action="store_true",
+        help="Research-only sensitivity: admit only COMPLETE native intraday symbol-sessions",
+    )
+    validation = commands.add_parser(
+        "validate-extended",
+        help="Run the frozen local-only D1/C and C/intraday extended OOS validation",
+    )
+    validation.add_argument(
+        "--start", type=date.fromisoformat, default=date(2025, 5, 1)
+    )
+    validation.add_argument(
+        "--end", type=date.fromisoformat, default=date(2026, 4, 30)
+    )
+    validation.add_argument(
+        "--reference-start", type=date.fromisoformat, default=date(2026, 5, 1)
+    )
+    validation.add_argument(
+        "--reference-end", type=date.fromisoformat, default=date(2026, 8, 12)
     )
     position_comparison = commands.add_parser(
         "backtest-compare", help="Compare the daily position-management presets"
@@ -488,9 +516,36 @@ def main(argv: list[str] | None = None) -> int:
         print(format_comparison_table(comparison_result))
         print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
         return 0
+    if args.command == "validate-extended":
+        try:
+            print("Qualifying frozen OOS data and discovering PIT candidates...", flush=True)
+            bundle = run_extended_validation(
+                database,
+                settings.strategy,
+                args.start,
+                args.end,
+                args.reference_start,
+                args.reference_end,
+            )
+            paths = export_extended_validation(
+                bundle, settings.strategy.storage.reports_path
+            )
+        except (FileExistsError, ValueError) as exc:
+            print(f"Extended validation refused: {exc}", file=sys.stderr)
+            return 1
+        print(format_extended_validation_summary(bundle))
+        print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
+        return 0
     if args.command == "compare-strategies":
         try:
             comparison_kind = StrategyComparisonKind(args.include.replace("-", "_"))
+            if (
+                args.strict_intraday_coverage
+                and comparison_kind is not StrategyComparisonKind.RESEARCH_D1_D5
+            ):
+                raise ValueError(
+                    "--strict-intraday-coverage is available only with research-d1-d5"
+                )
             print("Preparing strategy comparison...", flush=True)
             preparation = prepare_strategy_comparison(
                 database,
@@ -505,6 +560,9 @@ def main(argv: list[str] | None = None) -> int:
                 preparation,
             )
             qualification_metadata = _qualification_metadata(qualification_reports)
+            intraday_session_statuses = _qualification_session_statuses(
+                qualification_reports, preparation
+            )
             print("\n" + format_data_qualification_header(qualification_metadata))
             print(
                 "\nShared PIT screens:"
@@ -581,17 +639,85 @@ def main(argv: list[str] | None = None) -> int:
                 preparation=preparation,
                 intraday_prefetch=prefetch,
                 data_qualification=qualification_metadata,
+                strict_coverage_sensitivity=args.strict_intraday_coverage,
+                intraday_session_statuses=intraday_session_statuses,
             )
+            strict_comparison = None
+            cost_comparisons: dict[str, object] = {}
+            if (
+                comparison_kind is StrategyComparisonKind.RESEARCH_D1_D5
+                and not args.strict_intraday_coverage
+            ):
+                if (
+                    settings.strategy.backtest.slippage_bps != 5
+                    or settings.strategy.backtest.commission_bps != 0
+                ):
+                    raise ValueError(
+                        "research-d1-d5 requires the frozen 5 bps / 0 bps baseline"
+                    )
+                print("\nRunning strict intraday coverage sensitivity...", flush=True)
+                strict_comparison = compare_strategies(
+                    database,
+                    settings.strategy,
+                    args.start,
+                    args.end,
+                    comparison_kind=comparison_kind,
+                    preparation=preparation,
+                    intraday_prefetch=prefetch,
+                    data_qualification=qualification_metadata,
+                    strict_coverage_sensitivity=True,
+                    intraday_session_statuses=intraday_session_statuses,
+                )
+                cost_comparisons = {"BASELINE": comparison_result}
+                for name, slippage_bps, commission_bps in (
+                    ("2X_SLIPPAGE", 10, 0),
+                    ("3X_SLIPPAGE", 15, 0),
+                    ("COMMISSION_SENSITIVITY", 5, 5),
+                ):
+                    print(f"Running cost stress: {name}...", flush=True)
+                    cost_config = settings.strategy.model_copy(
+                        update={
+                            "backtest": settings.strategy.backtest.model_copy(
+                                update={
+                                    "slippage_bps": slippage_bps,
+                                    "commission_bps": commission_bps,
+                                }
+                            )
+                        }
+                    )
+                    cost_comparisons[name] = compare_strategies(
+                        database,
+                        cost_config,
+                        args.start,
+                        args.end,
+                        comparison_kind=comparison_kind,
+                        preparation=preparation,
+                        intraday_prefetch=prefetch,
+                        data_qualification=qualification_metadata,
+                        intraday_session_statuses=intraday_session_statuses,
+                    )
         except ValueError as exc:
             print(f"Strategy comparison refused: {exc}", file=sys.stderr)
             return 1
         try:
-            paths = export_comparison(
-                comparison_result,
-                settings.strategy.storage.reports_path,
-                stem=args.output_stem,
-                overwrite=args.output_stem is None,
-            )
+            if strict_comparison is not None:
+                research_stem = args.output_stem or (
+                    f"d1_d5_research_{args.start}_{args.end}"
+                )
+                paths = export_research_comparison(
+                    comparison_result,
+                    strict_comparison,
+                    cost_comparisons,
+                    settings.strategy.storage.reports_path,
+                    stem=research_stem,
+                )
+            else:
+                paths = export_comparison(
+                    comparison_result,
+                    settings.strategy.storage.reports_path,
+                    stem=args.output_stem,
+                    overwrite=args.output_stem is None,
+                )
             if args.output_stem:
                 paths.update(
                     export_data_qualification(
@@ -884,6 +1010,15 @@ def _comparison_data_qualification(
             requirement.requested_start.date(),
             preparation.requested_end,
             requirement.timeframe,
+            detail_limit=max(
+                1_000,
+                len(requirement.symbols)
+                * len(
+                    trading_sessions_between(
+                        requirement.requested_start.date(), preparation.requested_end
+                    )
+                ),
+            ),
         )
     return reports
 
@@ -898,6 +1033,22 @@ def _qualification_metadata(
         if key.startswith("intraday_")
     }
     return {"daily": daily, "intraday": intraday}
+
+
+def _qualification_session_statuses(
+    reports: dict[str, DataQualificationReport],
+    preparation: StrategyComparisonPreparation,
+) -> dict[tuple[str, date], str]:
+    statuses: dict[tuple[str, date], str] = {}
+    for requirement in preparation.intraday_requirements:
+        report = reports[f"intraday_{requirement.timeframe.value}"]
+        for symbol in requirement.symbols:
+            for session in requirement.comparison_sessions:
+                statuses[(symbol, session)] = "COMPLETE"
+        for detail in report.details:
+            if detail.session in requirement.comparison_sessions:
+                statuses[(detail.symbol, detail.session)] = detail.status.value
+    return statuses
 
 
 def _format_storage_report(report: dict) -> str:

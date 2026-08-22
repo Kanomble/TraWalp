@@ -107,6 +107,54 @@ def finalize_position(
         score_change_since_previous_entry=previous_score_change,
         entry_triggers=state.entry_triggers,
         fresh_trigger_since_previous_exit=state.fresh_trigger_since_previous_exit,
+        daily_candidate_rank=state.daily_candidate_rank,
+        daily_candidate_count=state.daily_candidate_count,
+        daily_candidate_score=state.daily_candidate_score,
+        daily_candidate_variant=state.daily_candidate_variant,
+        confirmation_required=state.confirmation_required,
+        confirmation_bar_expected_timestamp=state.confirmation_bar_expected_timestamp,
+        confirmation_bar_timestamp=state.confirmation_bar_timestamp,
+        confirmation_bar_present=state.confirmation_bar_present,
+        confirmation_open=state.confirmation_open,
+        confirmation_high=state.confirmation_high,
+        confirmation_low=state.confirmation_low,
+        confirmation_close=state.confirmation_close,
+        confirmation_volume=state.confirmation_volume,
+        confirmation_vwap=state.confirmation_vwap,
+        confirmation_passed=state.confirmation_passed,
+        confirmation_failure_reason=state.confirmation_failure_reason,
+        intended_entry_timestamp=state.intended_entry_timestamp,
+        actual_entry_timestamp=state.actual_entry_timestamp,
+        entry_delayed_from_open=state.entry_delayed_from_open,
+        execution_bar_present=state.execution_bar_present,
+        trail_guard_enabled=state.trail_guard_enabled,
+        completed_bars_before_trail_arm=state.completed_bars_before_trail_arm,
+        trail_armed_timestamp=state.trail_armed_timestamp,
+        trail_armed_reference_price=state.trail_armed_reference_price,
+        atr_at_trail_activation=state.atr_at_trail_activation,
+        mfe_at_trail_activation=state.mfe_at_trail_activation,
+        initial_risk_per_share_R=state.initial_risk_per_share_R,
+        maximum_mfe_in_R=(
+            (state.highest_price_since_entry - state.entry_price)
+            / state.initial_risk_per_share_R
+            if state.initial_risk_per_share_R
+            else None
+        ),
+        profit_lock_state=(
+            state.profit_lock_state.value if state.initial_risk_per_share_R else None
+        ),
+        profit_lock_activation_timestamp=state.profit_lock_activation_timestamp,
+        break_even_lock_timestamp=state.break_even_lock_timestamp,
+        one_r_lock_timestamp=state.one_r_lock_timestamp,
+        active_profit_lock_stop=state.profit_lock_stop_price,
+        cooldown_applied=state.cooldown_applied,
+        cooldown_blocked=state.cooldown_blocked,
+        cooldown_reason=state.cooldown_reason,
+        previous_position_net_return=state.previous_position_net_return,
+        intraday_session_status=state.intraday_session_status,
+        opening_bar_complete=state.opening_bar_complete,
+        execution_bar_complete=state.execution_bar_complete,
+        gap_affected_trade=state.gap_affected_trade,
     )
 
 

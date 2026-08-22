@@ -8,6 +8,8 @@ from trading_system.backtest.position_manager import (
     PositionAction,
     PositionManager,
     PositionState,
+    ProfitLockState,
+    economic_break_even_stop,
 )
 from trading_system.config import (
     AtrTrailingStopConfig,
@@ -16,6 +18,7 @@ from trading_system.config import (
     PartialTakeProfitLevel,
     PortfolioRotationConfig,
     PositionManagementConfig,
+    ProfitLockConfig,
     SignalDecayConfig,
     StopLossConfig,
     TakeProfitConfig,
@@ -273,3 +276,127 @@ def test_portfolio_rotation_requires_better_external_candidate_and_covers_costs(
         best_candidate_score=70.05,
     )
     assert too_small.action is PositionAction.HOLD
+
+
+def test_profit_lock_waits_for_completed_bar_and_activates_next_bar() -> None:
+    manager = PositionManager(
+        _config(
+            stop_loss=StopLossConfig(enabled=True, percent=0.03),
+            profit_lock=ProfitLockConfig(enabled=True),
+        )
+    )
+    position = _position(stop_price=97, initial_risk_per_share_R=3, holding_days=1)
+    activation_bar = _bar(high=103, low=99, close=102)
+
+    assert manager.evaluate_intrabar(position, activation_bar).action is PositionAction.HOLD
+    manager.update_after_bar(position, activation_bar)
+
+    assert position.profit_lock_state is ProfitLockState.BREAK_EVEN_LOCK
+    assert position.profit_lock_stop_price == pytest.approx(100)
+    assert position.break_even_lock_timestamp == activation_bar.timestamp
+    next_bar = manager.evaluate_intrabar(position, _bar(high=101, low=99, close=100))
+    assert next_bar.reason is ExitReason.PROFIT_LOCK
+    assert next_bar.reference_price == pytest.approx(100)
+
+
+def test_profit_lock_no_activation_two_r_raise_only_and_gap() -> None:
+    manager = PositionManager(
+        _config(
+            stop_loss=StopLossConfig(enabled=True, percent=0.03),
+            atr_trailing_stop=AtrTrailingStopConfig(enabled=True),
+            profit_lock=ProfitLockConfig(enabled=True),
+        )
+    )
+    position = _position(
+        stop_price=97,
+        atr_trailing_stop_price=105,
+        initial_risk_per_share_R=3,
+    )
+
+    manager.update_after_bar(position, _bar(high=102.9, low=99))
+    assert position.profit_lock_stop_price is None
+    manager.update_after_bar(position, _bar(high=106, low=99))
+    assert position.profit_lock_state is ProfitLockState.ONE_R_LOCK
+    assert position.profit_lock_stop_price == pytest.approx(103)
+    assert position.one_r_lock_timestamp is not None
+
+    higher_stop = manager.evaluate_intrabar(position, _bar(high=106, low=104))
+    assert higher_stop.reason is ExitReason.ATR_TRAILING_STOP
+    gap = manager.evaluate_open(position, _bar(opening=100, high=101, low=99, close=100))
+    assert gap.reason is ExitReason.ATR_TRAILING_STOP
+    assert gap.reference_price == 100
+    assert position.gap_affected_trade is True
+
+
+def test_economic_break_even_reference_offsets_fill_and_commissions() -> None:
+    reference = economic_break_even_stop(
+        100.05, slippage_rate=0.0005, commission_rate=0.0005
+    )
+    sell_fill = reference * (1 - 0.0005)
+    net_exit = sell_fill * (1 - 0.0005)
+
+    assert net_exit == pytest.approx(100.05 * (1 + 0.0005))
+
+
+def test_profit_lock_survives_original_quantity_runner_partial() -> None:
+    manager = PositionManager(
+        _config(
+            partial_take_profit=PartialTakeProfitConfig(
+                enabled=True,
+                levels=[
+                    PartialTakeProfitLevel(
+                        profit=0.12,
+                        sell_fraction=0.33,
+                        quantity_basis="original",
+                    )
+                ],
+            ),
+            profit_lock=ProfitLockConfig(enabled=True),
+        )
+    )
+    position = _position(initial_risk_per_share_R=3)
+
+    partial = manager.evaluate_intrabar(position, _bar(high=112.1, low=99))
+    assert partial.quantity == pytest.approx(33)
+    position.quantity -= float(partial.quantity)
+    position.partial_exit_levels_triggered.add(0)
+    manager.update_after_bar(position, _bar(high=106, low=99))
+
+    assert position.quantity == pytest.approx(67)
+    assert position.profit_lock_stop_price == pytest.approx(103)
+
+
+def test_trail_guard_blocks_entry_bar_trail_but_not_catastrophe_or_partial() -> None:
+    manager = PositionManager(
+        _config(
+            stop_loss=StopLossConfig(enabled=True, percent=0.03),
+            atr_trailing_stop=AtrTrailingStopConfig(
+                enabled=True,
+                atr_period=14,
+                atr_multiplier=1,
+                activation_profit=0,
+                minimum_completed_bars_before_activation=1,
+            ),
+            partial_take_profit=PartialTakeProfitConfig(
+                enabled=True,
+                levels=[PartialTakeProfitLevel(profit=0.015, sell_fraction=0.5)],
+            ),
+        )
+    )
+    position = _position(stop_price=97, current_atr=2, holding_days=1)
+    manager.activate_at_open(position, 100)
+    assert position.atr_trailing_stop_price is None
+
+    entry_bar = _bar(high=101, low=97.5, close=100)
+    assert manager.evaluate_intrabar(position, entry_bar).action is PositionAction.HOLD
+    manager.update_after_bar(position, entry_bar, next_atr=2)
+    assert position.completed_bars_before_trail_arm == 1
+    assert position.atr_trailing_stop_price == pytest.approx(99)
+    guarded_exit = manager.evaluate_intrabar(position, _bar(low=98.5))
+    assert guarded_exit.reason is ExitReason.ATR_TRAILING_STOP
+
+    catastrophe = _position(stop_price=97, current_atr=2, holding_days=1)
+    assert manager.evaluate_intrabar(catastrophe, _bar(low=96)).reason is ExitReason.STOP_LOSS
+    partial = _position(stop_price=97, current_atr=2, holding_days=1)
+    decision = manager.evaluate_intrabar(partial, _bar(high=102, low=97.5))
+    assert decision.reason is ExitReason.PARTIAL_TAKE_PROFIT

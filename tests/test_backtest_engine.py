@@ -6,7 +6,11 @@ import pytest
 from trading_system.backtest import engine as engine_module
 from trading_system.backtest.engine import BacktestEngine, HistoricalScreenSource
 from trading_system.backtest.presets import position_management_preset
-from trading_system.backtest.report import export_backtest, export_comparison
+from trading_system.backtest.report import (
+    export_backtest,
+    export_comparison,
+    export_research_comparison,
+)
 from trading_system.config import (
     MaxHoldConfig,
     PartialTakeProfitConfig,
@@ -26,6 +30,7 @@ from trading_system.data.market_sessions import (
 )
 from trading_system.data.sync import DataSynchronizer
 from trading_system.models.backtest import (
+    BacktestPosition,
     PositionManagementPreset,
     StrategyComparisonKind,
     StrategyVariant,
@@ -117,6 +122,27 @@ def _bar(
         low=Decimal(low),
         close=Decimal(close),
         volume=1_000_000,
+    )
+
+
+def _intraday_bar(
+    symbol: str,
+    timestamp: datetime,
+    *,
+    opening: str = "100",
+    high: str = "101",
+    low: str = "99",
+    close: str = "100",
+) -> DailyBar:
+    return DailyBar(
+        symbol=symbol,
+        timeframe=BarTimeframe.MINUTES_15,
+        timestamp=timestamp,
+        open=Decimal(opening),
+        high=Decimal(high),
+        low=Decimal(low),
+        close=Decimal(close),
+        volume=1_000,
     )
 
 
@@ -482,6 +508,35 @@ def test_strategy_comparison_reuses_each_session_screen(monkeypatch, tmp_path) -
     assert '"data_qualification"' in paths["json"].read_text(encoding="utf-8")
     with pytest.raises(FileExistsError, match="already exists"):
         export_comparison(comparison, output, stem="post_audit", overwrite=False)
+
+    research = comparison.model_copy(
+        update={"comparison_kind": StrategyComparisonKind.RESEARCH_D1_D5}
+    )
+    strict = research.model_copy(update={"strict_coverage_sensitivity": True})
+    research_paths = export_research_comparison(
+        research,
+        strict,
+        {
+            "BASELINE": research,
+            "2X_SLIPPAGE": research,
+            "3X_SLIPPAGE": research,
+            "COMMISSION_SENSITIVITY": research,
+        },
+        output,
+        stem="d1_d5_test",
+    )
+    assert all(path.exists() for path in research_paths.values())
+    assert "strict_coverage_sensitivity" in research_paths[
+        "diagnostics"
+    ].read_text(encoding="utf-8")
+    with pytest.raises(FileExistsError, match="already exists"):
+        export_research_comparison(
+            research,
+            strict,
+            {"BASELINE": research},
+            output,
+            stem="d1_d5_test",
+        )
 
 
 def test_unified_strategy_comparison_includes_score_and_position_strategies(
@@ -967,6 +1022,252 @@ def test_intraday_dynamic_uses_real_position_bars_and_daily_screening(
     assert result.configuration["execution"]["position_management_timeframe"] == timeframe
     assert any(f"position management timeframe: {timeframe}" in item for item in result.warnings)
     assert not any("daily OHLC cannot order" in item for item in result.warnings)
+
+
+@pytest.mark.parametrize(
+    ("opening_present", "opening_close", "execution_present", "expected_reason"),
+    [
+        (True, "101", True, None),
+        (True, "100", True, "confirmation_rejected"),
+        (False, "101", True, "missing_confirmation_bar"),
+        (True, "101", False, "missing_execution_bar"),
+    ],
+)
+def test_d4_uses_only_canonical_opening_bar_and_exact_0945_execution(
+    tmp_path,
+    opening_present: bool,
+    opening_close: str,
+    execution_present: bool,
+    expected_reason: str | None,
+) -> None:
+    signal_session, entry_session, final_session = (
+        date(2024, 1, 2),
+        date(2024, 1, 3),
+        date(2024, 1, 4),
+    )
+    database = _database(
+        tmp_path,
+        [_bar("AAA", session) for session in (signal_session, entry_session, final_session)],
+    )
+    signal_open, _ = regular_session_bounds(signal_session)
+    entry_open, _ = regular_session_bounds(entry_session)
+    final_open, _ = regular_session_bounds(final_session)
+    intraday = [_intraday_bar("AAA", signal_open)]
+    if opening_present:
+        intraday.append(
+            _intraday_bar("AAA", entry_open, opening="100", close=opening_close)
+        )
+    if execution_present:
+        intraday.append(
+            _intraday_bar(
+                "AAA",
+                entry_open + timedelta(minutes=15),
+                opening="107",
+                high="108",
+                low="106",
+                close="107",
+            )
+        )
+    intraday.extend(
+        [
+            _intraday_bar("AAA", final_open),
+            _intraday_bar("AAA", final_open + timedelta(minutes=15)),
+        ]
+    )
+    database.upsert_bars(intraday)
+    base = _config(slippage_bps=0, commission_bps=0)
+    config = base.model_copy(
+        update={"intraday": base.intraday.model_copy(update={"warmup_bars": 1})}
+    )
+    source = FixtureScreens({signal_session: (_record(),)})
+
+    result = BacktestEngine(database, config, screen_source=source).run(
+        signal_session,
+        final_session,
+        preset=PositionManagementPreset.D4_INTRADAY_CONFIRMED_ENTRY,
+    )
+
+    if expected_reason is None:
+        position = result.positions[0]
+        assert position.entry_timestamp == entry_open + timedelta(minutes=15)
+        assert position.entry_reference_price == 107
+        assert position.confirmation_bar_timestamp == entry_open
+        assert position.confirmation_passed is True
+        assert position.entry_delayed_from_open is True
+    else:
+        assert result.positions == ()
+        assert result.skipped_entries[expected_reason] == 1
+        if not opening_present:
+            assert "confirmation_rejected" not in result.skipped_entries
+
+
+@pytest.mark.parametrize(
+    ("a_state", "expected_symbol"),
+    [
+        ("red", "BBB"),
+        ("green", "AAA"),
+        ("missing_execution", "BBB"),
+        ("all_red", None),
+    ],
+)
+def test_d5_ranks_only_confirmed_execution_eligible_candidates_by_daily_score(
+    tmp_path, a_state: str, expected_symbol: str | None
+) -> None:
+    signal_session, entry_session, final_session = (
+        date(2024, 1, 2),
+        date(2024, 1, 3),
+        date(2024, 1, 4),
+    )
+    symbols = ("AAA", "BBB", "CCC")
+    database = _database(
+        tmp_path,
+        [
+            _bar(symbol, session)
+            for symbol in symbols
+            for session in (signal_session, entry_session, final_session)
+        ],
+    )
+    entry_open, _ = regular_session_bounds(entry_session)
+    intraday: list[DailyBar] = []
+    for symbol in symbols:
+        green = symbol != "AAA" or a_state == "green"
+        if a_state == "all_red":
+            green = False
+        intraday.append(
+            _intraday_bar(
+                symbol,
+                entry_open,
+                opening="100",
+                close="101" if green else "99",
+            )
+        )
+        if not (symbol == "AAA" and a_state == "missing_execution"):
+            intraday.append(
+                _intraday_bar(
+                    symbol,
+                    entry_open + timedelta(minutes=15),
+                    opening="100",
+                )
+            )
+    database.upsert_bars(intraday)
+    records = (
+        _record("AAA", quality=95, valuation=95, opportunity=95, timing=95),
+        _record("BBB", quality=90, valuation=90, opportunity=90, timing=90),
+        _record("CCC", quality=85, valuation=85, opportunity=85, timing=85),
+    )
+    source = FixtureScreens({signal_session: records})
+    before_counts = database.storage_report()["row_counts"]
+
+    result = BacktestEngine(
+        database,
+        _config(slippage_bps=0, commission_bps=0),
+        screen_source=source,
+    ).run(
+        signal_session,
+        final_session,
+        preset=PositionManagementPreset.D5_HYBRID_CONFIRMED_SWING,
+    )
+    assert database.storage_report()["row_counts"] == before_counts
+
+    if expected_symbol is None:
+        assert result.positions == ()
+    else:
+        assert result.positions[0].symbol == expected_symbol
+        expected_rank = {"AAA": 1, "BBB": 2, "CCC": 3}[expected_symbol]
+        assert result.positions[0].daily_candidate_rank == expected_rank
+        assert result.positions[0].daily_candidate_count == 3
+
+
+def test_negative_reentry_cooldown_is_one_xnys_session_and_winner_is_exempt() -> None:
+    loser = BacktestPosition.model_construct(
+        exit_date=date(2024, 1, 5), position_return=-0.01
+    )
+    winner = BacktestPosition.model_construct(
+        exit_date=date(2024, 1, 5), position_return=0.01
+    )
+
+    assert BacktestEngine._negative_cooldown_blocked(loser, date(2024, 1, 8)) is True
+    assert BacktestEngine._negative_cooldown_blocked(loser, date(2024, 1, 9)) is False
+    assert BacktestEngine._negative_cooldown_blocked(winner, date(2024, 1, 8)) is False
+    assert BacktestEngine._negative_cooldown_blocked(None, date(2024, 1, 8)) is False
+
+
+def test_d3_strict_coverage_excludes_incomplete_pending_session_without_lookup_error(
+    tmp_path,
+) -> None:
+    signal_session, entry_session, final_session = (
+        date(2024, 1, 2),
+        date(2024, 1, 3),
+        date(2024, 1, 4),
+    )
+    database = _database(
+        tmp_path,
+        [_bar("AAA", session) for session in (signal_session, entry_session, final_session)],
+    )
+    entry_open, _ = regular_session_bounds(entry_session)
+    database.upsert_bars([_intraday_bar("AAA", entry_open)])
+    source = FixtureScreens({signal_session: (_record(),)})
+
+    result = BacktestEngine(
+        database,
+        _config(),
+        screen_source=source,
+        strict_coverage_sensitivity=True,
+        intraday_session_statuses={("AAA", entry_session): "PARTIAL_SESSION"},
+    ).run(
+        signal_session,
+        final_session,
+        preset=PositionManagementPreset.D3_INTRADAY_TRAIL_GUARD,
+    )
+
+    assert result.positions == ()
+    assert result.skipped_entries["strict_incomplete_session"] == 1
+    assert result.strict_coverage_sensitivity is True
+
+
+def test_research_family_is_opt_in_ordered_and_has_no_a_d_variant() -> None:
+    all_runs = engine_module._comparison_runs(StrategyComparisonKind.ALL)
+    research = engine_module._comparison_runs(StrategyComparisonKind.RESEARCH_D1_D5)
+    labels = [
+        engine_module.research_strategy_label(variant, preset)
+        for variant, preset in research
+    ]
+
+    assert all(preset not in engine_module.RESEARCH_PRESETS for _, preset in all_runs)
+    assert labels == [
+        "A/configured",
+        "B/configured",
+        "C/configured",
+        "C/intraday-dynamic",
+        "D1/C-swing-profit-lock",
+        "D2/C-swing-runner",
+        "D3/C-intraday-trail-guard",
+        "D4/C-intraday-confirmed-entry",
+        "D5/C-hybrid-confirmed-swing",
+        "D1/B-swing-profit-lock",
+        "D5/B-hybrid-confirmed-swing",
+    ]
+    assert not any(label.startswith("D") and "/A-" in label for label in labels)
+
+    extended = engine_module._comparison_runs(
+        StrategyComparisonKind.EXTENDED_VALIDATION
+    )
+    extended_labels = [
+        engine_module.research_strategy_label(variant, preset)
+        for variant, preset in extended
+    ]
+    assert extended_labels == [
+        "B/configured",
+        "C/configured",
+        "D1/C-swing-profit-lock",
+        "C/intraday-dynamic",
+        "D2/C-swing-runner",
+        "D1/B-swing-profit-lock",
+    ]
+    assert all(
+        "D3/" not in label and "D4/" not in label and "D5/" not in label
+        for label in extended_labels
+    )
 
 
 def test_intraday_close_rule_uses_last_native_bar_price_and_timestamp(tmp_path) -> None:

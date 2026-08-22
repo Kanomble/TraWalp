@@ -8,6 +8,7 @@ from trading_system.config import (
     PartialTakeProfitConfig,
     PartialTakeProfitLevel,
     PositionManagementConfig,
+    ProfitLockConfig,
     SignalDecayConfig,
     StopLossConfig,
     TakeProfitConfig,
@@ -69,6 +70,47 @@ def position_management_preset(
         configured = BarTimeframe(base.bar_timeframe)
         timeframe = configured if configured.intraday else BarTimeframe.MINUTES_15
         return partial.model_copy(update={"bar_timeframe": timeframe})
+
+    if preset in {
+        PositionManagementPreset.D1_SWING_PROFIT_LOCK,
+        PositionManagementPreset.D2_SWING_RUNNER,
+        PositionManagementPreset.D5_HYBRID_CONFIRMED_SWING,
+    }:
+        swing = _resolved_legacy_fallbacks(base, legacy_max_holding_days).model_copy(
+            update={"profit_lock": ProfitLockConfig(enabled=True)}
+        )
+        if preset is PositionManagementPreset.D1_SWING_PROFIT_LOCK:
+            return swing
+        return swing.model_copy(
+            update={
+                "take_profit": TakeProfitConfig(enabled=False),
+                "partial_take_profit": PartialTakeProfitConfig(
+                    enabled=True,
+                    levels=[
+                        PartialTakeProfitLevel(
+                            profit=0.12,
+                            sell_fraction=0.33,
+                            quantity_basis="original",
+                        )
+                    ],
+                ),
+            }
+        )
+
+    if preset in {
+        PositionManagementPreset.D3_INTRADAY_TRAIL_GUARD,
+        PositionManagementPreset.D4_INTRADAY_CONFIRMED_ENTRY,
+    }:
+        configured = BarTimeframe(base.bar_timeframe)
+        timeframe = configured if configured.intraday else BarTimeframe.MINUTES_15
+        return partial.model_copy(
+            update={
+                "bar_timeframe": timeframe,
+                "atr_trailing_stop": partial.atr_trailing_stop.model_copy(
+                    update={"minimum_completed_bars_before_activation": 1}
+                ),
+            }
+        )
 
     fixed_baseline = PositionManagementConfig(
         stop_loss=StopLossConfig(enabled=True, percent=0.03),

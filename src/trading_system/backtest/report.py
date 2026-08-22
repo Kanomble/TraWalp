@@ -6,6 +6,7 @@ import csv
 import json
 import os
 import tempfile
+from collections import defaultdict
 from contextlib import suppress
 from pathlib import Path
 
@@ -139,6 +140,285 @@ def export_comparison(
         ["strategy", *_post_exit_fields()],
     )
     return paths
+
+
+def export_research_comparison(
+    comparison: StrategyComparison,
+    strict_comparison: StrategyComparison,
+    cost_comparisons: dict[str, StrategyComparison],
+    output_directory: Path,
+    *,
+    stem: str,
+) -> dict[str, Path]:
+    """Atomically export the D1-D5 baseline and its predeclared diagnostics."""
+
+    if comparison.comparison_kind is not StrategyComparisonKind.RESEARCH_D1_D5:
+        raise ValueError("Research export requires the research-d1-d5 comparison family")
+    output_directory.mkdir(parents=True, exist_ok=True)
+    research_paths = {
+        "diagnostics": output_directory / f"{stem}_diagnostics.json",
+        "monthly": output_directory / f"{stem}_monthly.csv",
+        "symbol_concentration": output_directory / f"{stem}_symbol_concentration.csv",
+        "cost_stress": output_directory / f"{stem}_cost_stress.csv",
+        "strict_coverage": output_directory / f"{stem}_strict_coverage.csv",
+    }
+    base_paths = {
+        "json": output_directory / f"{stem}.json",
+        "csv": output_directory / f"{stem}.csv",
+        "positions": output_directory / f"{stem}_positions.csv",
+        "execution_legs": output_directory / f"{stem}_execution_legs.csv",
+        "post_exit": output_directory / f"{stem}_post_exit_analysis.csv",
+    }
+    existing = [path for path in (*base_paths.values(), *research_paths.values()) if path.exists()]
+    if existing:
+        raise FileExistsError(f"Research comparison export already exists: {existing[0]}")
+
+    paths = export_comparison(
+        comparison, output_directory, stem=stem, overwrite=True
+    )
+    monthly_rows = _research_monthly_rows(comparison)
+    symbol_rows, symbol_summary = _research_symbol_rows(comparison)
+    cost_rows = _research_cost_rows(cost_comparisons)
+    strict_rows = _strict_coverage_rows(strict_comparison)
+    diagnostics = {
+        "report_type": "d1_d5_strategy_research_diagnostics",
+        "strict_coverage_sensitivity_ranked": False,
+        "strategies": comparison.research_diagnostics,
+        "symbol_concentration_summary": symbol_summary,
+        "cost_scenarios": list(cost_comparisons),
+        "strict_coverage_sensitivity": {
+            "enabled": strict_comparison.strict_coverage_sensitivity,
+            "strategies": strict_comparison.research_diagnostics,
+        },
+    }
+    _atomic_text(research_paths["diagnostics"], json.dumps(diagnostics, indent=2))
+    _atomic_csv(
+        research_paths["monthly"],
+        monthly_rows,
+        [
+            "strategy",
+            "month",
+            "positions",
+            "return_contribution",
+            "win_rate",
+            "profit_factor",
+            "average_position_return",
+        ],
+    )
+    _atomic_csv(
+        research_paths["symbol_concentration"],
+        symbol_rows,
+        [
+            "strategy",
+            "symbol",
+            "positions",
+            "total_net_pnl_contribution",
+            "sum_position_returns",
+            "wins",
+            "losses",
+            "same_bar_stopouts",
+            "partial_exits",
+        ],
+    )
+    _atomic_csv(
+        research_paths["cost_stress"],
+        cost_rows,
+        [
+            "cost_case",
+            "strategy",
+            "slippage_bps",
+            "commission_bps",
+            "total_return",
+            "max_drawdown",
+            "profit_factor",
+            "expectancy",
+            "turnover",
+            "transaction_costs",
+            "slippage_costs",
+            "total_costs",
+        ],
+    )
+    _atomic_csv(
+        research_paths["strict_coverage"],
+        strict_rows,
+        [
+            "strategy",
+            "strict_coverage_sensitivity",
+            "positions",
+            "total_return",
+            "max_drawdown",
+            "profit_factor",
+            "expectancy",
+            "confirmation_pass_rate",
+            "same_entry_bar_final_exits",
+            "coverage_exclusions",
+        ],
+    )
+    paths.update(research_paths)
+    return paths
+
+
+def _research_monthly_rows(comparison: StrategyComparison) -> list[dict]:
+    rows: list[dict] = []
+    for result in comparison.variants:
+        by_month: dict[str, list[BacktestPosition]] = defaultdict(list)
+        for position in result.positions:
+            by_month[position.exit_date.strftime("%Y-%m")].append(position)
+        label = _comparison_result_label(comparison, result)
+        year = comparison.requested_start.year
+        month_number = comparison.requested_start.month
+        months: list[str] = []
+        while (year, month_number) <= (
+            comparison.requested_end.year,
+            comparison.requested_end.month,
+        ):
+            months.append(f"{year:04d}-{month_number:02d}")
+            month_number += 1
+            if month_number == 13:
+                year += 1
+                month_number = 1
+        for month in months:
+            positions = by_month.get(month, [])
+            wins = [position for position in positions if position.net_pnl > 0]
+            losses = [position for position in positions if position.net_pnl < 0]
+            gross_profit = sum(position.net_pnl for position in wins)
+            gross_loss = abs(sum(position.net_pnl for position in losses))
+            rows.append(
+                {
+                    "strategy": label,
+                    "month": month,
+                    "positions": len(positions),
+                    "return_contribution": sum(
+                        position.net_pnl for position in positions
+                    )
+                    / result.initial_capital,
+                    "win_rate": len(wins) / len(positions) if positions else None,
+                    "profit_factor": (
+                        gross_profit / gross_loss if gross_loss > 0 else None
+                    ),
+                    "average_position_return": (
+                        sum(position.position_return for position in positions)
+                        / len(positions)
+                        if positions
+                        else None
+                    ),
+                }
+            )
+    return rows
+
+
+def _research_symbol_rows(
+    comparison: StrategyComparison,
+) -> tuple[list[dict], dict[str, dict]]:
+    rows: list[dict] = []
+    summaries: dict[str, dict] = {}
+    for result in comparison.variants:
+        label = _comparison_result_label(comparison, result)
+        by_symbol: dict[str, list[BacktestPosition]] = defaultdict(list)
+        partials: dict[str, int] = defaultdict(int)
+        for position in result.positions:
+            by_symbol[position.symbol].append(position)
+        for trade in result.trades:
+            if trade.exit_reason == "partial_take_profit":
+                partials[trade.symbol] += 1
+        contributions: dict[str, float] = {}
+        for symbol in sorted(by_symbol):
+            positions = by_symbol[symbol]
+            contribution = sum(position.net_pnl for position in positions)
+            contributions[symbol] = contribution
+            rows.append(
+                {
+                    "strategy": label,
+                    "symbol": symbol,
+                    "positions": len(positions),
+                    "total_net_pnl_contribution": contribution,
+                    "sum_position_returns": sum(
+                        position.position_return for position in positions
+                    ),
+                    "wins": sum(position.net_pnl > 0 for position in positions),
+                    "losses": sum(position.net_pnl < 0 for position in positions),
+                    "same_bar_stopouts": sum(
+                        position.entry_timestamp is not None
+                        and position.exit_timestamp == position.entry_timestamp
+                        and position.exit_reason
+                        in {"stop_loss", "trailing_stop", "atr_trailing_stop", "profit_lock"}
+                        for position in positions
+                    ),
+                    "partial_exits": partials[symbol],
+                }
+            )
+        ranked = sorted(contributions.items(), key=lambda item: (-item[1], item[0]))
+        total = sum(contributions.values())
+        summaries[label] = {
+            "best_contributing_symbol": ranked[0][0] if ranked else None,
+            "worst_contributing_symbol": ranked[-1][0] if ranked else None,
+            "top_1_pnl_share": ranked[0][1] / total if ranked and total else None,
+            "top_3_pnl_share": (
+                sum(value for _, value in ranked[:3]) / total if total else None
+            ),
+        }
+    return rows, summaries
+
+
+def _research_cost_rows(
+    comparisons: dict[str, StrategyComparison],
+) -> list[dict]:
+    rows: list[dict] = []
+    for cost_case, comparison in comparisons.items():
+        for result in comparison.variants:
+            config = result.configuration["backtest"]
+            transaction_costs = sum(trade.transaction_cost for trade in result.trades)
+            slippage_costs = sum(trade.slippage for trade in result.trades)
+            rows.append(
+                {
+                    "cost_case": cost_case,
+                    "strategy": _comparison_result_label(comparison, result),
+                    "slippage_bps": config["slippage_bps"],
+                    "commission_bps": config["commission_bps"],
+                    "total_return": result.metrics.total_return,
+                    "max_drawdown": result.metrics.maximum_drawdown,
+                    "profit_factor": result.position_metrics.position_profit_factor,
+                    "expectancy": result.metrics.expectancy_per_trade,
+                    "turnover": result.metrics.portfolio_turnover,
+                    "transaction_costs": transaction_costs,
+                    "slippage_costs": slippage_costs,
+                    "total_costs": transaction_costs + slippage_costs,
+                }
+            )
+    return rows
+
+
+def _strict_coverage_rows(comparison: StrategyComparison) -> list[dict]:
+    selected = {
+        "D3/C-intraday-trail-guard",
+        "D4/C-intraday-confirmed-entry",
+        "D5/C-hybrid-confirmed-swing",
+    }
+    rows: list[dict] = []
+    for result in comparison.variants:
+        label = _comparison_result_label(comparison, result)
+        if label not in selected:
+            continue
+        diagnostics = result.research_diagnostics
+        rows.append(
+            {
+                "strategy": label,
+                "strict_coverage_sensitivity": True,
+                "positions": result.position_metrics.positions_closed,
+                "total_return": result.metrics.total_return,
+                "max_drawdown": result.metrics.maximum_drawdown,
+                "profit_factor": result.position_metrics.position_profit_factor,
+                "expectancy": result.metrics.expectancy_per_trade,
+                "confirmation_pass_rate": diagnostics.get("confirmation_pass_rate"),
+                "same_entry_bar_final_exits": diagnostics.get(
+                    "same_entry_bar_final_exits"
+                ),
+                "coverage_exclusions": diagnostics.get(
+                    "strict_coverage_exclusions", 0
+                ),
+            }
+        )
+    return rows
 
 
 def export_data_qualification(
@@ -414,6 +694,15 @@ def _comparison_result_label(comparison: StrategyComparison, result: BacktestRes
         return result.position_management_preset.value
     if comparison.comparison_kind is StrategyComparisonKind.SCORE_VARIANTS:
         return result.strategy_variant.value
+    if comparison.comparison_kind in {
+        StrategyComparisonKind.RESEARCH_D1_D5,
+        StrategyComparisonKind.EXTENDED_VALIDATION,
+    }:
+        from trading_system.backtest.engine import research_strategy_label
+
+        return research_strategy_label(
+            result.strategy_variant, result.position_management_preset
+        )
     return f"{result.strategy_variant.value}/{result.position_management_preset.value}"
 
 
