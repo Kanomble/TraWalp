@@ -36,6 +36,10 @@ def finalize_position(
     net_pnl = sum(leg.net_pnl if leg.net_pnl is not None else leg.pnl for leg in legs)
     entry_cost = state.entry_price * state.initial_quantity + state.initial_entry_commission
     position_return = net_pnl / entry_cost
+    reference_entry_value = state.entry_reference_price * state.initial_quantity
+    gross_market_return = (
+        sum(leg.exit_reference_price * leg.quantity for leg in legs) / reference_entry_value - 1
+    )
     mfe = state.highest_price_since_entry / state.entry_price - 1
     mae = state.lowest_price_since_entry / state.entry_price - 1
     capture = position_return / mfe if mfe > MEANINGFUL_PROFIT_TOLERANCE else None
@@ -74,6 +78,7 @@ def finalize_position(
         gross_pnl=gross_pnl,
         net_pnl=net_pnl,
         position_return=position_return,
+        gross_market_return=gross_market_return,
         transaction_cost=sum(leg.transaction_cost for leg in legs),
         slippage=sum(leg.slippage for leg in legs),
         exit_reason=final_leg.exit_reason,
@@ -155,6 +160,37 @@ def finalize_position(
         opening_bar_complete=state.opening_bar_complete,
         execution_bar_complete=state.execution_bar_complete,
         gap_affected_trade=state.gap_affected_trade,
+        warmup_required_bars=state.warmup_required_bars,
+        warmup_available_native_bars=state.warmup_available_native_bars,
+        warmup_sufficient=state.warmup_sufficient,
+        earliest_warmup_timestamp=state.earliest_warmup_timestamp,
+        latest_pre_entry_warmup_timestamp=state.latest_pre_entry_warmup_timestamp,
+        warmup_expected_timestamp_gap_count=(
+            state.warmup_expected_timestamp_gap_count
+        ),
+        opening_gate_expected_timestamp=state.opening_gate_expected_timestamp,
+        opening_gate_actual_timestamp=state.opening_gate_actual_timestamp,
+        opening_gate_open=state.opening_gate_open,
+        opening_gate_high=state.opening_gate_high,
+        opening_gate_low=state.opening_gate_low,
+        opening_gate_close=state.opening_gate_close,
+        opening_gate_volume=state.opening_gate_volume,
+        opening_gate_vwap=state.opening_gate_vwap,
+        opening_gate_green=state.opening_gate_green,
+        opening_gate_position_alive_at_evaluation=(
+            state.opening_gate_position_alive_at_evaluation
+        ),
+        baseline_first_bar_trail_exit_occurred=(
+            state.baseline_first_bar_trail_exit_occurred
+        ),
+        opening_gate_evaluated=state.opening_gate_evaluated,
+        opening_gate_evaluable=state.opening_gate_evaluable,
+        opening_gate_passed=state.opening_gate_passed,
+        opening_gate_triggered=state.opening_gate_triggered,
+        opening_gate_executable=state.opening_gate_executable,
+        opening_gate_failure_reason=state.opening_gate_failure_reason,
+        opening_gate_exit_timestamp=state.opening_gate_exit_timestamp,
+        opening_gate_exit_reference_price=state.opening_gate_exit_reference_price,
     )
 
 

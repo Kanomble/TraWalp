@@ -12,6 +12,7 @@ from pathlib import Path
 from statistics import mean, median
 from typing import Any
 
+from trading_system.backtest.coverage import data_qualification_classification
 from trading_system.backtest.diagnostics import calculate_position_metrics
 from trading_system.backtest.engine import (
     BacktestEngine,
@@ -292,6 +293,8 @@ def qualify_intraday_candidate_sessions(
             "internal_gaps": 0,
             "edge_or_lifecycle_gaps": 0,
             "full_oos_intraday_qualified": False,
+            "full_session_strict_qualified": False,
+            "candidate_entry_opportunity_qualified": False,
         }, []
     first = date.fromisoformat(candidates[0]["execution_session"])
     last = date.fromisoformat(candidates[-1]["execution_session"])
@@ -368,6 +371,10 @@ def qualify_intraday_candidate_sessions(
         "full_oos_intraday_qualified": (
             counters["complete_sessions"] == len(rows)
         ),
+        "full_session_strict_qualified": (
+            counters["complete_sessions"] == len(rows)
+        ),
+        "candidate_entry_opportunity_qualified": counters["missing_0930_bars"] == 0,
     }
     return summary, rows
 
@@ -389,6 +396,8 @@ def intraday_session_statuses(
 def annotate_trade_path_coverage(
     database: Database,
     result: BacktestResult,
+    *,
+    strategy_label: str = "C/intraday-dynamic",
 ) -> tuple[BacktestResult, list[dict[str, Any]]]:
     """Attach exact native-bar completeness while each intraday position was open."""
 
@@ -437,7 +446,7 @@ def annotate_trade_path_coverage(
         session_open, _ = regular_session_bounds(position.entry_date)
         missing_opening = entry != session_open
         row = {
-            "strategy": "C/intraday-dynamic",
+            "strategy": strategy_label,
             "position_id": position.position_id,
             "symbol": position.symbol,
             "entry_timestamp": entry.isoformat(),
@@ -1447,6 +1456,31 @@ def export_extended_validation(
     existing = [path for path in paths.values() if path.exists()]
     if existing:
         raise FileExistsError(f"Extended validation export already exists: {existing[0]}")
+    candidate_coverage = bundle.intraday_qualification["candidate_sessions"]
+    intraday_result = next(
+        result
+        for result in bundle.oos.variants
+        if result.position_management_preset is PositionManagementPreset.INTRADAY_DYNAMIC
+    )
+    incomplete_paths = sum(
+        position.trade_path_complete is not True
+        for position in intraday_result.positions
+    )
+    insufficient_warmups = sum(
+        position.warmup_sufficient is not True
+        for position in intraday_result.positions
+    )
+    candidate_sessions = candidate_coverage["candidate_symbol_sessions"]
+    entry_bar_missing = candidate_coverage["missing_0930_bars"]
+    data_classification = data_qualification_classification(
+        candidate_sessions=candidate_sessions,
+        entry_bar_missing=entry_bar_missing,
+        incomplete_trade_paths=incomplete_paths,
+        insufficient_warmups=insufficient_warmups,
+    )
+    economic_classification = bundle.decisions["C/intraday-dynamic"].replace(
+        " OOS", ""
+    )
     summary_payload = {
         "report_type": "extended_out_of_sample_validation",
         "requested_oos": [
@@ -1467,6 +1501,14 @@ def export_extended_validation(
         "intraday_validation_qualified": bundle.intraday_qualification[
             "candidate_sessions"
         ]["full_oos_intraday_qualified"],
+        "full_session_strict_qualified": candidate_coverage[
+            "full_session_strict_qualified"
+        ],
+        "candidate_entry_opportunity_qualified": entry_bar_missing == 0,
+        "executed_trade_path_qualified": incomplete_paths == 0,
+        "indicator_warmup_qualified": insufficient_warmups == 0,
+        "economic_support_classification": economic_classification,
+        "data_qualification_classification": data_classification,
     }
     _atomic_text(paths["summary_json"], json.dumps(summary_payload, indent=2))
     _atomic_csv(

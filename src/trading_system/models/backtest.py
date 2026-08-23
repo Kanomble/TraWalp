@@ -32,6 +32,8 @@ class PositionManagementPreset(StrEnum):
     D3_INTRADAY_TRAIL_GUARD = "D3-intraday-trail-guard"
     D4_INTRADAY_CONFIRMED_ENTRY = "D4-intraday-confirmed-entry"
     D5_HYBRID_CONFIRMED_SWING = "D5-hybrid-confirmed-swing"
+    F1_INTRADAY_LOSS_COOLDOWN = "F1-intraday-loss-cooldown"
+    F2_INTRADAY_OPENING_SURVIVOR_GATE = "F2-intraday-opening-survivor-gate"
 
 
 class StrategyComparisonKind(StrEnum):
@@ -40,6 +42,7 @@ class StrategyComparisonKind(StrEnum):
     POSITION_MANAGEMENT = "position_management"
     RESEARCH_D1_D5 = "research_d1_d5"
     EXTENDED_VALIDATION = "extended_validation"
+    RESEARCH_INTRADAY_ISOLATION = "research_intraday_isolation"
 
 
 class StopLossClassification(StrEnum):
@@ -153,6 +156,31 @@ class BacktestTrade(BaseModel):
     opening_bar_complete: bool | None = None
     execution_bar_complete: bool | None = None
     gap_affected_trade: bool = False
+    warmup_required_bars: int | None = Field(default=None, ge=1)
+    warmup_available_native_bars: int | None = Field(default=None, ge=0)
+    warmup_sufficient: bool | None = None
+    earliest_warmup_timestamp: datetime | None = None
+    latest_pre_entry_warmup_timestamp: datetime | None = None
+    warmup_expected_timestamp_gap_count: int | None = Field(default=None, ge=0)
+    opening_gate_expected_timestamp: datetime | None = None
+    opening_gate_actual_timestamp: datetime | None = None
+    opening_gate_open: float | None = None
+    opening_gate_high: float | None = None
+    opening_gate_low: float | None = None
+    opening_gate_close: float | None = None
+    opening_gate_volume: int | None = Field(default=None, ge=0)
+    opening_gate_vwap: float | None = None
+    opening_gate_green: bool | None = None
+    opening_gate_position_alive_at_evaluation: bool | None = None
+    baseline_first_bar_trail_exit_occurred: bool = False
+    opening_gate_evaluated: bool = False
+    opening_gate_evaluable: bool | None = None
+    opening_gate_passed: bool | None = None
+    opening_gate_triggered: bool = False
+    opening_gate_executable: bool | None = None
+    opening_gate_failure_reason: str | None = None
+    opening_gate_exit_timestamp: datetime | None = None
+    opening_gate_exit_reference_price: float | None = None
 
 
 class BacktestPosition(BaseModel):
@@ -177,6 +205,7 @@ class BacktestPosition(BaseModel):
     gross_pnl: float
     net_pnl: float
     position_return: float
+    gross_market_return: float | None = None
     transaction_cost: float = Field(ge=0)
     slippage: float = Field(ge=0)
     exit_reason: str
@@ -269,6 +298,31 @@ class BacktestPosition(BaseModel):
     gap_before_exit: bool | None = None
     gap_after_exit_only: bool | None = None
     missing_opening_bar_affected_entry: bool | None = None
+    warmup_required_bars: int | None = Field(default=None, ge=1)
+    warmup_available_native_bars: int | None = Field(default=None, ge=0)
+    warmup_sufficient: bool | None = None
+    earliest_warmup_timestamp: datetime | None = None
+    latest_pre_entry_warmup_timestamp: datetime | None = None
+    warmup_expected_timestamp_gap_count: int | None = Field(default=None, ge=0)
+    opening_gate_expected_timestamp: datetime | None = None
+    opening_gate_actual_timestamp: datetime | None = None
+    opening_gate_open: float | None = None
+    opening_gate_high: float | None = None
+    opening_gate_low: float | None = None
+    opening_gate_close: float | None = None
+    opening_gate_volume: int | None = Field(default=None, ge=0)
+    opening_gate_vwap: float | None = None
+    opening_gate_green: bool | None = None
+    opening_gate_position_alive_at_evaluation: bool | None = None
+    baseline_first_bar_trail_exit_occurred: bool = False
+    opening_gate_evaluated: bool = False
+    opening_gate_evaluable: bool | None = None
+    opening_gate_passed: bool | None = None
+    opening_gate_triggered: bool = False
+    opening_gate_executable: bool | None = None
+    opening_gate_failure_reason: str | None = None
+    opening_gate_exit_timestamp: datetime | None = None
+    opening_gate_exit_reference_price: float | None = None
 
 
 class ExecutionMetrics(BaseModel):

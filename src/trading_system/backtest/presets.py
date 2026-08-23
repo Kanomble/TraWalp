@@ -66,7 +66,11 @@ def position_management_preset(
     )
     if preset is PositionManagementPreset.PARTIAL_PROFIT:
         return partial
-    if preset is PositionManagementPreset.INTRADAY_DYNAMIC:
+    if preset in {
+        PositionManagementPreset.INTRADAY_DYNAMIC,
+        PositionManagementPreset.F1_INTRADAY_LOSS_COOLDOWN,
+        PositionManagementPreset.F2_INTRADAY_OPENING_SURVIVOR_GATE,
+    }:
         configured = BarTimeframe(base.bar_timeframe)
         timeframe = configured if configured.intraday else BarTimeframe.MINUTES_15
         return partial.model_copy(update={"bar_timeframe": timeframe})

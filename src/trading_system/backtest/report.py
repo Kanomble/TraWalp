@@ -703,6 +703,13 @@ def _comparison_result_label(comparison: StrategyComparison, result: BacktestRes
         return research_strategy_label(
             result.strategy_variant, result.position_management_preset
         )
+    if (
+        comparison.comparison_kind
+        is StrategyComparisonKind.RESEARCH_INTRADAY_ISOLATION
+    ):
+        from trading_system.backtest.intraday_isolation import intraday_isolation_label
+
+        return intraday_isolation_label(result.position_management_preset)
     return f"{result.strategy_variant.value}/{result.position_management_preset.value}"
 
 

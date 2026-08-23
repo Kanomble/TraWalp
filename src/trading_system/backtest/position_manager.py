@@ -33,6 +33,7 @@ class ExitReason(StrEnum):
     PORTFOLIO_ROTATION = "portfolio_rotation"
     END_OF_BACKTEST = "end_of_backtest"
     PROFIT_LOCK = "profit_lock"
+    OPENING_BAR_FAIL = "opening_bar_fail"
 
 
 class ProfitLockState(StrEnum):
@@ -132,6 +133,31 @@ class PositionState:
     opening_bar_complete: bool | None = None
     execution_bar_complete: bool | None = None
     gap_affected_trade: bool = False
+    warmup_required_bars: int | None = None
+    warmup_available_native_bars: int | None = None
+    warmup_sufficient: bool | None = None
+    earliest_warmup_timestamp: datetime | None = None
+    latest_pre_entry_warmup_timestamp: datetime | None = None
+    warmup_expected_timestamp_gap_count: int | None = None
+    opening_gate_expected_timestamp: datetime | None = None
+    opening_gate_actual_timestamp: datetime | None = None
+    opening_gate_open: float | None = None
+    opening_gate_high: float | None = None
+    opening_gate_low: float | None = None
+    opening_gate_close: float | None = None
+    opening_gate_volume: int | None = None
+    opening_gate_vwap: float | None = None
+    opening_gate_green: bool | None = None
+    opening_gate_position_alive_at_evaluation: bool | None = None
+    baseline_first_bar_trail_exit_occurred: bool = False
+    opening_gate_evaluated: bool = False
+    opening_gate_evaluable: bool | None = None
+    opening_gate_passed: bool | None = None
+    opening_gate_triggered: bool = False
+    opening_gate_executable: bool | None = None
+    opening_gate_failure_reason: str | None = None
+    opening_gate_exit_timestamp: datetime | None = None
+    opening_gate_exit_reference_price: float | None = None
 
     def __post_init__(self) -> None:
         if self.highest_price_since_entry <= 0:

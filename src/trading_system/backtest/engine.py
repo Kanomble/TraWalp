@@ -12,6 +12,7 @@ from typing import Protocol
 
 import pandas as pd
 
+from trading_system.backtest.coverage import warmup_coverage_diagnostics
 from trading_system.backtest.diagnostics import (
     add_post_exit_diagnostics,
     aggregate_entry_scores,
@@ -83,12 +84,25 @@ CONFIRMED_ENTRY_PRESETS = {
 }
 HYBRID_ENTRY_PRESETS = {PositionManagementPreset.D5_HYBRID_CONFIRMED_SWING}
 NEGATIVE_COOLDOWN_PRESETS = CONFIRMED_ENTRY_PRESETS
+GROSS_LOSS_COOLDOWN_PRESETS = {
+    PositionManagementPreset.F1_INTRADAY_LOSS_COOLDOWN,
+}
+OPENING_SURVIVOR_GATE_PRESETS = {
+    PositionManagementPreset.F2_INTRADAY_OPENING_SURVIVOR_GATE,
+}
+INTRADAY_ISOLATION_PRESETS = {
+    PositionManagementPreset.INTRADAY_DYNAMIC,
+    *GROSS_LOSS_COOLDOWN_PRESETS,
+    *OPENING_SURVIVOR_GATE_PRESETS,
+}
 RESEARCH_PRESETS = {
     PositionManagementPreset.D1_SWING_PROFIT_LOCK,
     PositionManagementPreset.D2_SWING_RUNNER,
     PositionManagementPreset.D3_INTRADAY_TRAIL_GUARD,
     PositionManagementPreset.D4_INTRADAY_CONFIRMED_ENTRY,
     PositionManagementPreset.D5_HYBRID_CONFIRMED_SWING,
+    *GROSS_LOSS_COOLDOWN_PRESETS,
+    *OPENING_SURVIVOR_GATE_PRESETS,
 }
 
 
@@ -273,6 +287,7 @@ class _PendingEntry:
     cooldown_blocked: bool = False
     cooldown_reason: str | None = None
     intraday_session_status: str | None = None
+    candidate_event_index: int | None = None
 
 
 @dataclass
@@ -311,6 +326,9 @@ class BacktestEngine:
         )
         self._legacy_reason_compat = False
         self.current_preset = PositionManagementPreset.CONFIGURED
+        self._research_counters: Counter[str] = Counter()
+        self._confirmation_events: list[dict] = []
+        self._candidate_events: list[dict] = []
 
     def run(
         self,
@@ -332,6 +350,7 @@ class BacktestEngine:
         intraday_monitoring = position_timeframe.intraday
         confirmed_entry = preset in CONFIRMED_ENTRY_PRESETS
         hybrid_entry = preset in HYBRID_ENTRY_PRESETS
+        opening_survivor_gate = preset in OPENING_SURVIVOR_GATE_PRESETS
         native_intraday_loop = intraday_monitoring or confirmed_entry
         execution_timeframe = (
             BarTimeframe.MINUTES_15 if confirmed_entry else position_timeframe
@@ -353,6 +372,7 @@ class BacktestEngine:
         self._position_sequence = 0
         self._research_counters: Counter[str] = Counter()
         self._confirmation_events: list[dict] = []
+        self._candidate_events: list[dict] = []
         sessions = _backtest_sessions(self.database, start, end)
 
         cash = float(self.config.backtest.initial_capital)
@@ -522,6 +542,13 @@ class BacktestEngine:
                             if regular_open <= item.timestamp < regular_close
                         ]
                         if not regular_bars:
+                            self._update_candidate_event(
+                                order,
+                                entry_bar_expected_timestamp=regular_open.isoformat(),
+                                entry_bar_present=False,
+                                actual_entry_timestamp=None,
+                                execution_failure_reason="missing_intraday_entry_session",
+                            )
                             if self.strict_coverage_sensitivity:
                                 order.intraday_session_status = (
                                     self.intraday_session_statuses.get(
@@ -548,6 +575,20 @@ class BacktestEngine:
                         )
                         order.intended_entry_timestamp = regular_bars[0].timestamp
                         order.execution_bar_present = True
+                        canonical_entry_present = any(
+                            item.timestamp == regular_open for item in regular_bars
+                        )
+                        self._update_candidate_event(
+                            order,
+                            entry_bar_expected_timestamp=regular_open.isoformat(),
+                            entry_bar_present=canonical_entry_present,
+                            actual_entry_timestamp=regular_bars[0].timestamp.isoformat(),
+                            execution_failure_reason=(
+                                None
+                                if canonical_entry_present
+                                else "missing_canonical_entry_bar"
+                            ),
+                        )
 
                 bars_by_timestamp: dict[datetime, dict[str, DailyBar]] = {}
                 for symbol_bars in intraday_by_symbol.values():
@@ -620,6 +661,11 @@ class BacktestEngine:
                         symbol = order.record.symbol
                         if symbol in positions:
                             skipped["duplicate_position"] += 1
+                            self._update_candidate_event(
+                                order,
+                                executed=False,
+                                execution_failure_reason="duplicate_position",
+                            )
                             self._observe_execution(
                                 order, session, executed=False, reason="duplicate_position"
                             )
@@ -630,6 +676,14 @@ class BacktestEngine:
                             if len(history) < self.config.intraday.warmup_bars:
                                 if self.allow_missing_intraday_data:
                                     skipped["insufficient_intraday_warmup"] += 1
+                                    self._update_candidate_event(
+                                        order,
+                                        executed=False,
+                                        warmup_sufficient=False,
+                                        execution_failure_reason=(
+                                            "insufficient_intraday_warmup"
+                                        ),
+                                    )
                                     self._observe_execution(
                                         order,
                                         session,
@@ -658,6 +712,11 @@ class BacktestEngine:
                             positions,
                             cash,
                             entry_atr=entry_atr,
+                            warmup_history=(
+                                intraday_histories[symbol]
+                                if intraday_monitoring
+                                else None
+                            ),
                         )
                         if position is None:
                             skipped[reason or "entry_rejected"] += 1
@@ -667,11 +726,24 @@ class BacktestEngine:
                                 executed=False,
                                 reason=reason or "entry_rejected",
                             )
+                            self._update_candidate_event(
+                                order,
+                                executed=False,
+                                execution_failure_reason=reason or "entry_rejected",
+                            )
                             continue
                         positions[position.symbol] = position
                         execution_legs[position.position_id] = []
                         reentry_trackers.pop(position.symbol, None)
                         self._observe_execution(order, session, executed=True)
+                        self._update_candidate_event(
+                            order,
+                            executed=True,
+                            warmup_sufficient=position.warmup_sufficient,
+                            warmup_available_native_bars=(
+                                position.warmup_available_native_bars
+                            ),
+                        )
 
                     session_peak_market_value = max(
                         session_peak_market_value,
@@ -692,10 +764,36 @@ class BacktestEngine:
                             position = positions[symbol]
                             if hybrid_entry and position.entry_date != session:
                                 continue
+                            if opening_survivor_gate:
+                                self._prepare_opening_survivor_gate(
+                                    position,
+                                    bar,
+                                    session,
+                                    bars_by_timestamp,
+                                )
+                                if self._opening_gate_exit_due(position, bar):
+                                    position.opening_gate_exit_timestamp = bar.timestamp
+                                    position.opening_gate_exit_reference_price = float(bar.open)
+                                    decision = PositionDecision(
+                                        action=PositionAction.SELL,
+                                        reason=ExitReason.OPENING_BAR_FAIL,
+                                        reference_price=float(bar.open),
+                                    )
+                                    execute_position_decision(symbol, session, decision, bar)
+                                    continue
                             while True:
                                 decision = self.position_manager.evaluate_intrabar(position, bar)
                                 if decision.action is PositionAction.HOLD:
                                     break
+                                if (
+                                    opening_survivor_gate
+                                    and self._is_position_opening_bar(position, bar)
+                                    and decision.action is PositionAction.SELL
+                                ):
+                                    position.opening_gate_position_alive_at_evaluation = False
+                                    position.baseline_first_bar_trail_exit_occurred = (
+                                        decision.reason is ExitReason.ATR_TRAILING_STOP
+                                    )
                                 if execute_position_decision(symbol, session, decision, bar):
                                     break
                             if symbol in positions:
@@ -712,6 +810,8 @@ class BacktestEngine:
                                 self.position_manager.update_after_bar(
                                     position, bar, next_atr=next_atr
                                 )
+                                if opening_survivor_gate:
+                                    self._complete_opening_survivor_gate(position, bar)
                         elif not intraday_histories[symbol] or (
                             intraday_histories[symbol][-1].timestamp < bar.timestamp
                         ):
@@ -1063,6 +1163,11 @@ class BacktestEngine:
         for rank, candidate in enumerate(candidates, start=1):
             candidate.daily_candidate_rank = rank
             candidate.daily_candidate_count = candidate_count
+            if self.current_preset in INTRADAY_ISOLATION_PRESETS:
+                candidate.candidate_event_index = len(self._candidate_events)
+                self._candidate_events.append(
+                    self._candidate_event(candidate, execution_session)
+                )
 
         if self.current_preset is PositionManagementPreset.D4_INTRADAY_CONFIRMED_ENTRY:
             candidates = candidates[:1]
@@ -1072,12 +1177,43 @@ class BacktestEngine:
         for candidate in candidates:
             symbol = candidate.record.symbol
             if symbol in occupied:
+                self._update_candidate_event(candidate, selection_outcome="already_holding")
                 if self.audit_observer is not None:
                     self.audit_observer.observe_portfolio_decision(
                         report.as_of, symbol, "blocked", "already_holding_symbol"
                     )
                 continue
-            if self.current_preset in NEGATIVE_COOLDOWN_PRESETS:
+            if self.current_preset in GROSS_LOSS_COOLDOWN_PRESETS:
+                previous = candidate.previous_position
+                blocked = self._gross_loss_cooldown_blocked(previous, execution_session)
+                candidate.cooldown_applied = blocked
+                self._update_candidate_event(
+                    candidate,
+                    cooldown_active=blocked,
+                    cooldown_blocked=blocked,
+                    cooldown_reason=(
+                        "negative_gross_return_next_xnys_session" if blocked else None
+                    ),
+                )
+                if blocked:
+                    candidate.cooldown_blocked = True
+                    candidate.cooldown_reason = "negative_gross_return_next_xnys_session"
+                    skipped["gross_loss_session_cooldown"] += 1
+                    self._research_counters["cooldown_blocks"] += 1
+                    if previous is not None and (
+                        previous.entry_timestamp is not None
+                        and previous.exit_timestamp == previous.entry_timestamp
+                    ):
+                        self._research_counters["blocks_after_entry_bar_losses"] += 1
+                    else:
+                        self._research_counters["blocks_after_later_losses"] += 1
+                    self._update_candidate_event(candidate, selection_outcome="cooldown_blocked")
+                    if self.audit_observer is not None:
+                        self.audit_observer.observe_portfolio_decision(
+                            report.as_of, symbol, "blocked", "gross_loss_session_cooldown"
+                        )
+                    continue
+            elif self.current_preset in NEGATIVE_COOLDOWN_PRESETS:
                 previous = candidate.previous_position
                 candidate.cooldown_applied = bool(
                     previous is not None and previous.position_return < 0
@@ -1092,6 +1228,7 @@ class BacktestEngine:
                         )
                     continue
             elif not self._reentry_allowed(symbol, report.as_of, closed_dates or {}):
+                self._update_candidate_event(candidate, selection_outcome="reentry_blocked")
                 skipped["reentry_cooldown"] += 1
                 if self.audit_observer is not None:
                     self.audit_observer.observe_portfolio_decision(
@@ -1105,6 +1242,7 @@ class BacktestEngine:
         for candidate in filtered:
             sector = (candidate.record.sic or "unknown")[:2]
             if sector_counts[sector] >= self.config.portfolio.max_sector_positions:
+                self._update_candidate_event(candidate, selection_outcome="sector_limit")
                 skipped["max_sector_positions"] += 1
                 if self.audit_observer is not None:
                     self.audit_observer.observe_portfolio_decision(
@@ -1119,6 +1257,7 @@ class BacktestEngine:
                 is not PositionManagementPreset.D5_HYBRID_CONFIRMED_SWING
                 and len(orders) >= capacity
             ):
+                self._update_candidate_event(candidate, selection_outcome="max_positions_reached")
                 if self.audit_observer is not None:
                     self.audit_observer.observe_portfolio_decision(
                         report.as_of,
@@ -1128,6 +1267,11 @@ class BacktestEngine:
                     )
                 continue
             orders.append(candidate)
+            self._update_candidate_event(
+                candidate,
+                selection_outcome="order_created",
+                entry_opportunity_required=True,
+            )
             if (
                 self.current_preset
                 is not PositionManagementPreset.D5_HYBRID_CONFIRMED_SWING
@@ -1269,6 +1413,85 @@ class BacktestEngine:
         )
         return bool(sessions and sessions[0] == execution_session)
 
+    @staticmethod
+    def _gross_loss_cooldown_blocked(
+        previous: BacktestPosition | None,
+        execution_session: date | None,
+    ) -> bool:
+        if previous is None or execution_session is None:
+            return False
+        gross_return = previous.gross_market_return
+        if gross_return is None:
+            gross_return = (
+                previous.exit_reference_price / previous.entry_reference_price - 1
+            )
+        if gross_return >= 0 or execution_session <= previous.exit_date:
+            return False
+        next_session = BacktestEngine._next_xnys_session(previous.exit_date)
+        return execution_session == next_session
+
+    @staticmethod
+    def _next_xnys_session(session: date) -> date | None:
+        sessions = trading_sessions_between(
+            session + timedelta(days=1), session + timedelta(days=10)
+        )
+        return sessions[0] if sessions else None
+
+    def _candidate_event(
+        self,
+        candidate: _PendingEntry,
+        execution_session: date | None,
+    ) -> dict:
+        previous = candidate.previous_position
+        previous_gross_return = None
+        if previous is not None:
+            previous_gross_return = previous.gross_market_return
+            if previous_gross_return is None:
+                previous_gross_return = (
+                    previous.exit_reference_price / previous.entry_reference_price - 1
+                )
+        next_session = (
+            self._next_xnys_session(previous.exit_date) if previous is not None else None
+        )
+        return {
+            "symbol": candidate.record.symbol,
+            "signal_session": candidate.signal_date.isoformat(),
+            "execution_session": (
+                execution_session.isoformat() if execution_session is not None else None
+            ),
+            "candidate_rank": candidate.daily_candidate_rank,
+            "candidate_score": candidate.variant_score,
+            "previous_same_symbol_exit_session": (
+                previous.exit_date.isoformat() if previous is not None else None
+            ),
+            "previous_same_symbol_gross_return": (
+                previous_gross_return
+            ),
+            "previous_same_symbol_net_return": (
+                previous.position_return if previous is not None else None
+            ),
+            "next_xnys_session_after_previous_exit": (
+                next_session.isoformat() if next_session is not None else None
+            ),
+            "cooldown_active": False,
+            "cooldown_blocked": False,
+            "cooldown_reason": None,
+            "entry_opportunity_required": False,
+            "entry_bar_expected_timestamp": None,
+            "entry_bar_present": None,
+            "actual_entry_timestamp": None,
+            "executed": False,
+            "warmup_sufficient": None,
+            "warmup_available_native_bars": None,
+            "execution_failure_reason": None,
+            "selection_outcome": "eligible",
+        }
+
+    def _update_candidate_event(self, order: _PendingEntry, **updates) -> None:
+        if order.candidate_event_index is None:
+            return
+        self._candidate_events[order.candidate_event_index].update(updates)
+
     def _observe_execution(
         self,
         order: _PendingEntry,
@@ -1285,6 +1508,68 @@ class BacktestEngine:
                 executed,
                 reason,
             )
+
+    @staticmethod
+    def _is_position_opening_bar(position: PositionState, bar: DailyBar) -> bool:
+        return (
+            position.opening_gate_expected_timestamp is not None
+            and bar.timestamp == position.opening_gate_expected_timestamp
+        )
+
+    def _prepare_opening_survivor_gate(
+        self,
+        position: PositionState,
+        bar: DailyBar,
+        session: date,
+        bars_by_timestamp: dict[datetime, dict[str, DailyBar]],
+    ) -> None:
+        if position.entry_date != session or not self._is_position_opening_bar(position, bar):
+            return
+        if position.opening_gate_actual_timestamp is not None:
+            return
+        position.opening_gate_actual_timestamp = bar.timestamp
+        position.opening_gate_open = float(bar.open)
+        position.opening_gate_high = float(bar.high)
+        position.opening_gate_low = float(bar.low)
+        position.opening_gate_close = float(bar.close)
+        position.opening_gate_volume = bar.volume
+        position.opening_gate_vwap = float(bar.vwap) if bar.vwap is not None else None
+        execution_timestamp = bar.timestamp + BarTimeframe.MINUTES_15.duration
+        position.opening_gate_executable = (
+            position.symbol in bars_by_timestamp.get(execution_timestamp, {})
+        )
+
+    def _complete_opening_survivor_gate(
+        self,
+        position: PositionState,
+        bar: DailyBar,
+    ) -> None:
+        if not self._is_position_opening_bar(position, bar):
+            return
+        position.opening_gate_position_alive_at_evaluation = True
+        position.opening_gate_evaluated = True
+        position.opening_gate_evaluable = True
+        position.opening_gate_green = float(bar.close) > float(bar.open)
+        position.opening_gate_passed = position.opening_gate_green
+        self._research_counters["opening_gate_evaluations"] += 1
+        if position.opening_gate_green:
+            self._research_counters["opening_gate_green_survivors"] += 1
+            return
+        self._research_counters["opening_gate_non_green_survivors"] += 1
+        position.opening_gate_triggered = True
+        if position.opening_gate_executable is False:
+            position.opening_gate_failure_reason = "missing_execution_bar"
+            self._research_counters["opening_gate_missing_execution_bars"] += 1
+
+    @staticmethod
+    def _opening_gate_exit_due(position: PositionState, bar: DailyBar) -> bool:
+        expected = position.opening_gate_expected_timestamp
+        return bool(
+            expected is not None
+            and position.opening_gate_triggered
+            and position.opening_gate_executable is True
+            and bar.timestamp == expected + BarTimeframe.MINUTES_15.duration
+        )
 
     def _update_reentry_trackers(
         self,
@@ -1366,6 +1651,7 @@ class BacktestEngine:
         cash: float,
         *,
         entry_atr: float | None = None,
+        warmup_history: list[DailyBar] | None = None,
     ) -> tuple[PositionState | None, float, str | None]:
         if len(positions) >= self.config.portfolio.max_positions:
             return None, cash, "max_positions"
@@ -1420,6 +1706,24 @@ class BacktestEngine:
         cost = notional + commission
         if cost > cash + 1e-8:
             return None, cash, "insufficient_cash"
+        warmup = (
+            warmup_coverage_diagnostics(
+                warmup_history,
+                bar.timestamp,
+                required_bars=self.config.intraday.warmup_bars,
+            )
+            if warmup_history is not None
+            else {}
+        )
+        opening_gate_expected = None
+        opening_gate_failure = None
+        opening_gate_evaluable = None
+        if self.current_preset in OPENING_SURVIVOR_GATE_PRESETS:
+            opening_gate_expected, _ = regular_session_bounds(bar.timestamp.date())
+            if bar.timestamp != opening_gate_expected:
+                opening_gate_failure = "missing_opening_bar"
+                opening_gate_evaluable = False
+                self._research_counters["opening_gate_missing_opening_bars"] += 1
         take_profit_percent = (
             self.position_management.take_profit.percent
             if self.position_management.take_profit.percent is not None
@@ -1543,6 +1847,21 @@ class BacktestEngine:
                 if self.current_preset in CONFIRMED_ENTRY_PRESETS
                 else None
             ),
+            warmup_required_bars=warmup.get("warmup_required_bars"),
+            warmup_available_native_bars=warmup.get(
+                "warmup_available_native_bars"
+            ),
+            warmup_sufficient=warmup.get("warmup_sufficient"),
+            earliest_warmup_timestamp=warmup.get("earliest_warmup_timestamp"),
+            latest_pre_entry_warmup_timestamp=warmup.get(
+                "latest_pre_entry_warmup_timestamp"
+            ),
+            warmup_expected_timestamp_gap_count=warmup.get(
+                "warmup_expected_timestamp_gap_count"
+            ),
+            opening_gate_expected_timestamp=opening_gate_expected,
+            opening_gate_evaluable=opening_gate_evaluable,
+            opening_gate_failure_reason=opening_gate_failure,
         )
         self.position_manager.activate_at_open(position, fill)
         return position, cash - cost, None
@@ -1606,6 +1925,13 @@ class BacktestEngine:
         }:
             position.highest_price_since_entry = max(
                 position.highest_price_since_entry, reference
+            )
+            position.lowest_price_since_entry = min(
+                position.lowest_price_since_entry, float(bar.open), reference
+            )
+        elif bar is not None and decision.reason is ExitReason.OPENING_BAR_FAIL:
+            position.highest_price_since_entry = max(
+                position.highest_price_since_entry, float(bar.open), reference
             )
             position.lowest_price_since_entry = min(
                 position.lowest_price_since_entry, float(bar.open), reference
@@ -1737,6 +2063,41 @@ class BacktestEngine:
             opening_bar_complete=position.opening_bar_complete,
             execution_bar_complete=position.execution_bar_complete,
             gap_affected_trade=position.gap_affected_trade,
+            warmup_required_bars=position.warmup_required_bars,
+            warmup_available_native_bars=position.warmup_available_native_bars,
+            warmup_sufficient=position.warmup_sufficient,
+            earliest_warmup_timestamp=position.earliest_warmup_timestamp,
+            latest_pre_entry_warmup_timestamp=(
+                position.latest_pre_entry_warmup_timestamp
+            ),
+            warmup_expected_timestamp_gap_count=(
+                position.warmup_expected_timestamp_gap_count
+            ),
+            opening_gate_expected_timestamp=position.opening_gate_expected_timestamp,
+            opening_gate_actual_timestamp=position.opening_gate_actual_timestamp,
+            opening_gate_open=position.opening_gate_open,
+            opening_gate_high=position.opening_gate_high,
+            opening_gate_low=position.opening_gate_low,
+            opening_gate_close=position.opening_gate_close,
+            opening_gate_volume=position.opening_gate_volume,
+            opening_gate_vwap=position.opening_gate_vwap,
+            opening_gate_green=position.opening_gate_green,
+            opening_gate_position_alive_at_evaluation=(
+                position.opening_gate_position_alive_at_evaluation
+            ),
+            baseline_first_bar_trail_exit_occurred=(
+                position.baseline_first_bar_trail_exit_occurred
+            ),
+            opening_gate_evaluated=position.opening_gate_evaluated,
+            opening_gate_evaluable=position.opening_gate_evaluable,
+            opening_gate_passed=position.opening_gate_passed,
+            opening_gate_triggered=position.opening_gate_triggered,
+            opening_gate_executable=position.opening_gate_executable,
+            opening_gate_failure_reason=position.opening_gate_failure_reason,
+            opening_gate_exit_timestamp=position.opening_gate_exit_timestamp,
+            opening_gate_exit_reference_price=(
+                position.opening_gate_exit_reference_price
+            ),
         )
         position.realized_profit += pnl
         if decision.partial_level is not None:
@@ -1805,9 +2166,16 @@ class BacktestEngine:
 
         attempts = self._research_counters["confirmation_attempts"]
         passes = self._research_counters["confirmation_passes"]
+        cooldown_events = [
+            event for event in self._candidate_events if event.get("cooldown_blocked") is True
+        ]
+        opening_gate_evaluated = [
+            position for position in positions if position.opening_gate_evaluated
+        ]
         return {
             **dict(sorted(self._research_counters.items())),
             "confirmation_events": self._confirmation_events,
+            "candidate_events": self._candidate_events,
             "strict_coverage_sensitivity": self.strict_coverage_sensitivity,
             "same_entry_bar_final_exits": len(same_bar),
             "same_entry_bar_loss_rate": (
@@ -1815,6 +2183,7 @@ class BacktestEngine:
                 if same_bar
                 else None
             ),
+            "same_entry_bar_losses": sum(position.net_pnl < 0 for position in same_bar),
             "first_bar_survivors": len(survivors),
             "survivor_win_rate": (
                 sum(position.net_pnl > 0 for position in survivors) / len(survivors)
@@ -1837,6 +2206,45 @@ class BacktestEngine:
             "missing_opening_bar_skips": skipped["missing_confirmation_bar"],
             "missing_execution_bar_skips": skipped["missing_execution_bar"],
             "cooldown_blocked_entries": skipped["reentry_cooldown"],
+            "candidates_evaluated": len(self._candidate_events),
+            "cooldown_blocks": len(cooldown_events),
+            "unique_symbols_blocked": len(
+                {event["symbol"] for event in cooldown_events}
+            ),
+            "subsequent_session_candidate_availability": sum(
+                event.get("execution_session")
+                == event.get("next_xnys_session_after_previous_exit")
+                for event in self._candidate_events
+                if event.get("next_xnys_session_after_previous_exit") is not None
+            ),
+            "opening_gate_evaluations": len(opening_gate_evaluated),
+            "positions_stopped_before_opening_gate_evaluation": sum(
+                position.opening_gate_position_alive_at_evaluation is False
+                for position in positions
+            ),
+            "opening_gate_surviving_positions": len(opening_gate_evaluated),
+            "opening_gate_green_survivors": sum(
+                position.opening_gate_green is True for position in opening_gate_evaluated
+            ),
+            "opening_gate_non_green_survivors": sum(
+                position.opening_gate_green is False for position in opening_gate_evaluated
+            ),
+            "opening_bar_fail_exits": sum(
+                position.exit_reason == ExitReason.OPENING_BAR_FAIL.value
+                for position in positions
+            ),
+            "opening_gate_missing_opening_bars": sum(
+                position.opening_gate_failure_reason == "missing_opening_bar"
+                for position in positions
+            ),
+            "opening_gate_missing_execution_bars": sum(
+                position.opening_gate_failure_reason == "missing_execution_bar"
+                for position in positions
+            ),
+            "baseline_first_bar_trail_exits": sum(
+                position.baseline_first_bar_trail_exit_occurred
+                for position in positions
+            ),
             "partial_target_count": len(partial_ids),
             "runner_positions": len(runners),
             "runner_final_return": average(
@@ -2524,6 +2932,18 @@ def _comparison_runs(
                 PositionManagementPreset.D1_SWING_PROFIT_LOCK,
             ),
         )
+    if comparison_kind is StrategyComparisonKind.RESEARCH_INTRADAY_ISOLATION:
+        return (
+            (StrategyVariant.FULL, PositionManagementPreset.INTRADAY_DYNAMIC),
+            (
+                StrategyVariant.FULL,
+                PositionManagementPreset.F1_INTRADAY_LOSS_COOLDOWN,
+            ),
+            (
+                StrategyVariant.FULL,
+                PositionManagementPreset.F2_INTRADAY_OPENING_SURVIVOR_GATE,
+            ),
+        )
     return (*score_runs, *position_runs)
 
 
@@ -2541,6 +2961,10 @@ def _comparison_label(
         StrategyComparisonKind.EXTENDED_VALIDATION,
     }:
         return research_strategy_label(variant, preset)
+    if comparison_kind is StrategyComparisonKind.RESEARCH_INTRADAY_ISOLATION:
+        from trading_system.backtest.intraday_isolation import intraday_isolation_label
+
+        return intraday_isolation_label(preset)
     return f"{variant.value}/{preset.value}"
 
 
@@ -2557,6 +2981,10 @@ def research_strategy_label(
         PositionManagementPreset.D3_INTRADAY_TRAIL_GUARD: "intraday-trail-guard",
         PositionManagementPreset.D4_INTRADAY_CONFIRMED_ENTRY: "intraday-confirmed-entry",
         PositionManagementPreset.D5_HYBRID_CONFIRMED_SWING: "hybrid-confirmed-swing",
+        PositionManagementPreset.F1_INTRADAY_LOSS_COOLDOWN: "intraday-loss-cooldown",
+        PositionManagementPreset.F2_INTRADAY_OPENING_SURVIVOR_GATE: (
+            "intraday-opening-survivor-gate"
+        ),
     }
     prefix = preset.value.split("-", 1)[0]
     return f"{prefix}/{variant.value}-{suffixes[preset]}"
