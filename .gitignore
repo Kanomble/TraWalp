@@ -213,6 +213,7 @@ tempCodeRunnerFile.py
 data/*.sqlite3*
 reports/*.csv
 reports/*.json
+reports/*
 
 # PyPI configuration file
 .pypirc
