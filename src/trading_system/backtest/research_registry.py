@@ -73,7 +73,7 @@ STRATEGY_RESEARCH_REGISTRY: tuple[StrategyResearchMetadata, ...] = (
         PositionManagementPreset.F1_INTRADAY_LOSS_COOLDOWN,
         "F1-C",
         "F1/C-intraday-loss-cooldown",
-        ResearchLifecycle.PENDING_EVALUATION,
+        ResearchLifecycle.ARCHIVED_RESEARCH,
         "intraday-isolation",
         "Gross-loss next-session cooldown isolation.",
     ),
@@ -81,7 +81,7 @@ STRATEGY_RESEARCH_REGISTRY: tuple[StrategyResearchMetadata, ...] = (
         PositionManagementPreset.F2_INTRADAY_OPENING_SURVIVOR_GATE,
         "F2-C",
         "F2/C-intraday-opening-survivor-gate",
-        ResearchLifecycle.PENDING_EVALUATION,
+        ResearchLifecycle.ARCHIVED_RESEARCH,
         "intraday-isolation",
         "Opening-bar survivor gate isolation.",
     ),
@@ -98,9 +98,18 @@ STRATEGY_RESEARCH_REGISTRY: tuple[StrategyResearchMetadata, ...] = (
         PositionManagementPreset.F4_INTRADAY_FIRST_HOUR_PULLBACK,
         "F4-C",
         "F4/C-intraday-first-hour-pullback",
-        ResearchLifecycle.ACTIVE_RESEARCH,
+        ResearchLifecycle.ARCHIVED_RESEARCH,
         "intraday-next",
         "EMA20-qualified first-hour pullback with confirmed swing-high exit.",
+        expensive=True,
+    ),
+    _metadata(
+        PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT,
+        "F5-C",
+        "F5/C-intraday-first-hour-pullback-f0-management",
+        ResearchLifecycle.ACTIVE_RESEARCH,
+        "intraday-hybrid",
+        "F4 first-hour pullback entry with frozen F0 intraday management.",
         expensive=True,
     ),
     *(
@@ -230,6 +239,14 @@ RESEARCH_FAMILY_RUNS: dict[
         (
             StrategyVariant.FULL,
             PositionManagementPreset.F4_INTRADAY_FIRST_HOUR_PULLBACK,
+        ),
+    ),
+    StrategyComparisonKind.RESEARCH_INTRADAY_HYBRID: (
+        (StrategyVariant.FULL, PositionManagementPreset.INTRADAY_DYNAMIC),
+        (StrategyVariant.FULL, PositionManagementPreset.F3_INTRADAY_THESIS_RECOVERY),
+        (
+            StrategyVariant.FULL,
+            PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT,
         ),
     ),
 }

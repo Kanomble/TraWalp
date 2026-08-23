@@ -1,0 +1,1714 @@
+# CODEX TASK — TraWalp D1–D5 Strategy Research Architecture
+# C-Selection + Profit Protection + Confirmed Intraday Entry + Hybrid Swing
+
+## Mission
+
+Implementiere die nächste kontrollierte Strategy-Research-Stufe für TraWalp.
+
+Die aktuelle, nach Repository-Audit, Correctness-Fixes, universe-neutralem SEC-Full-Refresh und
+gezielter Intraday-Coverage-Validierung erzeugte Datenbasis ist für diesen Task die verbindliche
+Research-Baseline.
+
+Dieser Task soll die fünf vorab definierten Strategien D1–D5 implementieren, testen, vergleichen
+und diagnostizieren.
+
+Es handelt sich ausdrücklich um:
+
+- Strategy Research
+- Backtesting
+- Hypothesis Testing
+- Execution Diagnostics
+
+und ausdrücklich NICHT um:
+
+- Live Trading
+- Paper Trading
+- Broker Orders
+- Parameteroptimierung
+- Hyperparameter Search
+- automatische Auswahl einer "besten" Strategie
+- Data Refresh / SEC Sync / Intraday Sync
+- Datenreparatur
+
+Die zentrale Forschungsrichtung lautet:
+
+Daily C Selection
+→ Opening Confirmation
+→ bessere Entry-Execution
+→ ATR/Risk-basierter Swing Risk Stop
+→ MFE-/R-basierter Profit Lock
+→ Partial Runner
+→ kontrollierter Re-Entry
+
+Die früher geplante A-zentrierte D1–D5-Architektur ist verworfen.
+
+A darf nur noch als Legacy-/Negative-Control mitlaufen.
+
+---
+
+# 0. HARTE GRUNDREGELN
+
+Während dieses Tasks:
+
+KEINE Änderungen an:
+
+- aktuellen Score-Gewichten
+- A/B/C Thresholds
+- Quality Thresholds
+- Valuation Thresholds
+- Opportunity Thresholds
+- Timing Thresholds
+- RSI Thresholds
+- Relative-Volume Thresholds
+- aktuellen Universe-Filtern
+- Portfolio max_positions
+- risk_per_trade
+- max_position_pct
+- Slippage Default
+- Commission Default
+- bestehenden Production-Presets
+- bestehenden A/B/C-Definitionen
+
+Keine Parameter-Grids.
+
+Insbesondere NICHT testen:
+
+- 0.5 / 0.75 / 1.0 R
+- 1.5 / 2 / 2.5 ATR
+- 25 / 33 / 50 % Partial
+- 10 / 12 / 15 % Target
+- 5 / 10 / 15 Tage Hold
+- mehrere Confirmation-Kombinationen
+- mehrere VWAP-Regeln
+- RSI-Varianten
+
+Die unten definierten Parameter sind PREDECLARED und für diesen Task fix.
+
+Falls eine technische Semantik nicht implementierbar ist, dokumentiere den Grund und verwende
+keinen stillen Ersatzparameter.
+
+---
+
+# 1. DATENBASIS EINFRIEREN
+
+Vor Beginn:
+
+Dokumentiere:
+
+- Branch
+- Commit
+- git status
+- Config
+- DB-Pfad
+- DB-Dateigröße
+- relevante Table Counts
+- Fact Count
+- Daily Bar Count
+- 15m Bar Count
+- verfügbare Zeitbereiche
+- aktuelle Dataset States
+
+WICHTIG:
+
+Während des gesamten Tasks:
+
+- KEIN `sync`
+- KEIN `sync --full`
+- KEIN `sync --incremental`
+- KEIN `sync-daily-history`
+- KEIN `sync-intraday`
+- KEIN `sync-assets`
+- KEIN `refresh-market`
+- KEIN SEC Request
+- KEIN Alpaca History Request
+- KEIN Data Prefetch über Netzwerk
+
+Alle Backtests müssen ausschließlich mit dem aktuell lokalen Datenbestand laufen.
+
+Für Strategy Compare deshalb local-only Semantik verwenden.
+
+Wenn Daten fehlen:
+
+- nicht synchronisieren
+- nicht synthetisieren
+- explizit diagnostizieren
+
+DB Business-Data Counts vor und nach dem Task vergleichen.
+
+---
+
+# 2. BASELINE REGRESSION
+
+Vor neuen Strategien:
+
+Volle Regression ausführen.
+
+Beispiel:
+
+python -m pytest -p no:cacheprovider --basetemp=.tmp_pytest_d1_d5_baseline
+
+ruff check .
+
+git diff --check
+
+Alle Tests müssen grün sein.
+
+Falls aktuelle Final-Refresh-Reports vorhanden sind, insbesondere:
+
+reports/all_comparison_2026-05-01_2026-08-12_sec_refreshed_complete_intraday*
+
+oder äquivalente letzte SEC-refreshed Reports:
+
+diese NICHT überschreiben.
+
+Verwende sie als Regression Reference.
+
+Bestehende:
+
+- A/configured
+- B/configured
+- C/configured
+- C/intraday-dynamic
+
+müssen ohne absichtliche Änderung der alten Strategiepfade reproduzierbar bleiben.
+
+---
+
+# 3. ARCHITEKTURPRINZIP
+
+Keine zweite Backtest Engine bauen.
+
+Keine parallele Position-Management-Implementierung bauen.
+
+Keine parallele Screening-Engine bauen.
+
+Wiederverwenden:
+
+- bestehende PIT Screens
+- evaluate_variant_entry
+- CachedScreenSource
+- PositionManager
+- vorhandene native Intraday-Ausführung
+- bestehende Partial-Fill-Logik
+- vorhandene Slippage-/Commission-Semantik
+- bestehende MFE/MAE-Logik
+- bestehende XNYS Calendar-/Session-Logik
+
+Neue Funktionen müssen möglichst kleine, explizite Erweiterungen der bestehenden Komponenten sein.
+
+Bestehende Production-Presets müssen wirtschaftlich unverändert bleiben.
+
+---
+
+# 4. NEUE RESEARCH-COMPARISON-FAMILIE
+
+Erweitere Strategy Comparison um eine neue explizite Research-Familie.
+
+Vorschlag:
+
+--include research-d1-d5
+
+Der bestehende Wert:
+
+--include all
+
+soll seine bisherige Bedeutung NICHT ändern.
+
+Damit bleiben bestehende Scripts und Referenzreports kompatibel.
+
+Die neue Research-Familie soll enthalten:
+
+CONTROLS
+
+- A/configured
+- B/configured
+- C/configured
+- C/intraday-dynamic
+
+PRIMARY RESEARCH
+
+- D1/C-swing-profit-lock
+- D2/C-swing-runner
+- D3/C-intraday-trail-guard
+- D4/C-intraday-confirmed-entry
+- D5/C-hybrid-confirmed-swing
+
+ROBUSTNESS MIRRORS
+
+- D1/B-swing-profit-lock
+- D5/B-hybrid-confirmed-swing
+
+A erhält KEINE D-Variante.
+
+A ist ausschließlich Legacy-/Negative-Control.
+
+---
+
+# 5. D1 — C SWING PROFIT LOCK
+
+## Ziel
+
+Teste isoliert, ob ein MFE-/R-basierter Profit-Lock starke profitable Excursions besser schützt,
+ohne Entry-Selektion oder bestehende Profit-/Hold-Logik gleichzeitig zu verändern.
+
+## Selection
+
+Exakt:
+
+Strategy Variant C
+
+Keine Score-Änderung.
+
+## Entry
+
+Unverändert zum bestehenden C/configured:
+
+Signal nach abgeschlossenem Daily Screen.
+
+Entry nächste zulässige Portfolio Session Open.
+
+## Initial Stop
+
+Unverändert:
+
+bestehender ATR-/Risk-basierter Entry Stop aus configured.
+
+WICHTIG:
+
+KEIN 3%-Fixed-Stop.
+
+## Profit Target
+
+Unverändert:
+
+bestehender Full Take Profit bei +12%.
+
+## Max Hold
+
+Unverändert:
+
+Hard Max Hold = 10 Trading Days / bestehende aktuelle Semantik.
+
+## Neue Komponente: R-based Profit Lock
+
+Definiere:
+
+R = initiale wirtschaftliche Stop-Distanz pro Aktie
+
+Verwende dabei exakt dieselbe Preisbasis / Stop-Distance-Semantik wie das bestehende Risk Sizing.
+
+Keine zweite Risk-Definition einführen.
+
+Speichere R beim Entry immutable in der Position.
+
+State Machine:
+
+STATE 0 — INITIAL_RISK
+
+MFE < +1R
+
+→ ursprünglicher Schutz-Stop bleibt aktiv.
+
+STATE 1 — BREAK_EVEN_LOCK
+
+Sobald ein ABGESCHLOSSENER Bar eine MFE von >= +1R bestätigt:
+
+→ Schutz-Stop ab dem FOLGEBAR mindestens auf Economic Break-Even anheben.
+
+Economic Break-Even muss die bestehende Execution-Cost-Semantik berücksichtigen.
+
+Implementiere eine saubere Helper-Funktion, sodass bei einem normalen Fill am Break-Even-
+Reference-Level unter dem aktuellen Cost Model ungefähr kein negativer Netto-P&L entsteht.
+
+Keine Änderung am Position Sizing.
+
+STATE 2 — ONE_R_LOCK
+
+Sobald ein ABGESCHLOSSENER Bar MFE >= +2R bestätigt:
+
+→ Schutz-Stop ab dem FOLGEBAR mindestens auf Entry +1R anheben.
+
+Long Stops sind raise-only.
+
+Ein Profit-Lock darf niemals einen bereits höheren aktiven Stop verschlechtern.
+
+## Daily OHLC Correctness
+
+Keine Intrabar-Lookahead-Annahme.
+
+Ein neuer Profit-Lock, der aus High/MFE eines Daily-Bars entsteht, darf frühestens für den
+nächsten Bar gelten.
+
+Keine Nutzung desselben Daily High zur Aktivierung UND retroaktiven Ausführung des neuen Stops.
+
+---
+
+# 6. D2 — C SWING RUNNER
+
+## Ziel
+
+Teste isoliert, ob das vollständige +12%-Take-Profit-Level zu viel Trend abschneidet.
+
+D2 baut exakt auf D1 auf.
+
+## Alles aus D1 bleibt unverändert
+
+- C Selection
+- Daily Entry
+- ATR/Risk Initial Stop
+- R Profit Lock
+- Hard Max Hold 10
+
+## Änderung
+
+Der bisherige Full Take Profit bei +12% wird ersetzt durch:
+
++12% Profit Level:
+
+SELL 33% of CURRENT ORIGINAL POSITION QUANTITY
+
+Remaining:
+
+67% Runner
+
+Keine weiteren Profit Targets.
+
+Kein zweites Partial.
+
+Kein 1.5%-Partial.
+
+Kein Full Target.
+
+Runner wird nur verwaltet durch:
+
+- initial risk stop
+- D1 profit lock
+- hard max hold 10
+- end-of-backtest liquidation
+
+Partial-Level darf nur einmal ausgeführt werden.
+
+Gap-Semantik muss bestehende korrekte Partial-/Target-Reihenfolge verwenden.
+
+---
+
+# 7. D3 — C INTRADAY TRAIL GUARD
+
+## Ziel
+
+Isoliere die Hypothese, dass der aktuell sofort aktive ATR-Trail einen großen Teil der
+Entry-Bar-Stopouts verursacht.
+
+D3 soll ABSICHTLICH noch KEIN delayed entry verwenden.
+
+## Selection
+
+Exakt aktuelle C Selection.
+
+## Entry
+
+Wie bestehendes C/intraday-dynamic:
+
+Entry am normalen ersten zulässigen Regular-Session-Entry.
+
+Keine Confirmation.
+
+Keine Änderung der Entry-Auswahl.
+
+## Initial Stop
+
+Bestehender Intraday Catastrophe Stop:
+
+3%
+
+Dieser 3%-Stop gilt NUR für Intraday-Varianten.
+
+## Existing Partial
+
+Unverändert beibehalten:
+
+50% Partial Take Profit bei +1.5%.
+
+## ATR Trail
+
+Bestehende ATR-Konfiguration beibehalten:
+
+- bestehender ATR Period
+- bestehender ATR Multiplier
+- bestehende Timeframe-Semantik
+
+ABER:
+
+Der ATR-Trail darf NICHT im Entry-Bar aktiv sein.
+
+Neue fixe Regel:
+
+Mindestens EIN vollständig abgeschlossener nativer 15m-Bar seit Entry muss existieren,
+bevor ATR Trailing aktiv werden darf.
+
+Beispiel:
+
+Entry 09:30.
+
+09:30–09:45 Bar:
+
+- Catastrophe Stop kann gelten
+- Partial Target kann gemäß bestehender Order Semantik gelten
+- ATR Trail ist NICHT armed
+
+Nach Abschluss des 09:30–09:45 Bars:
+
+Trail darf für den folgenden Bar aktiviert / aktualisiert werden.
+
+Keine retroaktive Trail-Ausführung im Aktivierungsbar.
+
+---
+
+# 8. D4 — C INTRADAY CONFIRMED ENTRY
+
+## Ziel
+
+Teste die stärkste bisherige Entry-Hypothese:
+
+Die erste 15m-Opening-Kerze soll als Confirmation verwendet werden, bevor Kapital eingesetzt wird.
+
+D4 baut auf D3 auf.
+
+## Selection
+
+Exakt C.
+
+Der aktuelle höchste C-Kandidat des Daily Screens bleibt der einzige Entry-Kandidat.
+
+WICHTIG:
+
+D4 darf NICHT auf den zweitbesten Kandidaten ausweichen, wenn der Top-Kandidat nicht bestätigt.
+
+Dieses Fallback ist bewusst D5 vorbehalten.
+
+## Required Opening Bar
+
+Die kanonische Regular-Session 09:30–09:45 America/New_York Kerze muss vollständig vorhanden sein.
+
+Nicht:
+
+"erster lokal vorhandener Bar".
+
+Wenn 09:30 fehlt:
+
+→ keine Confirmation möglich
+→ Session für diesen Kandidaten SKIP
+→ Reason explizit reporten
+
+Beispielproblem:
+
+Wenn 09:30 fehlt und der erste gespeicherte Bar 09:45 ist, darf dieser NICHT als Opening Bar
+interpretiert werden.
+
+## Confirmation Rule
+
+EXAKT EINE Regel:
+
+first_bar.close > first_bar.open
+
+Keine zusätzliche Regel.
+
+NICHT als Gate verwenden:
+
+- VWAP
+- Relative Volume
+- RSI
+- first-bar high breakout
+- absolute move
+- ATR
+- volume threshold
+
+Diese dürfen nur diagnostisch gespeichert werden.
+
+## Entry Timing
+
+Nach vollständig beobachtetem 09:30–09:45 Bar:
+
+Entry am OPEN des 09:45–10:00 Bars.
+
+Keine Nutzung von:
+
+- High
+- Low
+- Close
+
+des 09:45 Bars für die Entry-Entscheidung.
+
+Wenn der 09:45 Execution Bar fehlt:
+
+→ SKIP SESSION
+
+Nicht auf 10:00 oder später verschieben.
+
+Damit bleibt Entry Timing deterministisch.
+
+## Stop / Partial / Trail
+
+- 3% Catastrophe Stop
+- 50% bei +1.5%
+- D3 Trail Guard
+
+bleiben erhalten.
+
+## Re-entry Cooldown
+
+Neue fixe Regel:
+
+Nach einer FINAL geschlossenen Position mit negativem Netto-Position-Return:
+
+derselbe SYMBOL darf in der unmittelbar folgenden XNYS Trading Session NICHT erneut eröffnet werden.
+
+Per-symbol cooldown.
+
+Nicht global.
+
+Cooldown = exakt 1 Trading Session.
+
+Nach einem Gewinner kein Cooldown.
+
+Kein Fresh-Trigger-Zwang.
+
+`fresh_trigger_since_previous_exit` bleibt nur Diagnosefeld.
+
+---
+
+# 9. D5 — C HYBRID CONFIRMED SWING
+
+## Ziel
+
+Implementiere die eigentliche Zielarchitektur:
+
+Daily Fundamental/Technical Selection
++
+15m Opening Confirmation
++
+Swing Position Management
+
+D5 darf mehrere vorher getestete Komponenten kombinieren.
+
+## Candidate Set
+
+Am abgeschlossenen Daily Screen:
+
+Erzeuge ALLE C-qualifizierten Kandidaten in normaler Ranking-Reihenfolge.
+
+Nicht nur den Top-1 Kandidaten.
+
+## Next Session Confirmation
+
+Für jeden C-Kandidaten:
+
+prüfe dessen kanonischen 09:30–09:45 15m-Bar.
+
+Confirmation:
+
+close > open
+
+Wie D4.
+
+Nur Kandidaten mit:
+
+- vollständigem 09:30 Confirmation Bar
+- vorhandenem 09:45 Execution Bar
+- confirmation_passed = true
+
+sind entry eligible.
+
+## Selection Among Confirmed Candidates
+
+Unter allen bestätigten C-Kandidaten:
+
+wähle den Kandidaten mit dem höchsten ORIGINAL DAILY C SCORE.
+
+Keine neue Intraday Score Formel.
+
+Keine Intraday-Rerank-Gewichte.
+
+Kein VWAP Scoring.
+
+Kein Relative Volume Scoring.
+
+Intraday Confirmation ist lediglich:
+
+eligible / not eligible.
+
+Wenn kein Kandidat bestätigt:
+
+→ kein Trade.
+
+## Entry
+
+09:45 Execution-Bar Open.
+
+## Position Management
+
+Nach Entry wird die Position als SWING behandelt.
+
+Initial Stop:
+
+bestehender C/configured ATR-/Risk-basierter Entry Stop.
+
+KEIN 3%-Fixed-Stop.
+
+Profit Protection:
+
+D1 R-based Profit Lock.
+
+Profit Taking:
+
+D2:
+
+33% bei +12%.
+
+67% Runner.
+
+Max Hold:
+
+Hard 10 Days.
+
+Nicht auf Soft Hold ändern.
+
+## Re-entry
+
+Übernehme D4:
+
+1 Trading Session per-symbol Cooldown nach negativem finalen Position Return.
+
+Kein Fresh Trigger Requirement.
+
+---
+
+# 10. B ROBUSTNESS MIRRORS
+
+Implementiere zusätzlich:
+
+D1/B-swing-profit-lock
+
+und
+
+D5/B-hybrid-confirmed-swing
+
+Sie müssen wirtschaftlich exakt den entsprechenden C-D-Varianten entsprechen.
+
+Einziger Unterschied:
+
+Selection Variant = B
+
+Keine B-spezifischen Parameter.
+
+Keine Anpassung an B-Performance.
+
+Ziel:
+
+Prüfen, ob Profit-Lock / Hybrid-Execution nur C-spezifisch funktionieren oder auch unter einer
+zweiten Selection-Pipeline.
+
+Diese Mirror Runs sind Robustness Controls, keine eigenständigen Optimierungsziele.
+
+---
+
+# 11. A ALS NEGATIVE CONTROL
+
+A/configured soll im Research Report weiterhin enthalten sein.
+
+Aber:
+
+- kein D1/A
+- kein D2/A
+- kein D3/A
+- kein D4/A
+- kein D5/A
+
+Keine neue A-Optimierung.
+
+---
+
+# 12. NEUE DIAGNOSTIKFELDER
+
+Erweitere Positions-/Execution-/Research-Metadaten so, dass D1–D5 später vollständig auditierbar
+sind.
+
+Mindestens speichern:
+
+Selection:
+
+- daily_candidate_rank
+- daily_candidate_count
+- daily_candidate_score
+- daily_candidate_variant
+
+Confirmation:
+
+- confirmation_required
+- confirmation_bar_expected_timestamp
+- confirmation_bar_timestamp
+- confirmation_bar_present
+- confirmation_open
+- confirmation_high
+- confirmation_low
+- confirmation_close
+- confirmation_volume
+- confirmation_vwap, falls im nativen Bar vorhanden
+- confirmation_passed
+- confirmation_failure_reason
+
+Execution:
+
+- intended_entry_timestamp
+- actual_entry_timestamp
+- entry_delayed_from_open
+- execution_bar_present
+
+Trail:
+
+- trail_guard_enabled
+- completed_bars_before_trail_arm
+- trail_armed_timestamp
+- trail_armed_reference_price
+- atr_at_trail_activation
+- mfe_at_trail_activation
+
+Profit Lock:
+
+- initial_risk_per_share_R
+- maximum_mfe_in_R
+- profit_lock_state
+- profit_lock_activation_timestamp
+- break_even_lock_timestamp
+- one_r_lock_timestamp
+- active_profit_lock_stop
+
+Re-entry:
+
+- cooldown_applied
+- cooldown_blocked
+- cooldown_reason
+- previous_position_net_return
+
+Coverage:
+
+- intraday_session_status
+- opening_bar_complete
+- execution_bar_complete
+- gap_affected_trade
+
+Bestehende Reports sollen kompatibel bleiben.
+
+Neue Felder hinzufügen, keine alten Felder entfernen.
+
+---
+
+# 13. PROFIT-LOCK STATE MACHINE TESTS
+
+Behaviour Tests mindestens für:
+
+## No activation
+
+MFE < 1R
+
+→ initial stop unverändert.
+
+## +1R activation
+
+Bar High erreicht >=1R.
+
+Im selben Bar darf Break-Even Stop NICHT retroaktiv auslösen.
+
+Ab nächstem Bar ist Break-Even Lock aktiv.
+
+## +2R activation
+
+Bar High erreicht >=2R.
+
+Ab nächstem Bar mindestens +1R Lock.
+
+## Raise-only
+
+Falls bereits ein höherer ATR/anderer Schutz-Stop existiert:
+
+Profit Lock darf diesen nicht senken.
+
+## Gap
+
+Gap unter Profit Lock:
+
+bestehende konservative Gap-Fill-Semantik nutzen.
+
+## Partial Runner
+
+Profit-Lock bleibt nach D2 Partial für verbleibende Quantity aktiv.
+
+---
+
+# 14. D3 TRAIL-GUARD TESTS
+
+Mindestens:
+
+Entry 09:30.
+
+Entry-Bar Low unterschreitet theoretischen sofortigen ATR Trail,
+aber nicht Catastrophe Stop.
+
+D3:
+
+→ KEIN atr_trailing_stop im Entry-Bar.
+
+Nach abgeschlossenem Entry Bar:
+
+→ Trail darf für Folgebar aktiv werden.
+
+Weiterhin testen:
+
+- Catastrophe Stop im Entry-Bar
+- Partial TP im Entry-Bar
+- Trail activation next bar
+- raise-only ATR trail
+- Gap after trail activation
+
+Bestehendes `C/intraday-dynamic` Verhalten darf NICHT geändert werden.
+
+Nur D3+ verwenden Trail Guard.
+
+---
+
+# 15. D4 CONFIRMATION TESTS
+
+Mindestens:
+
+Opening Bar green:
+
+close > open
+
+→ Entry 09:45 Open.
+
+Opening Bar red:
+
+close <= open
+
+→ kein Entry.
+
+09:30 Bar fehlt:
+
+→ kein Entry
+→ missing_confirmation_bar.
+
+09:45 Bar fehlt:
+
+→ kein Entry
+→ missing_execution_bar.
+
+09:30 fehlt, 09:45 existiert:
+
+→ 09:45 darf NICHT als Opening Bar verwendet werden.
+
+Keine Nutzung von 09:45 High/Low/Close für Entry Entscheidung.
+
+---
+
+# 16. D4 COOLDOWN TESTS
+
+Symbol X:
+
+Tag 1 negative Position.
+
+Tag 2 neues Signal:
+
+→ blockiert.
+
+Tag 3 neues Signal:
+
+→ erlaubt.
+
+Nach Gewinner:
+
+→ nächste Session erlaubt.
+
+Cooldown nur symbolbezogen.
+
+Anderes Symbol darf während Cooldown handeln.
+
+Fresh trigger:
+
+darf Entry nicht blockieren.
+
+---
+
+# 17. D5 MULTI-CANDIDATE TESTS
+
+Daily Candidates:
+
+A score 90
+B score 85
+C score 80
+
+Opening Confirmation:
+
+A fails
+B passes
+C passes
+
+→ Entry B.
+
+Wenn A passes:
+
+→ Entry A.
+
+Wenn niemand passes:
+
+→ no trade.
+
+Wenn bester confirmed Candidate keinen 09:45 Execution Bar besitzt:
+
+→ Kandidat nicht execution-eligible.
+
+Dann darf der nächstbeste BESTÄTIGTE UND EXECUTION-ELIGIBLE Kandidat gewählt werden.
+
+Ranking bleibt ausschließlich Daily C Score.
+
+---
+
+# 18. INTRADAY COVERAGE SENSITIVITY
+
+Für D3, D4 und D5 zwei Auswertungsmodi reporten.
+
+## NORMAL NATIVE DATA RUN
+
+Bestehende native Bars.
+
+Keine synthetischen Bars.
+
+D4/D5 erzwingen trotzdem 09:30 + 09:45 Presence.
+
+## STRICT COMPLETE-SESSION SENSITIVITY
+
+Diagnostischer Run.
+
+Nicht als tradable Strategy interpretieren.
+
+Für jede Symbol-Session, in der Intraday-Logik benötigt wird:
+
+nur Sessions mit Qualification Status COMPLETE zulassen.
+
+Sessions mit:
+
+- PARTIAL_SESSION
+- UNKNOWN_MARKET_ACTIVITY
+- MISSING_SESSION
+
+werden aus dieser Sensitivity-Auswertung ausgeschlossen.
+
+WICHTIG:
+
+Dies ist ein DATA QUALITY SENSITIVITY TEST.
+
+Kein Production Entry Rule.
+
+Report muss klar markieren:
+
+`strict_coverage_sensitivity = true`
+
+und darf nicht als eigener Strategy Winner gerankt werden.
+
+---
+
+# 19. BASELINE / RESEARCH OUTPUTS
+
+Neue Reports unter eindeutigem neuen Stem.
+
+Zum Beispiel:
+
+reports/d1_d5_research_2026-05-01_2026-08-12.csv
+reports/d1_d5_research_2026-05-01_2026-08-12.json
+reports/d1_d5_research_2026-05-01_2026-08-12_positions.csv
+reports/d1_d5_research_2026-05-01_2026-08-12_execution_legs.csv
+reports/d1_d5_research_2026-05-01_2026-08-12_post_exit_analysis.csv
+
+Zusätzlich:
+
+reports/d1_d5_research_2026-05-01_2026-08-12_diagnostics.json
+reports/d1_d5_research_2026-05-01_2026-08-12_monthly.csv
+reports/d1_d5_research_2026-05-01_2026-08-12_symbol_concentration.csv
+reports/d1_d5_research_2026-05-01_2026-08-12_cost_stress.csv
+reports/d1_d5_research_2026-05-01_2026-08-12_strict_coverage.csv
+
+Bestehende Reports niemals überschreiben.
+
+---
+
+# 20. METRICS
+
+Für jeden Control / D-Run mindestens:
+
+Performance:
+
+- total_return
+- CAGR, falls sinnvoll
+- max_drawdown
+- Sharpe
+- Sortino
+- Profit Factor
+- Expectancy
+- position win rate
+- execution-leg win rate
+- average win
+- average loss
+
+Risk / execution:
+
+- positions
+- execution legs
+- exposure
+- turnover
+- slippage costs
+- transaction costs
+- average holding period
+- median holding period
+
+Trade quality:
+
+- average MFE
+- average MAE
+- average profit capture
+- average profit giveback
+
+Intraday:
+
+- same-entry-bar final exits
+- same-entry-bar loss rate
+- first-bar survivors
+- survivor win rate
+- average first-bar survivor return
+- trail exits in entry bar
+- confirmation pass rate
+- confirmation rejection count
+- missing opening bar skips
+- missing execution bar skips
+- cooldown blocked entries
+
+Runner:
+
+- partial target count
+- runner final return
+- runner MFE
+- runner giveback
+- post-exit 1/3/5/10d
+
+Profit Lock:
+
+- count reaching >=1R MFE
+- count reaching >=2R MFE
+- count activating break-even
+- count activating +1R lock
+- losses after >=1R MFE
+- losses after >=2R MFE
+- average giveback after profit-lock activation
+
+---
+
+# 21. MONTHLY / SUBPERIOD ANALYSIS
+
+Nicht nur Gesamtperiode reporten.
+
+Erzeuge mindestens Monatsblöcke:
+
+- May 2026
+- June 2026
+- July 2026
+- August 2026 partial
+
+Pro Strategy:
+
+- positions
+- return contribution
+- win rate
+- PF, falls sinnvoll
+- average position return
+
+Ziel:
+
+Erkennen, ob ein Ergebnis ausschließlich durch einen einzelnen Monat entsteht.
+
+Keine Parameter anhand Monatsperformance ändern.
+
+---
+
+# 22. SYMBOL CONCENTRATION
+
+Für jeden Run:
+
+pro Symbol:
+
+- positions
+- total net PnL contribution
+- sum position returns
+- wins
+- losses
+- same-bar stopouts
+- partial exits
+
+Zusätzlich:
+
+- best contributing symbol
+- worst contributing symbol
+- Anteil des Gesamt-PnL Top-1 Symbol
+- Anteil Top-3 Symbole
+
+Keine Symbol-Blacklist ableiten.
+
+Insbesondere:
+
+kein Hardcoding gegen EXE, PTC oder andere Einzeltitel.
+
+---
+
+# 23. COST STRESS
+
+Alle Controls und D1–D5 auf der AKTUELLEN eingefrorenen Datenbasis testen.
+
+Keine Wiederverwendung alter Cost-Stress-Ergebnisse.
+
+Szenarien:
+
+BASELINE
+
+5 bps Slippage
+0 bps Commission
+
+2X SLIPPAGE
+
+10 bps Slippage
+0 Commission
+
+3X SLIPPAGE
+
+15 bps Slippage
+0 Commission
+
+COMMISSION SENSITIVITY
+
+5 bps Slippage
+5 bps Commission
+
+Keine Strategieparameter ändern.
+
+Report:
+
+- return
+- DD
+- PF
+- expectancy
+- turnover
+- total costs
+
+je Kostenfall.
+
+---
+
+# 24. HYPOTHESIS EVALUATION
+
+Am Ende KEINE automatische "best strategy" Auswahl.
+
+Stattdessen jede Hypothese separat beurteilen.
+
+## H1 — Profit Lock
+
+D1 vs C/configured.
+
+Frage:
+
+Reduziert R-based Profit Lock extreme Profit Givebacks?
+
+Status:
+
+SUPPORTED
+PARTIALLY SUPPORTED
+NOT SUPPORTED
+INCONCLUSIVE
+
+## H2 — Runner
+
+D2 vs D1.
+
+Frage:
+
+Verbessert 33%@12% + Runner die Trend Capture gegenüber Full Exit?
+
+## H3 — Trail Guard
+
+D3 vs C/intraday-dynamic.
+
+Frage:
+
+Reduziert das Nicht-Aktivieren des ATR Trails im Entry-Bar die Same-Bar-Failures und verbessert
+Expectancy?
+
+## H4 — Confirmed Entry
+
+D4 vs D3.
+
+Frage:
+
+Verbessert `09:30 bar close > open` mit Entry 09:45 die Entry Quality, Same-Bar-Failure-Rate und
+Kosten-/Turnover-Profil?
+
+## H5 — Hybrid
+
+D5 vs:
+
+- C/configured
+- D2
+- D4
+
+Frage:
+
+Kombiniert Opening Confirmation mit Swing Risk Management die Vorteile beider Systeme?
+
+## H6 — Selection Robustness
+
+Vergleiche:
+
+D1/C vs D1/B
+
+und:
+
+D5/C vs D5/B
+
+Frage:
+
+Sind die Mechanismen selection-robust oder nur C-spezifisch?
+
+---
+
+# 25. KEINE SCORE-OPTIMIERUNG
+
+Auch wenn neue Ergebnisse zeigen:
+
+- B besser als C
+- C besser als B
+- A plötzlich besser
+- ein bestimmter Timing Score scheint optimal
+
+KEINE Änderung an:
+
+- score weights
+- thresholds
+- percentile curves
+- entry score minimums
+
+In diesem Task.
+
+Score Research ist ein separater zukünftiger Research Track.
+
+---
+
+# 26. KEIN RESULT-BASED PARAMETER PICKING
+
+Der Abschlussbericht darf NICHT schreiben:
+
+"33% war besser, wir sollten deshalb 40% testen."
+
+oder:
+
+"1R war gut, jetzt testen wir 0.8R."
+
+oder:
+
+"Green first bar funktioniert, zusätzlich sollte VWAP > X ausprobiert werden."
+
+Zulässig:
+
+"H4 is supported on this sample."
+
+Nicht zulässig:
+
+"Darum optimieren wir den Threshold."
+
+---
+
+# 27. POST-EXIT ANALYSIS
+
+Für alle D-Positionen dieselbe bestehende Post-Exit-Analyse erzeugen:
+
+- 1d
+- 3d
+- 5d
+- 10d
+
+mit:
+
+- return
+- MFE
+- MAE
+
+Besonders ausweisen:
+
+- D1 Profit-Lock exits
+- D2 runner exits
+- D4 rejected confirmations, soweit ein diagnostic counterfactual report technisch sauber
+  möglich ist
+
+WICHTIG:
+
+Counterfactual rejected candidates dürfen NICHT in Trading State oder Portfolio PnL einfließen.
+
+Nur Post-Hoc-Diagnose.
+
+---
+
+# 28. REJECTED-CONFIRMATION DIAGNOSTIC
+
+Für D4/D5 optional, aber erwünscht:
+
+Speichere für Kandidaten, die ausschließlich wegen:
+
+first_bar.close <= first_bar.open
+
+abgelehnt wurden:
+
+- symbol
+- daily score
+- first bar O/H/L/C
+- hypothetical 09:45 reference
+- subsequent 1d / 3d / 5d return
+- subsequent intraday MFE / MAE, soweit ohne Portfolio-State berechenbar
+
+Dies ist RESEARCH ONLY.
+
+Keine hypothetischen Trades im Portfolio erzeugen.
+
+Ziel:
+
+Später prüfen können, ob Confirmation tatsächlich gute von schlechten Setups trennt.
+
+---
+
+# 29. EXECUTION CORRECTNESS
+
+Für sämtliche neuen Regeln:
+
+- keine Lookahead-Nutzung
+- keine Zukunftsbars bei Entry
+- Daily Fact PIT bleibt `filed <= as_of`
+- Daily Score entsteht am abgeschlossenen Screen
+- Confirmation nutzt ausschließlich abgeschlossenen 09:30 Bar
+- 09:45 Entry nutzt ausschließlich 09:45 Open
+- neue Stops aus einem Bar gelten erst im Folgebar
+- bestehende Stop-vor-Profit-Konservativität bleibt erhalten
+- Partial Targets in korrekter Preisreihenfolge
+- höchster aktive Long Stop gewinnt
+- keine Daily Fallbacks für Intraday Execution
+
+---
+
+# 30. TESTS
+
+Erweitere Tests ohne bestehende Tests zu löschen oder abzuschwächen.
+
+Neben den oben genannten Behaviour Tests mindestens Regression für:
+
+- old A configured unchanged
+- old B configured unchanged
+- old C configured unchanged
+- old intraday-dynamic unchanged
+- D presets are opt-in only
+- --include all unchanged
+- --include research-d1-d5 includes correct labels
+- deterministic output order
+- no report overwrite
+- no network invocation when local-only
+- no database business-data mutation
+- position/leg aggregation after D2 partial
+- cost allocation after D2 partial
+- D5 candidate ranking deterministic
+- DST/session handling
+- early close handling
+- missing 09:30 bar
+- missing 09:45 bar
+- exact session boundary
+
+---
+
+# 31. REGRESSION AFTER IMPLEMENTATION
+
+Am Ende:
+
+python -m pytest -p no:cacheprovider --basetemp=.tmp_pytest_d1_d5
+
+ruff check .
+
+git diff --check
+
+Alle Tests müssen bestehen.
+
+Keine vorhandene Assertion abschwächen.
+
+---
+
+# 32. EXECUTE RESEARCH RUN
+
+Nach grüner Regression:
+
+Führe local-only aus:
+
+python -m trading_system.cli compare-strategies `
+  --start 2026-05-01 `
+  --end 2026-08-12 `
+  --include research-d1-d5 `
+  --no-intraday-prefetch `
+  --output-stem d1_d5_research_2026-05-01_2026-08-12
+
+Kein Netzwerk.
+
+Kein Sync.
+
+Falls notwendige Daten fehlen:
+
+Run nicht automatisch reparieren.
+
+Explizit reporten.
+
+---
+
+# 33. STRICT COVERAGE SENSITIVITY
+
+Führe danach die definierte Strict-Coverage-Sensitivity für Intraday D3–D5 aus.
+
+Falls dafür ein CLI-Flag benötigt wird:
+
+füge einen expliziten Research-only Flag hinzu, z.B.:
+
+--strict-intraday-coverage
+
+Die normale Strategy Semantik darf sich dadurch nicht ändern.
+
+---
+
+# 34. COST STRESS AUSFÜHREN
+
+Führe anschließend die vier definierten Cost Cases aus.
+
+Reuse shared PIT screens / local caches innerhalb desselben Prozesses, wenn architektonisch sauber.
+
+Keine Netzwerkzugriffe.
+
+---
+
+# 35. ABSCHLUSSBERICHT
+
+Erzeuge:
+
+docs/d1-d5-strategy-research.md
+
+Struktur:
+
+## Executive Summary
+
+Keine Live-Trading-Empfehlung.
+
+## Environment / Frozen Dataset
+
+Branch, Commit, DB Counts, Zeiträume.
+
+## Baseline Controls
+
+A/B/C/intraday-dynamic.
+
+## D1
+
+Mechanik, Ergebnisse, Giveback.
+
+## D2
+
+Partial/Runner Ergebnisse.
+
+## D3
+
+Trail Guard Ergebnisse.
+
+## D4
+
+Confirmation + cooldown.
+
+## D5
+
+Hybrid.
+
+## B Mirrors
+
+D1 B / D5 B.
+
+## Cost Stress
+
+## Strict Coverage Sensitivity
+
+## Monthly Stability
+
+## Symbol Concentration
+
+## Post-Exit
+
+## Hypothesis Evaluation
+
+H1–H6:
+
+SUPPORTED
+PARTIALLY SUPPORTED
+NOT SUPPORTED
+INCONCLUSIVE
+
+mit Begründung.
+
+## Remaining Risks
+
+Mindestens:
+
+- survivorship bias
+- short sample
+- limited number of trades
+- Daily OHLC ambiguity
+- incomplete fundamental metric coverage
+- residual Intraday partial-session gaps
+- selection instability after data refresh
+- multiple-research-variant selection bias
+- transaction-cost-model uncertainty
+
+## Next Decision
+
+Keine automatische Strategy Promotion.
+
+Stattdessen exakt eine der folgenden Aussagen:
+
+READY FOR EXTENDED / OUT-OF-SAMPLE VALIDATION
+
+oder
+
+NOT READY FOR EXTENDED / OUT-OF-SAMPLE VALIDATION
+
+Falls READY:
+
+noch KEIN Live Trading.
+
+Falls NOT READY:
+
+konkrete Hypothese nennen, die nicht ausreichend gestützt wurde.
+
+---
+
+# 36. TERMINAL FINAL OUTPUT
+
+Codex soll am Ende kompakt ausgeben:
+
+D1-D5 research implementation complete.
+
+Repository
+- Branch:
+- Commit:
+- Files changed:
+
+Regression
+- Pytest:
+- Ruff:
+- git diff --check:
+
+Frozen data
+- Facts:
+- Daily bars:
+- 15m bars:
+- Business-data mutation:
+
+Controls
+- A/configured:
+- B/configured:
+- C/configured:
+- C/intraday-dynamic:
+
+Research
+- D1/C:
+- D2/C:
+- D3/C:
+- D4/C:
+- D5/C:
+- D1/B mirror:
+- D5/B mirror:
+
+Key diagnostics
+- baseline same-bar exits:
+- D3 same-bar exits:
+- D4 confirmation pass rate:
+- D4 same-bar exits:
+- D5 entries:
+- D1 >=1R locks:
+- D1 >=2R locks:
+- D2 runner positions:
+
+Cost stress
+- D1:
+- D2:
+- D3:
+- D4:
+- D5:
+
+Hypotheses
+- H1 Profit Lock:
+- H2 Runner:
+- H3 Trail Guard:
+- H4 Confirmation:
+- H5 Hybrid:
+- H6 Selection Robustness:
+
+Decision:
+READY FOR EXTENDED / OUT-OF-SAMPLE VALIDATION
+
+or
+
+NOT READY FOR EXTENDED / OUT-OF-SAMPLE VALIDATION
+
+Artifacts:
+- ...
+
+---
+
+# 37. SUCCESS CRITERIA
+
+Der Task ist erfolgreich, wenn:
+
+1. Bestehende Strategies unverändert bleiben.
+2. D1–D5 eindeutig getrennt implementiert sind.
+3. Keine Parameteroptimierung stattgefunden hat.
+4. Kein Netzwerk-/Sync-Zugriff stattgefunden hat.
+5. D1 Profit-Lock intrabar korrekt ist.
+6. D3 Trail nicht mehr im Entry-Bar aktiv werden kann.
+7. D4 strikt den kanonischen 09:30-Bar verwendet.
+8. D4 Entry exakt am 09:45-Bar-Open stattfindet.
+9. D5 unter allen bestätigten C-Candidates anhand des ursprünglichen Daily-C-Scores wählt.
+10. B Mirrors wirtschaftlich identische Management-Regeln verwenden.
+11. Strict-Coverage-Sensitivity separat reportet wird.
+12. Cost Stress auf der aktuellen eingefrorenen Datenbasis neu gerechnet wird.
+13. Monats- und Symbolkonzentration ausgewiesen werden.
+14. Alle Hypothesen H1–H6 einzeln bewertet werden.
+15. Kein D-Run aufgrund Total Return automatisch zum Sieger erklärt wird.
+16. Abschlussbericht klar zwischen Strategieeffekt, Execution-Effekt und Datenunsicherheit trennt.
+
+---
+
+# ZENTRALE FORSCHUNGSTHESE
+
+Dieser Task soll NICHT herausfinden:
+
+"Welche Kombination erzielt im 3-Monats-Backtest den höchsten Return?"
+
+Er soll beantworten:
+
+1. Schützt ein R-basierter Profit-Lock bereits entstandene Gewinne besser?
+2. Ist ein Partial Runner dem vollständigen 12%-Exit überlegen?
+3. Verursacht der sofort aktive Intraday ATR Trail einen wesentlichen Teil der Opening Losses?
+4. Liefert eine einfache grüne erste 15m-Kerze robuste Entry-Confirmation?
+5. Kann Daily C Selection mit 15m Confirmation und Swing Management sinnvoll kombiniert werden?
+6. Bleiben die Mechanismen unter B Selection zumindest qualitativ erhalten?
+
+Erst danach darf über Extended / Out-of-Sample Validation entschieden werden.

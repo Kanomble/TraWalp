@@ -36,6 +36,9 @@ class PositionManagementPreset(StrEnum):
     F2_INTRADAY_OPENING_SURVIVOR_GATE = "F2-intraday-opening-survivor-gate"
     F3_INTRADAY_THESIS_RECOVERY = "F3-intraday-thesis-recovery"
     F4_INTRADAY_FIRST_HOUR_PULLBACK = "F4-intraday-first-hour-pullback"
+    F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT = (
+        "F5-intraday-first-hour-pullback-f0-management"
+    )
 
 
 class StrategyComparisonKind(StrEnum):
@@ -46,6 +49,7 @@ class StrategyComparisonKind(StrEnum):
     EXTENDED_VALIDATION = "extended_validation"
     RESEARCH_INTRADAY_ISOLATION = "research_intraday_isolation"
     RESEARCH_INTRADAY_NEXT = "research_intraday_next"
+    RESEARCH_INTRADAY_HYBRID = "research_intraday_hybrid"
 
 
 class StopLossClassification(StrEnum):
@@ -207,6 +211,10 @@ class BacktestTrade(BaseModel):
     intended_exit_timestamp: datetime | None = None
     actual_exit_timestamp: datetime | None = None
     swing_high_execution_bar_missing: bool = False
+    swing_high_candidate_relative_to_entry: float | None = None
+    swing_high_candidate_to_exit_giveback: float | None = None
+    swing_high_candidate_above_entry: bool | None = None
+    swing_high_actual_exit_below_entry: bool | None = None
 
 
 class BacktestPosition(BaseModel):
@@ -372,6 +380,12 @@ class BacktestPosition(BaseModel):
     intended_exit_timestamp: datetime | None = None
     actual_exit_timestamp: datetime | None = None
     swing_high_execution_bar_missing: bool = False
+    swing_high_candidate_relative_to_entry: float | None = None
+    swing_high_candidate_to_exit_giveback: float | None = None
+    swing_high_candidate_above_entry: bool | None = None
+    swing_high_actual_exit_below_entry: bool | None = None
+    intraday_forward_start_semantic: str | None = None
+    intraday_forward_diagnostics: dict[str, dict] = Field(default_factory=dict)
 
 
 class ExecutionMetrics(BaseModel):
@@ -425,10 +439,16 @@ class ExitReasonDiagnostics(BaseModel):
 
     exit_reason: str
     positions: int = Field(ge=0)
+    winners: int = Field(default=0, ge=0)
+    losers: int = Field(default=0, ge=0)
     average_mfe: float | None = None
+    average_mae: float | None = None
     average_return: float | None = None
+    median_return: float | None = None
     average_capture: float | None = None
     average_giveback: float | None = None
+    average_holding_minutes: float | None = None
+    intraday_counterfactual_hold: dict[str, dict] = Field(default_factory=dict)
 
 
 class StopLossDiagnostics(BaseModel):

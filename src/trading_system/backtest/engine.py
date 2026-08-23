@@ -29,6 +29,7 @@ from trading_system.backtest.first_hour_pullback import (
     SwingHighDetector,
     plan_first_hour_pullback,
 )
+from trading_system.backtest.intraday_diagnostics import add_intraday_forward_diagnostics
 from trading_system.backtest.metrics import calculate_metrics, maximum_drawdown
 from trading_system.backtest.position_manager import (
     ExitReason,
@@ -112,9 +113,15 @@ INTRADAY_ISOLATION_PRESETS = {
 THESIS_RECOVERY_PRESETS = {
     PositionManagementPreset.F3_INTRADAY_THESIS_RECOVERY,
 }
-FIRST_HOUR_PULLBACK_PRESETS = {
+FIRST_HOUR_PULLBACK_ENTRY_PRESETS = {
+    PositionManagementPreset.F4_INTRADAY_FIRST_HOUR_PULLBACK,
+    PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT,
+}
+F4_SWING_MANAGEMENT_PRESETS = {
     PositionManagementPreset.F4_INTRADAY_FIRST_HOUR_PULLBACK,
 }
+# Backward-compatible name for callers that mean the shared F4/F5 entry architecture.
+FIRST_HOUR_PULLBACK_PRESETS = FIRST_HOUR_PULLBACK_ENTRY_PRESETS
 RESEARCH_CANDIDATE_EVENT_PRESETS = {
     *INTRADAY_ISOLATION_PRESETS,
     *THESIS_RECOVERY_PRESETS,
@@ -124,7 +131,8 @@ RESEARCH_CANDIDATE_EVENT_PRESETS = {
 RESEARCH_PRESETS = {
     metadata.preset
     for metadata in STRATEGY_RESEARCH_REGISTRY
-    if metadata.family in {"d1-d5-archive", "intraday-isolation", "intraday-next"}
+    if metadata.family
+    in {"d1-d5-archive", "intraday-isolation", "intraday-next", "intraday-hybrid"}
     and not metadata.control
 }
 
@@ -242,6 +250,7 @@ class IntradayPrefetchRequirement:
     variants: tuple[StrategyVariant, ...]
     symbols: tuple[str, ...]
     first_execution_sessions: tuple[tuple[str, date], ...]
+    candidate_execution_sessions: tuple[tuple[str, date], ...]
     comparison_sessions: tuple[date, ...]
     requested_start: datetime
     requested_end: datetime
@@ -376,7 +385,8 @@ class BacktestEngine:
         confirmed_entry = preset in CONFIRMED_ENTRY_PRESETS
         hybrid_entry = preset in HYBRID_ENTRY_PRESETS
         opening_survivor_gate = preset in OPENING_SURVIVOR_GATE_PRESETS
-        first_hour_pullback = preset in FIRST_HOUR_PULLBACK_PRESETS
+        first_hour_pullback_entry = preset in FIRST_HOUR_PULLBACK_ENTRY_PRESETS
+        f4_swing_management = preset in F4_SWING_MANAGEMENT_PRESETS
         native_intraday_loop = intraday_monitoring or confirmed_entry
         execution_timeframe = (
             BarTimeframe.MINUTES_15 if confirmed_entry else position_timeframe
@@ -427,7 +437,7 @@ class BacktestEngine:
         ) -> bool:
             nonlocal cash
             position = positions[symbol]
-            if first_hour_pullback:
+            if f4_swing_management:
                 position.actual_exit_timestamp = bar.timestamp
             cash, trade, closed = self._execute_decision(
                 position,
@@ -481,7 +491,7 @@ class BacktestEngine:
                 for intraday_bar in intraday_bars:
                     if intraday_bar.symbol in strict_excluded_symbols:
                         continue
-                    if first_hour_pullback and not (
+                    if first_hour_pullback_entry and not (
                         regular_open <= intraday_bar.timestamp < regular_close
                     ):
                         continue
@@ -493,7 +503,7 @@ class BacktestEngine:
                 if (
                     missing
                     and not confirmed_entry
-                    and not first_hour_pullback
+                    and not first_hour_pullback_entry
                     and not self.strict_coverage_sensitivity
                     and not self.allow_missing_intraday_data
                 ):
@@ -566,7 +576,7 @@ class BacktestEngine:
                         session,
                         skipped,
                     )
-                elif first_hour_pullback:
+                elif first_hour_pullback_entry:
                     pending_by_timestamp = self._first_hour_pullback_pending_entries(
                         pending,
                         intraday_by_symbol,
@@ -715,7 +725,7 @@ class BacktestEngine:
                             )
                             continue
                         entry_atr = None
-                        if intraday_monitoring and not first_hour_pullback:
+                        if intraday_monitoring and not f4_swing_management:
                             history = intraday_histories[symbol]
                             if len(history) < self.config.intraday.warmup_bars:
                                 if self.allow_missing_intraday_data:
@@ -778,7 +788,7 @@ class BacktestEngine:
                             continue
                         positions[position.symbol] = position
                         execution_legs[position.position_id] = []
-                        if first_hour_pullback:
+                        if f4_swing_management:
                             if order.f4_confirmation_bar is None:
                                 raise AssertionError(
                                     "F4 executable entry requires its completed confirmation bar"
@@ -819,7 +829,7 @@ class BacktestEngine:
                             position = positions[symbol]
                             if hybrid_entry and position.entry_date != session:
                                 continue
-                            if first_hour_pullback:
+                            if f4_swing_management:
                                 detector = f4_exit_detectors[position.position_id]
                                 if detector.exit_due(bar.timestamp):
                                     if (
@@ -898,7 +908,7 @@ class BacktestEngine:
                                 self.position_manager.update_after_bar(
                                     position, bar, next_atr=next_atr
                                 )
-                                if first_hour_pullback:
+                                if f4_swing_management:
                                     detector = f4_exit_detectors[position.position_id]
                                     detector.observe_completed_bar(bar)
                                     self._apply_f4_exit_diagnostics(position, detector)
@@ -912,7 +922,7 @@ class BacktestEngine:
                         session_peak_market_value,
                         sum(item.quantity * item.last_price for item in positions.values()),
                     )
-                if first_hour_pullback:
+                if f4_swing_management:
                     for symbol in sorted(list(positions)):
                         position = positions[symbol]
                         if position.entry_date != session:
@@ -1177,8 +1187,15 @@ class BacktestEngine:
         if not annualized_reliable:
             warnings.append("annualized metrics are unstable for fewer than 63 trading sessions")
         diagnosed_positions = tuple(
-            add_post_exit_diagnostics(position, self.database, sessions[-1])
+            (
+                add_intraday_forward_diagnostics(daily_diagnosed, self.database)
+                if intraday_monitoring
+                else daily_diagnosed
+            )
             for position in completed_positions
+            for daily_diagnosed in (
+                add_post_exit_diagnostics(position, self.database, sessions[-1]),
+            )
         )
         return BacktestResult(
             requested_start=start,
@@ -1440,9 +1457,15 @@ class BacktestEngine:
         skipped: Counter[str],
     ) -> dict[datetime, list[_PendingEntry]]:
         scheduled: dict[datetime, list[_PendingEntry]] = {}
+        counter_prefix = (
+            "f5"
+            if self.current_preset
+            is PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT
+            else "f4"
+        )
         for order in pending:
             symbol = order.record.symbol
-            self._research_counters["f4_c_candidates"] += 1
+            self._research_counters[f"{counter_prefix}_c_candidates"] += 1
             order.intraday_session_status = self.intraday_session_statuses.get(
                 (symbol, session), "NATIVE_SESSION"
             )
@@ -1454,14 +1477,14 @@ class BacktestEngine:
             order.research_metadata.update(plan.diagnostics)
             order.f4_confirmation_bar = plan.confirmation_bar
             if plan.diagnostics.get("first_hour_complete") is True:
-                self._research_counters["f4_complete_first_hours"] += 1
+                self._research_counters[f"{counter_prefix}_complete_first_hours"] += 1
             if plan.diagnostics.get("opening_above_ema") is True:
-                self._research_counters["f4_opening_ema_passes"] += 1
-            self._research_counters["f4_pullback_candidates"] += int(
+                self._research_counters[f"{counter_prefix}_opening_ema_passes"] += 1
+            self._research_counters[f"{counter_prefix}_pullback_candidates"] += int(
                 plan.diagnostics.get("pullback_candidate_count", 0)
             )
             if plan.diagnostics.get("pullback_confirmed") is True:
-                self._research_counters["f4_confirmed_pullbacks"] += 1
+                self._research_counters[f"{counter_prefix}_confirmed_pullbacks"] += 1
             self._update_candidate_event(
                 order,
                 **plan.diagnostics,
@@ -1475,7 +1498,7 @@ class BacktestEngine:
                 entry_bar_present=plan.executable,
             )
             if not plan.executable:
-                reason = plan.failure_reason or "f4_entry_rejected"
+                reason = plan.failure_reason or f"{counter_prefix}_entry_rejected"
                 skipped[reason] += 1
                 self._observe_execution(
                     order, session, executed=False, reason=reason
@@ -1991,7 +2014,7 @@ class BacktestEngine:
         fill = _buy_fill(reference, self.config.backtest.slippage_bps)
         fixed_stop_percent = self.position_management.stop_loss.percent
         f4_stop_price = None
-        if self.current_preset in FIRST_HOUR_PULLBACK_PRESETS:
+        if self.current_preset in F4_SWING_MANAGEMENT_PRESETS:
             f4_stop_price = reference * (1 - F4_STOP_DISTANCE_PCT)
             stop_distance = fill - f4_stop_price
         elif self.position_management.stop_loss.enabled and fixed_stop_percent is not None:
@@ -2216,11 +2239,23 @@ class BacktestEngine:
             pullback_confirmed=bool(
                 order.research_metadata.get("pullback_confirmed", False)
             ),
-            initial_stop_price=f4_stop_price,
+            initial_stop_price=(
+                f4_stop_price
+                if f4_stop_price is not None
+                else (
+                    fill - stop_distance
+                    if self.current_preset in FIRST_HOUR_PULLBACK_ENTRY_PRESETS
+                    else None
+                )
+            ),
             stop_distance_pct=(
                 F4_STOP_DISTANCE_PCT
-                if self.current_preset in FIRST_HOUR_PULLBACK_PRESETS
-                else None
+                if self.current_preset in F4_SWING_MANAGEMENT_PRESETS
+                else (
+                    fixed_stop_percent
+                    if self.current_preset in FIRST_HOUR_PULLBACK_ENTRY_PRESETS
+                    else None
+                )
             ),
         )
         self.position_manager.activate_at_open(position, fill)
@@ -2546,11 +2581,17 @@ class BacktestEngine:
             if event.get("previous_trade_failed") is True
             and event.get("thesis_recovered") is True
         ]
-        f4_positions = [
-            position
-            for position in positions
-            if position.stop_distance_pct == F4_STOP_DISTANCE_PCT
-        ]
+        f4_positions = (
+            list(positions)
+            if self.current_preset is PositionManagementPreset.F4_INTRADAY_FIRST_HOUR_PULLBACK
+            else []
+        )
+        f5_positions = (
+            list(positions)
+            if self.current_preset
+            is PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT
+            else []
+        )
         return {
             **dict(sorted(self._research_counters.items())),
             "confirmation_events": self._confirmation_events,
@@ -2671,6 +2712,24 @@ class BacktestEngine:
             "f4_average_entry_minutes_after_midnight_utc": average(
                 position.entry_timestamp.hour * 60 + position.entry_timestamp.minute
                 for position in f4_positions
+                if position.entry_timestamp is not None
+            ),
+            "f5_executed_trades": len(f5_positions),
+            "f5_stop_exits": sum(
+                position.exit_reason == ExitReason.STOP_LOSS.value
+                for position in f5_positions
+            ),
+            "f5_atr_trailing_exits": sum(
+                position.exit_reason == ExitReason.ATR_TRAILING_STOP.value
+                for position in f5_positions
+            ),
+            "f5_signal_decay_exits": sum(
+                position.exit_reason == ExitReason.SIGNAL_DECAY.value
+                for position in f5_positions
+            ),
+            "f5_average_entry_minutes_after_midnight_utc": average(
+                position.entry_timestamp.hour * 60 + position.entry_timestamp.minute
+                for position in f5_positions
                 if position.entry_timestamp is not None
             ),
         }
@@ -2846,6 +2905,9 @@ def determine_intraday_comparison_requirements(
         for timeframes in timeframes_by_variant.values()
         for timeframe in timeframes
     }
+    candidate_execution: dict[BarTimeframe, set[tuple[str, date]]] = {
+        timeframe: set() for timeframe in earliest_execution
+    }
     for index, signal_session in enumerate(sessions[:-1]):
         report = screen_source.screen(signal_session)
         execution_session = sessions[index + 1]
@@ -2859,6 +2921,7 @@ def determine_intraday_comparison_requirements(
                 candidates = earliest_execution[timeframe]
                 for symbol in eligible_symbols:
                     candidates.setdefault(symbol, execution_session)
+                    candidate_execution[timeframe].add((symbol, execution_session))
 
     requirements: list[IntradayPrefetchRequirement] = []
     for timeframe in sorted(earliest_execution, key=lambda item: item.value):
@@ -2879,6 +2942,9 @@ def determine_intraday_comparison_requirements(
                 ),
                 symbols=tuple(sorted(candidates)),
                 first_execution_sessions=tuple(sorted(candidates.items())),
+                candidate_execution_sessions=tuple(
+                    sorted(candidate_execution[timeframe])
+                ),
                 comparison_sessions=sessions,
                 requested_start=intraday_warmup_start(
                     first_execution,

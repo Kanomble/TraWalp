@@ -74,6 +74,26 @@ positive/negative Forward-Rate, Anteil mit mehr als drei Prozent weiterem Gewinn
 Separate `observations_1d` bis `observations_10d` machen bei Exits nahe dem Backtest-Ende den
 jeweiligen Stichprobenumfang explizit.
 
+Intraday-Positionen erhalten zusätzlich native, strikt kanonische 15-Minuten-Diagnosen für den
+nächsten Bar, zwei Bars, vier Bars und den Rest der regulären Session. Fehlende Zeitstempel werden
+nicht mit einem späteren Provider-Bar überbrückt; der Horizont bleibt dann mit Gap-Grund ungelöst.
+Zwei Bezugspunkte werden getrennt gespeichert:
+
+- `post_exit_*` misst die Bewegung relativ zum unveränderten Exit-Referenzpreis.
+- `counterfactual_hold_*` misst dieselben späteren Close-/High-/Low-Bewegungen relativ zum
+  ursprünglichen Entry-Referenzpreis.
+
+Die Exit-Bar wird konservativ vollständig ausgeschlossen. Damit kann ein unbekanntes High/Low nach
+einem Intrabar-Stop nicht in die Zukunftsdiagnose gelangen. Diese Werte werden erst nach Abschluss
+des simulierten Positionspfads berechnet und verändern niemals Entry, Exit, Stops, Ranking, Sizing,
+Portfoliozustand oder P&L. Sie sind keine hypothetischen Trades.
+
+Die Exit-Grund-Aggregation enthält neben Return, MFE, MAE, Giveback und Haltedauer auch Stichproben,
+Medianwerte sowie Recovery- und positive-MFE-Raten der nativen Counterfactual-Hold-Horizonte. Bei
+archivierten F4-Swing-High-Exits bleiben zusätzlich Candidate High, dessen Abstand zum Entry,
+Bestätigung, intended/actual Exit und Candidate-to-Exit-Giveback auditierbar; F4s Trading-Semantik
+wird dadurch nicht verändert.
+
 ## Re-Entry- und Trigger-Diagnostik
 
 Eine wieder eröffnete Position verweist auf den vorherigen vollständigen Positionsexit und speichert

@@ -23,6 +23,10 @@ from trading_system.backtest.engine import (
     prefetch_comparison_intraday_data,
     prepare_strategy_comparison,
 )
+from trading_system.backtest.intraday_hybrid import (
+    annotate_intraday_hybrid_coverage,
+    export_intraday_hybrid_comparison,
+)
 from trading_system.backtest.intraday_isolation import (
     annotate_intraday_isolation_coverage,
     export_intraday_isolation_comparison,
@@ -30,6 +34,10 @@ from trading_system.backtest.intraday_isolation import (
 from trading_system.backtest.intraday_next import (
     annotate_intraday_next_coverage,
     export_intraday_next_comparison,
+)
+from trading_system.backtest.preflight import (
+    build_compare_preflight,
+    export_compare_preflight,
 )
 from trading_system.backtest.report import (
     export_backtest,
@@ -94,6 +102,18 @@ def _positive_int(value: str) -> int:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("value must be a positive integer")
     return parsed
+
+
+def _research_cost_cases(enabled: bool) -> tuple[tuple[str, int, int], ...]:
+    """Return the frozen stress suite only after an explicit CLI opt-in."""
+
+    if not enabled:
+        return ()
+    return (
+        ("2X", 10, 0),
+        ("3X", 15, 0),
+        ("COMMISSION", 5, 5),
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -226,6 +246,7 @@ def _parser() -> argparse.ArgumentParser:
             "research-d1-d5",
             "research-intraday-isolation",
             "research-intraday-next",
+            "research-intraday-hybrid",
         ),
         default="all",
         help="Select all strategies or one comparison family (default: all)",
@@ -243,6 +264,36 @@ def _parser() -> argparse.ArgumentParser:
         "--strict-intraday-coverage",
         action="store_true",
         help="Research-only sensitivity: admit only COMPLETE native intraday symbol-sessions",
+    )
+    comparison.add_argument(
+        "--cost-stress",
+        action="store_true",
+        help=(
+            "Opt in to full economic and path-preserving research cost-stress passes; "
+            "the default runs baseline costs only"
+        ),
+    )
+    preflight = commands.add_parser(
+        "compare-preflight",
+        help="Check a long local comparison without running a backtest or accessing the network",
+    )
+    preflight.add_argument("--start", type=date.fromisoformat, required=True)
+    preflight.add_argument("--end", type=date.fromisoformat, required=True)
+    preflight.add_argument(
+        "--include",
+        choices=(
+            "research-d1-d5",
+            "research-intraday-isolation",
+            "research-intraday-next",
+            "research-intraday-hybrid",
+        ),
+        required=True,
+        help="Explicit registered research family to qualify",
+    )
+    preflight.add_argument(
+        "--output-stem",
+        required=True,
+        help="New non-existing stem for preflight and sync-compatible candidate JSON",
     )
     validation = commands.add_parser(
         "validate-extended",
@@ -350,6 +401,44 @@ def main(argv: list[str] | None = None) -> int:
                 print("\nVACUUM completed.")
         return 0
     database.initialize()
+    if args.command == "compare-preflight":
+        try:
+            comparison_kind = StrategyComparisonKind(args.include.replace("-", "_"))
+            report, candidate_report = build_compare_preflight(
+                database,
+                settings.strategy,
+                args.start,
+                args.end,
+                comparison_kind=comparison_kind,
+            )
+            paths = export_compare_preflight(
+                report,
+                candidate_report,
+                settings.strategy.storage.reports_path,
+                stem=args.output_stem,
+            )
+        except (FileExistsError, ValueError) as exc:
+            print(f"Compare preflight refused: {exc}", file=sys.stderr)
+            return 1
+        exported = json.loads(paths["preflight"].read_text(encoding="utf-8"))
+        print(
+            "Local compare preflight"
+            f"\n  Family: {exported['resolved_research_family']}"
+            f"\n  Daily candidate discovery: "
+            f"{exported['daily_pit_candidate_discovery_status']}"
+            f"\n  Candidate symbols: "
+            f"{exported['intraday']['candidate_symbol_count']}"
+            f"\n  Candidate sessions: {exported['intraday']['candidate_sessions']}"
+            f"\n  Ready: {str(exported['dataset_ready_for_local_compare']).lower()}"
+        )
+        for key in (
+            "recommended_manual_sync_daily_history_command",
+            "recommended_manual_sync_intraday_command",
+        ):
+            if command := exported.get(key):
+                print(f"\nManual data command (not executed):\n{command}")
+        print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
+        return 0 if exported["dataset_ready_for_local_compare"] else 1
     if args.command in {
         "sync",
         "sync-assets",
@@ -661,6 +750,7 @@ def main(argv: list[str] | None = None) -> int:
                     in {
                         StrategyComparisonKind.RESEARCH_INTRADAY_ISOLATION,
                         StrategyComparisonKind.RESEARCH_INTRADAY_NEXT,
+                        StrategyComparisonKind.RESEARCH_INTRADAY_HYBRID,
                     }
                 ),
             )
@@ -668,6 +758,7 @@ def main(argv: list[str] | None = None) -> int:
             cost_comparisons: dict[str, object] = {}
             isolation_coverage_rows: list[dict] = []
             next_coverage_rows: list[dict] = []
+            hybrid_coverage_rows: list[dict] = []
             if (
                 comparison_kind is StrategyComparisonKind.RESEARCH_D1_D5
                 and not args.strict_intraday_coverage
@@ -692,34 +783,35 @@ def main(argv: list[str] | None = None) -> int:
                     strict_coverage_sensitivity=True,
                     intraday_session_statuses=intraday_session_statuses,
                 )
-                cost_comparisons = {"BASELINE": comparison_result}
-                for name, slippage_bps, commission_bps in (
-                    ("2X_SLIPPAGE", 10, 0),
-                    ("3X_SLIPPAGE", 15, 0),
-                    ("COMMISSION_SENSITIVITY", 5, 5),
-                ):
-                    print(f"Running cost stress: {name}...", flush=True)
-                    cost_config = settings.strategy.model_copy(
-                        update={
-                            "backtest": settings.strategy.backtest.model_copy(
-                                update={
-                                    "slippage_bps": slippage_bps,
-                                    "commission_bps": commission_bps,
-                                }
-                            )
-                        }
-                    )
-                    cost_comparisons[name] = compare_strategies(
-                        database,
-                        cost_config,
-                        args.start,
-                        args.end,
-                        comparison_kind=comparison_kind,
-                        preparation=preparation,
-                        intraday_prefetch=prefetch,
-                        data_qualification=qualification_metadata,
-                        intraday_session_statuses=intraday_session_statuses,
-                    )
+                if args.cost_stress:
+                    cost_comparisons = {"BASELINE": comparison_result}
+                    for name, slippage_bps, commission_bps in (
+                        ("2X_SLIPPAGE", 10, 0),
+                        ("3X_SLIPPAGE", 15, 0),
+                        ("COMMISSION_SENSITIVITY", 5, 5),
+                    ):
+                        print(f"Running cost stress: {name}...", flush=True)
+                        cost_config = settings.strategy.model_copy(
+                            update={
+                                "backtest": settings.strategy.backtest.model_copy(
+                                    update={
+                                        "slippage_bps": slippage_bps,
+                                        "commission_bps": commission_bps,
+                                    }
+                                )
+                            }
+                        )
+                        cost_comparisons[name] = compare_strategies(
+                            database,
+                            cost_config,
+                            args.start,
+                            args.end,
+                            comparison_kind=comparison_kind,
+                            preparation=preparation,
+                            intraday_prefetch=prefetch,
+                            data_qualification=qualification_metadata,
+                            intraday_session_statuses=intraday_session_statuses,
+                        )
             elif comparison_kind is StrategyComparisonKind.RESEARCH_INTRADAY_ISOLATION:
                 if (
                     settings.strategy.backtest.slippage_bps != 5
@@ -731,35 +823,34 @@ def main(argv: list[str] | None = None) -> int:
                 comparison_result, isolation_coverage_rows = (
                     annotate_intraday_isolation_coverage(database, comparison_result)
                 )
-                cost_comparisons = {"BASE": comparison_result}
-                for name, slippage_bps, commission_bps in (
-                    ("2X", 10, 0),
-                    ("3X", 15, 0),
-                    ("COMMISSION", 5, 5),
-                ):
-                    print(f"Running cost stress: {name}...", flush=True)
-                    cost_config = settings.strategy.model_copy(
-                        update={
-                            "backtest": settings.strategy.backtest.model_copy(
-                                update={
-                                    "slippage_bps": slippage_bps,
-                                    "commission_bps": commission_bps,
-                                }
-                            )
-                        }
-                    )
-                    cost_comparisons[name] = compare_strategies(
-                        database,
-                        cost_config,
-                        args.start,
-                        args.end,
-                        comparison_kind=comparison_kind,
-                        preparation=preparation,
-                        intraday_prefetch=prefetch,
-                        data_qualification=qualification_metadata,
-                        intraday_session_statuses=intraday_session_statuses,
-                        allow_missing_intraday_data=True,
-                    )
+                if args.cost_stress:
+                    cost_comparisons = {"BASE": comparison_result}
+                    for name, slippage_bps, commission_bps in _research_cost_cases(
+                        args.cost_stress
+                    ):
+                        print(f"Running cost stress: {name}...", flush=True)
+                        cost_config = settings.strategy.model_copy(
+                            update={
+                                "backtest": settings.strategy.backtest.model_copy(
+                                    update={
+                                        "slippage_bps": slippage_bps,
+                                        "commission_bps": commission_bps,
+                                    }
+                                )
+                            }
+                        )
+                        cost_comparisons[name] = compare_strategies(
+                            database,
+                            cost_config,
+                            args.start,
+                            args.end,
+                            comparison_kind=comparison_kind,
+                            preparation=preparation,
+                            intraday_prefetch=prefetch,
+                            data_qualification=qualification_metadata,
+                            intraday_session_statuses=intraday_session_statuses,
+                            allow_missing_intraday_data=True,
+                        )
             elif comparison_kind is StrategyComparisonKind.RESEARCH_INTRADAY_NEXT:
                 if (
                     settings.strategy.backtest.slippage_bps != 5
@@ -771,35 +862,73 @@ def main(argv: list[str] | None = None) -> int:
                 comparison_result, next_coverage_rows = annotate_intraday_next_coverage(
                     database, comparison_result
                 )
-                cost_comparisons = {"BASE": comparison_result}
-                for name, slippage_bps, commission_bps in (
-                    ("2X", 10, 0),
-                    ("3X", 15, 0),
-                    ("COMMISSION", 5, 5),
+                if args.cost_stress:
+                    cost_comparisons = {"BASE": comparison_result}
+                    for name, slippage_bps, commission_bps in _research_cost_cases(
+                        args.cost_stress
+                    ):
+                        print(f"Running cost stress: {name}...", flush=True)
+                        cost_config = settings.strategy.model_copy(
+                            update={
+                                "backtest": settings.strategy.backtest.model_copy(
+                                    update={
+                                        "slippage_bps": slippage_bps,
+                                        "commission_bps": commission_bps,
+                                    }
+                                )
+                            }
+                        )
+                        cost_comparisons[name] = compare_strategies(
+                            database,
+                            cost_config,
+                            args.start,
+                            args.end,
+                            comparison_kind=comparison_kind,
+                            preparation=preparation,
+                            intraday_prefetch=prefetch,
+                            data_qualification=qualification_metadata,
+                            intraday_session_statuses=intraday_session_statuses,
+                            allow_missing_intraday_data=True,
+                        )
+            elif comparison_kind is StrategyComparisonKind.RESEARCH_INTRADAY_HYBRID:
+                if (
+                    settings.strategy.backtest.slippage_bps != 5
+                    or settings.strategy.backtest.commission_bps != 0
                 ):
-                    print(f"Running cost stress: {name}...", flush=True)
-                    cost_config = settings.strategy.model_copy(
-                        update={
-                            "backtest": settings.strategy.backtest.model_copy(
-                                update={
-                                    "slippage_bps": slippage_bps,
-                                    "commission_bps": commission_bps,
-                                }
-                            )
-                        }
+                    raise ValueError(
+                        "research-intraday-hybrid requires the frozen 5 bps / 0 bps baseline"
                     )
-                    cost_comparisons[name] = compare_strategies(
-                        database,
-                        cost_config,
-                        args.start,
-                        args.end,
-                        comparison_kind=comparison_kind,
-                        preparation=preparation,
-                        intraday_prefetch=prefetch,
-                        data_qualification=qualification_metadata,
-                        intraday_session_statuses=intraday_session_statuses,
-                        allow_missing_intraday_data=True,
-                    )
+                comparison_result, hybrid_coverage_rows = (
+                    annotate_intraday_hybrid_coverage(database, comparison_result)
+                )
+                if args.cost_stress:
+                    cost_comparisons = {"BASE": comparison_result}
+                    for name, slippage_bps, commission_bps in _research_cost_cases(
+                        args.cost_stress
+                    ):
+                        print(f"Running cost stress: {name}...", flush=True)
+                        cost_config = settings.strategy.model_copy(
+                            update={
+                                "backtest": settings.strategy.backtest.model_copy(
+                                    update={
+                                        "slippage_bps": slippage_bps,
+                                        "commission_bps": commission_bps,
+                                    }
+                                )
+                            }
+                        )
+                        cost_comparisons[name] = compare_strategies(
+                            database,
+                            cost_config,
+                            args.start,
+                            args.end,
+                            comparison_kind=comparison_kind,
+                            preparation=preparation,
+                            intraday_prefetch=prefetch,
+                            data_qualification=qualification_metadata,
+                            intraday_session_statuses=intraday_session_statuses,
+                            allow_missing_intraday_data=True,
+                        )
         except ValueError as exc:
             print(f"Strategy comparison refused: {exc}", file=sys.stderr)
             return 1
@@ -814,6 +943,7 @@ def main(argv: list[str] | None = None) -> int:
                     cost_comparisons,
                     settings.strategy.storage.reports_path,
                     stem=research_stem,
+                    cost_stress_requested=args.cost_stress,
                 )
             elif comparison_kind is StrategyComparisonKind.RESEARCH_INTRADAY_ISOLATION:
                 isolation_stem = args.output_stem or (
@@ -825,6 +955,7 @@ def main(argv: list[str] | None = None) -> int:
                     isolation_coverage_rows,
                     settings.strategy.storage.reports_path,
                     stem=isolation_stem,
+                    cost_stress_requested=args.cost_stress,
                 )
             elif comparison_kind is StrategyComparisonKind.RESEARCH_INTRADAY_NEXT:
                 next_stem = args.output_stem or (
@@ -836,6 +967,19 @@ def main(argv: list[str] | None = None) -> int:
                     next_coverage_rows,
                     settings.strategy.storage.reports_path,
                     stem=next_stem,
+                    cost_stress_requested=args.cost_stress,
+                )
+            elif comparison_kind is StrategyComparisonKind.RESEARCH_INTRADAY_HYBRID:
+                hybrid_stem = args.output_stem or (
+                    f"intraday_hybrid_{args.start}_{args.end}"
+                )
+                paths = export_intraday_hybrid_comparison(
+                    comparison_result,
+                    cost_comparisons,
+                    hybrid_coverage_rows,
+                    settings.strategy.storage.reports_path,
+                    stem=hybrid_stem,
+                    cost_stress_requested=args.cost_stress,
                 )
             else:
                 paths = export_comparison(

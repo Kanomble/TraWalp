@@ -10,19 +10,23 @@ comparisons.
 - F0/C-intraday-dynamic — `CHAMPION_CONTROL`; frozen control with unchanged C selection and
   intraday execution/management semantics.
 
-## Pending analysis
+## Archived research
 
-- F1/C-intraday-loss-cooldown — `PENDING_EVALUATION`.
-- F2/C-intraday-opening-survivor-gate — `PENDING_EVALUATION`.
-- Their existing `research-intraday-isolation` family remains unchanged.
+- F1/C-intraday-loss-cooldown — `ARCHIVED_RESEARCH`.
+- F2/C-intraday-opening-survivor-gate — `ARCHIVED_RESEARCH`.
+- F4/C-intraday-first-hour-pullback — `ARCHIVED_RESEARCH`; its entry mechanism remains available
+  as a reproducible reference, but its fixed 0.75% stop and confirmed-swing-high/session-close
+  management were rejected as a complete strategy.
+- Their historical `research-intraday-isolation` and `research-intraday-next` family compositions
+  remain unchanged.
 
 ## Active next research
 
 - F3/C-intraday-thesis-recovery — `ACTIVE_RESEARCH`; after a negative gross market result,
   same-symbol re-entry requires a strictly higher point-in-time C score than at the failed entry.
-- F4/C-intraday-first-hour-pullback — `ACTIVE_RESEARCH`; EMA20-qualified first-hour observation,
-  confirmed pullback entry, fixed 0.75% stop, and next confirmed swing-high/session-close exit.
-- The opt-in `research-intraday-next` family contains exactly F0, F3 and F4.
+- F5/C-intraday-first-hour-pullback-f0-management — `ACTIVE_RESEARCH`; it reuses F4's causal
+  EMA20/first-hour/confirmed-pullback entry planner and then delegates all management to F0.
+- The opt-in `research-intraday-hybrid` family contains exactly F0, F3 and F5.
 
 ## Archived and compatibility strategies
 
@@ -31,6 +35,7 @@ comparisons.
   `ARCHIVED_RESEARCH`.
 - The original legacy preset and configured score controls remain `LEGACY_COMPATIBILITY`.
 
-The period 2025-05-01 through 2026-08-12 has already informed hypothesis construction. F3/F4
-results over that period are development research evidence, not out-of-sample evidence. No
-result from the active family automatically promotes a strategy.
+The period 2025-05-01 through 2026-08-12 has already informed hypothesis construction. F3/F5
+results over that period are development research evidence, not out-of-sample evidence. Earlier
+history is labeled `historical_extension` unless the user has explicitly certified an untouched
+holdout. No result from the active family automatically promotes a strategy.

@@ -214,6 +214,27 @@ def finalize_position(
         intended_exit_timestamp=state.intended_exit_timestamp,
         actual_exit_timestamp=state.actual_exit_timestamp,
         swing_high_execution_bar_missing=state.swing_high_execution_bar_missing,
+        swing_high_candidate_relative_to_entry=(
+            state.swing_high_candidate_high / state.entry_reference_price - 1
+            if state.swing_high_candidate_high is not None
+            else None
+        ),
+        swing_high_candidate_to_exit_giveback=(
+            (state.swing_high_candidate_high - final_leg.exit_reference_price)
+            / state.entry_reference_price
+            if state.swing_high_candidate_high is not None
+            else None
+        ),
+        swing_high_candidate_above_entry=(
+            state.swing_high_candidate_high > state.entry_reference_price
+            if state.swing_high_candidate_high is not None
+            else None
+        ),
+        swing_high_actual_exit_below_entry=(
+            final_leg.exit_reference_price < state.entry_reference_price
+            if state.swing_high_candidate_high is not None
+            else None
+        ),
     )
 
 
@@ -336,17 +357,75 @@ def aggregate_profit_capture(
         ExitReasonDiagnostics(
             exit_reason=reason,
             positions=len(items),
+            winners=sum(item.position_return > 0 for item in items),
+            losers=sum(item.position_return < 0 for item in items),
             average_mfe=_average(item.maximum_favorable_excursion for item in items),
+            average_mae=_average(item.maximum_adverse_excursion for item in items),
             average_return=_average(item.position_return for item in items),
+            median_return=float(median(item.position_return for item in items)),
             average_capture=_average(
                 item.profit_capture_ratio
                 for item in items
                 if item.profit_capture_ratio is not None
             ),
             average_giveback=_average(item.profit_giveback for item in items),
+            average_holding_minutes=_average(_holding_minutes(item) for item in items),
+            intraday_counterfactual_hold=_aggregate_intraday_forward(items),
         )
         for reason, items in sorted(groups.items())
     )
+
+
+def _holding_minutes(position: BacktestPosition) -> float:
+    if position.entry_timestamp is not None and position.exit_timestamp is not None:
+        return max(
+            (position.exit_timestamp - position.entry_timestamp).total_seconds() / 60,
+            0.0,
+        )
+    return float(position.holding_days * 390)
+
+
+def _aggregate_intraday_forward(
+    positions: Sequence[BacktestPosition],
+) -> dict[str, dict]:
+    horizons = tuple(
+        dict.fromkeys(
+            horizon
+            for position in positions
+            for horizon in position.intraday_forward_diagnostics
+        )
+    )
+    output: dict[str, dict] = {}
+    for horizon in horizons:
+        windows = [
+            position.intraday_forward_diagnostics[horizon]
+            for position in positions
+            if position.intraday_forward_diagnostics.get(horizon, {}).get("resolved") is True
+        ]
+        returns = [
+            float(window["counterfactual_hold_return"])
+            for window in windows
+            if window.get("counterfactual_hold_return") is not None
+        ]
+        mfes = [
+            float(window["counterfactual_hold_mfe"])
+            for window in windows
+            if window.get("counterfactual_hold_mfe") is not None
+        ]
+        output[horizon] = {
+            "observations": len(returns),
+            "average_counterfactual_hold_return": _average(returns),
+            "median_counterfactual_hold_return": (
+                float(median(returns)) if returns else None
+            ),
+            "percentage_recovered_above_entry": (
+                sum(value > 0 for value in returns) / len(returns) if returns else None
+            ),
+            "percentage_positive_mfe_above_entry": (
+                sum(value > 0 for value in mfes) / len(mfes) if mfes else None
+            ),
+        }
+    return output
 
 
 def aggregate_stop_losses(

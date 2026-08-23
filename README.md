@@ -452,6 +452,48 @@ Für einen vollständig offline ausgeführten Vergleich deaktiviert
 Vorhandene lokale Intraday-Bars werden verwendet und Runs mit fehlenden Daten werden als skipped
 ausgewiesen. Der manuelle Befehl `sync-intraday` bleibt unabhängig davon verfügbar.
 
+### Aktive Intraday-Forschung und lokaler Preflight
+
+Die zentrale Research-Registry trennt reproduzierbare Historie von der aktiven, teuren Pipeline.
+F0/C-intraday-dynamic bleibt unveränderter `CHAMPION_CONTROL`; F3/C-intraday-thesis-recovery und
+F5/C-intraday-first-hour-pullback-f0-management sind `ACTIVE_RESEARCH`. F1, F2, F4, D1–D5 und die
+historischen Position-Management-Experimente bleiben reproduzierbar, sind jedoch archiviert und
+werden nicht automatisch in aktive Vergleiche aufgenommen. Archived bedeutet ausdrücklich nicht
+gelöscht. Die genaue Zuordnung steht in
+[`docs/strategy-research-lifecycle.md`](docs/strategy-research-lifecycle.md).
+
+Die explizite Familie `research-intraday-hybrid` enthält ausschließlich F0, F3 und F5. F5 ist die
+kausale F4-Entry-Auswahl (EMA20, vollständige erste Stunde, erster bestätigter Pullback, Entry erst
+am folgenden kanonischen 15-Minuten-Open) mit anschließend unverändertem F0-Management: 3-Prozent-
+Katastrophenstop, sofortige ATR14-x1-Trail-Semantik, einmalig 50 Prozent bei +1,5 Prozent, Runner
+und Daily-Score-Decay. Sie verwendet weder den F4-Stop noch dessen Swing-High- oder Session-Close-
+Exit. Provider-native Lücken werden weder synthetisiert noch aufgefüllt oder überbrückt.
+
+`compare-preflight` prüft eine lange Vergleichsperiode ausschließlich gegen den lokalen Bestand,
+ohne einen Backtest zu starten. Es verwendet dieselbe Vergleichsvorbereitung und PIT-
+Kandidatenermittlung wie `compare-strategies`, schreibt einen maschinenlesbaren JSON-Bericht sowie
+einen mit `sync-intraday --candidates-report` kompatiblen Kandidatenbericht und nennt erforderliche
+manuelle Daily-/Intraday-Sync-Befehle, führt sie aber nicht aus:
+
+```powershell
+python -m trading_system.cli compare-preflight `
+  --start 2024-01-02 `
+  --end 2026-08-12 `
+  --include research-intraday-hybrid `
+  --output-stem intraday_hybrid_preflight_2024-01-02_2026-08-12
+```
+
+Research-Vergleiche rechnen standardmäßig nur das konfigurierte Baseline-Kostenmodell. Erst das
+explizite Flag `--cost-stress` aktiviert 2X-/3X-Slippage, Commission- und vorhandene
+path-preserving Diagnosen; Reports speichern `cost_stress_requested` und
+`cost_stress_executed`. Native Post-Exit- und Counterfactual-Hold-Werte sind reine, nachgelagerte
+Diagnostik und beeinflussen den simulierten Pfad nie. Details stehen in
+[`docs/position-diagnostics.md`](docs/position-diagnostics.md).
+
+Der Zeitraum 2025-05-01 bis 2026-08-12 ist Entwicklungs-/In-Sample-Research. Frühere Daten werden
+neutral als `historical_extension` bezeichnet und nicht automatisch als OOS gewertet. Kein Report
+promotet eine Strategie automatisch.
+
 ### Point-in-Time- und Ausführungsmodell
 
 Jede Simulation verwendet offizielle XNYS-Sessions, für die mindestens ein lokaler Bar existiert.

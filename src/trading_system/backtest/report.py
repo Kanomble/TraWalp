@@ -149,6 +149,7 @@ def export_research_comparison(
     output_directory: Path,
     *,
     stem: str,
+    cost_stress_requested: bool = False,
 ) -> dict[str, Path]:
     """Atomically export the D1-D5 baseline and its predeclared diagnostics."""
 
@@ -178,11 +179,15 @@ def export_research_comparison(
     )
     monthly_rows = _research_monthly_rows(comparison)
     symbol_rows, symbol_summary = _research_symbol_rows(comparison)
-    cost_rows = _research_cost_rows(cost_comparisons)
+    cost_rows = (
+        _research_cost_rows(cost_comparisons) if cost_stress_requested else []
+    )
     strict_rows = _strict_coverage_rows(strict_comparison)
     diagnostics = {
         "report_type": "d1_d5_strategy_research_diagnostics",
         "strict_coverage_sensitivity_ranked": False,
+        "cost_stress_requested": cost_stress_requested,
+        "cost_stress_executed": bool(cost_stress_requested and cost_comparisons),
         "strategies": comparison.research_diagnostics,
         "symbol_concentration_summary": symbol_summary,
         "cost_scenarios": list(cost_comparisons),

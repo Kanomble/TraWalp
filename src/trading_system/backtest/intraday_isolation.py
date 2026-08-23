@@ -406,6 +406,7 @@ def export_intraday_isolation_comparison(
     output_directory: Path,
     *,
     stem: str,
+    cost_stress_requested: bool = False,
 ) -> dict[str, Path]:
     output_directory.mkdir(parents=True, exist_ok=True)
     paths = {
@@ -423,12 +424,18 @@ def export_intraday_isolation_comparison(
         raise FileExistsError(f"Intraday isolation export already exists: {existing[0]}")
     paired = paired_intraday_isolation_effects(comparison)
     summary_rows = intraday_isolation_summary_rows(comparison, paired)
-    full_cost_rows = isolation_cost_stress_rows(cost_comparisons)
-    path_cost_rows = isolation_path_preserving_cost_rows(comparison)
+    full_cost_rows = (
+        isolation_cost_stress_rows(cost_comparisons) if cost_stress_requested else []
+    )
+    path_cost_rows = (
+        isolation_path_preserving_cost_rows(comparison) if cost_stress_requested else []
+    )
     summary_payload = {
         "report_type": "intraday_edge_isolation_research",
         "methodology_notice": IN_SAMPLE_RESEARCH_NOTICE,
         "automatic_strategy_promotion": False,
+        "cost_stress_requested": cost_stress_requested,
+        "cost_stress_executed": bool(cost_stress_requested and cost_comparisons),
         "requested_period": [
             comparison.requested_start.isoformat(),
             comparison.requested_end.isoformat(),
@@ -439,6 +446,8 @@ def export_intraday_isolation_comparison(
     }
     diagnostics = {
         "methodology_notice": IN_SAMPLE_RESEARCH_NOTICE,
+        "cost_stress_requested": cost_stress_requested,
+        "cost_stress_executed": bool(cost_stress_requested and cost_comparisons),
         "strategies": comparison.research_diagnostics,
         "coverage": coverage_rows,
         "paired_effects": paired,

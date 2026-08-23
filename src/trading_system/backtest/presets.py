@@ -71,6 +71,7 @@ def position_management_preset(
         PositionManagementPreset.F1_INTRADAY_LOSS_COOLDOWN,
         PositionManagementPreset.F2_INTRADAY_OPENING_SURVIVOR_GATE,
         PositionManagementPreset.F3_INTRADAY_THESIS_RECOVERY,
+        PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT,
     }:
         configured = BarTimeframe(base.bar_timeframe)
         timeframe = configured if configured.intraday else BarTimeframe.MINUTES_15

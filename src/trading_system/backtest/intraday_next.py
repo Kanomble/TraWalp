@@ -429,6 +429,7 @@ def export_intraday_next_comparison(
     output_directory: Path,
     *,
     stem: str,
+    cost_stress_requested: bool = False,
 ) -> dict[str, Path]:
     output_directory.mkdir(parents=True, exist_ok=True)
     paths = {
@@ -450,6 +451,8 @@ def export_intraday_next_comparison(
         "report_type": "intraday_next_development_research",
         "methodology_notice": DEVELOPMENT_RESEARCH_NOTICE,
         "automatic_strategy_promotion": False,
+        "cost_stress_requested": cost_stress_requested,
+        "cost_stress_executed": bool(cost_stress_requested and cost_comparisons),
         "requested_period": [
             comparison.requested_start.isoformat(),
             comparison.requested_end.isoformat(),
@@ -460,6 +463,8 @@ def export_intraday_next_comparison(
     }
     diagnostics = {
         "methodology_notice": DEVELOPMENT_RESEARCH_NOTICE,
+        "cost_stress_requested": cost_stress_requested,
+        "cost_stress_executed": bool(cost_stress_requested and cost_comparisons),
         "strategies": comparison.research_diagnostics,
         "coverage": coverage_rows,
         "paired_effects": paired,
@@ -494,10 +499,14 @@ def export_intraday_next_comparison(
     _atomic_csv(paths["coverage"], coverage_rows, _field_union(coverage_rows))
     paired_rows = [{"strategy": label, **values} for label, values in paired.items()]
     _atomic_csv(paths["paired_effects"], paired_rows, _field_union(paired_rows))
-    cost_rows = [
-        *intraday_next_cost_stress_rows(cost_comparisons),
-        *intraday_next_path_preserving_cost_rows(comparison),
-    ]
+    cost_rows = (
+        [
+            *intraday_next_cost_stress_rows(cost_comparisons),
+            *intraday_next_path_preserving_cost_rows(comparison),
+        ]
+        if cost_stress_requested
+        else []
+    )
     _atomic_csv(paths["cost_stress"], cost_rows, _field_union(cost_rows))
     return paths
 

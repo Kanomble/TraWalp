@@ -275,16 +275,20 @@ def test_research_registry_lifecycles_and_exact_families() -> None:
         ResearchLifecycle.CHAMPION_CONTROL
     )
     assert lifecycle_for_preset(PositionManagementPreset.F1_INTRADAY_LOSS_COOLDOWN) is (
-        ResearchLifecycle.PENDING_EVALUATION
+        ResearchLifecycle.ARCHIVED_RESEARCH
     )
     assert lifecycle_for_preset(
         PositionManagementPreset.F2_INTRADAY_OPENING_SURVIVOR_GATE
-    ) is ResearchLifecycle.PENDING_EVALUATION
-    for preset in (
-        PositionManagementPreset.F3_INTRADAY_THESIS_RECOVERY,
-        PositionManagementPreset.F4_INTRADAY_FIRST_HOUR_PULLBACK,
-    ):
-        assert lifecycle_for_preset(preset) is ResearchLifecycle.ACTIVE_RESEARCH
+    ) is ResearchLifecycle.ARCHIVED_RESEARCH
+    assert lifecycle_for_preset(PositionManagementPreset.F3_INTRADAY_THESIS_RECOVERY) is (
+        ResearchLifecycle.ACTIVE_RESEARCH
+    )
+    assert lifecycle_for_preset(PositionManagementPreset.F4_INTRADAY_FIRST_HOUR_PULLBACK) is (
+        ResearchLifecycle.ARCHIVED_RESEARCH
+    )
+    assert lifecycle_for_preset(
+        PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT
+    ) is ResearchLifecycle.ACTIVE_RESEARCH
     for preset in (
         PositionManagementPreset.D1_SWING_PROFIT_LOCK,
         PositionManagementPreset.D2_SWING_RUNNER,
@@ -339,6 +343,10 @@ def test_research_registry_lifecycles_and_exact_families() -> None:
     }
     assert PositionManagementPreset.F3_INTRADAY_THESIS_RECOVERY not in all_presets
     assert PositionManagementPreset.F4_INTRADAY_FIRST_HOUR_PULLBACK not in all_presets
+    assert (
+        PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT
+        not in all_presets
+    )
     assert engine_module._comparison_runs(StrategyComparisonKind.RESEARCH_D1_D5)
 
 
