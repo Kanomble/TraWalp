@@ -27,6 +27,10 @@ from trading_system.backtest.intraday_isolation import (
     annotate_intraday_isolation_coverage,
     export_intraday_isolation_comparison,
 )
+from trading_system.backtest.intraday_next import (
+    annotate_intraday_next_coverage,
+    export_intraday_next_comparison,
+)
 from trading_system.backtest.report import (
     export_backtest,
     export_candidate_audit,
@@ -221,6 +225,7 @@ def _parser() -> argparse.ArgumentParser:
             "position-management",
             "research-d1-d5",
             "research-intraday-isolation",
+            "research-intraday-next",
         ),
         default="all",
         help="Select all strategies or one comparison family (default: all)",
@@ -653,12 +658,16 @@ def main(argv: list[str] | None = None) -> int:
                 intraday_session_statuses=intraday_session_statuses,
                 allow_missing_intraday_data=(
                     comparison_kind
-                    is StrategyComparisonKind.RESEARCH_INTRADAY_ISOLATION
+                    in {
+                        StrategyComparisonKind.RESEARCH_INTRADAY_ISOLATION,
+                        StrategyComparisonKind.RESEARCH_INTRADAY_NEXT,
+                    }
                 ),
             )
             strict_comparison = None
             cost_comparisons: dict[str, object] = {}
             isolation_coverage_rows: list[dict] = []
+            next_coverage_rows: list[dict] = []
             if (
                 comparison_kind is StrategyComparisonKind.RESEARCH_D1_D5
                 and not args.strict_intraday_coverage
@@ -751,6 +760,46 @@ def main(argv: list[str] | None = None) -> int:
                         intraday_session_statuses=intraday_session_statuses,
                         allow_missing_intraday_data=True,
                     )
+            elif comparison_kind is StrategyComparisonKind.RESEARCH_INTRADAY_NEXT:
+                if (
+                    settings.strategy.backtest.slippage_bps != 5
+                    or settings.strategy.backtest.commission_bps != 0
+                ):
+                    raise ValueError(
+                        "research-intraday-next requires the frozen 5 bps / 0 bps baseline"
+                    )
+                comparison_result, next_coverage_rows = annotate_intraday_next_coverage(
+                    database, comparison_result
+                )
+                cost_comparisons = {"BASE": comparison_result}
+                for name, slippage_bps, commission_bps in (
+                    ("2X", 10, 0),
+                    ("3X", 15, 0),
+                    ("COMMISSION", 5, 5),
+                ):
+                    print(f"Running cost stress: {name}...", flush=True)
+                    cost_config = settings.strategy.model_copy(
+                        update={
+                            "backtest": settings.strategy.backtest.model_copy(
+                                update={
+                                    "slippage_bps": slippage_bps,
+                                    "commission_bps": commission_bps,
+                                }
+                            )
+                        }
+                    )
+                    cost_comparisons[name] = compare_strategies(
+                        database,
+                        cost_config,
+                        args.start,
+                        args.end,
+                        comparison_kind=comparison_kind,
+                        preparation=preparation,
+                        intraday_prefetch=prefetch,
+                        data_qualification=qualification_metadata,
+                        intraday_session_statuses=intraday_session_statuses,
+                        allow_missing_intraday_data=True,
+                    )
         except ValueError as exc:
             print(f"Strategy comparison refused: {exc}", file=sys.stderr)
             return 1
@@ -776,6 +825,17 @@ def main(argv: list[str] | None = None) -> int:
                     isolation_coverage_rows,
                     settings.strategy.storage.reports_path,
                     stem=isolation_stem,
+                )
+            elif comparison_kind is StrategyComparisonKind.RESEARCH_INTRADAY_NEXT:
+                next_stem = args.output_stem or (
+                    f"intraday_next_{args.start}_{args.end}"
+                )
+                paths = export_intraday_next_comparison(
+                    comparison_result,
+                    cost_comparisons,
+                    next_coverage_rows,
+                    settings.strategy.storage.reports_path,
+                    stem=next_stem,
                 )
             else:
                 paths = export_comparison(

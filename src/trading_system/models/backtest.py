@@ -34,6 +34,8 @@ class PositionManagementPreset(StrEnum):
     D5_HYBRID_CONFIRMED_SWING = "D5-hybrid-confirmed-swing"
     F1_INTRADAY_LOSS_COOLDOWN = "F1-intraday-loss-cooldown"
     F2_INTRADAY_OPENING_SURVIVOR_GATE = "F2-intraday-opening-survivor-gate"
+    F3_INTRADAY_THESIS_RECOVERY = "F3-intraday-thesis-recovery"
+    F4_INTRADAY_FIRST_HOUR_PULLBACK = "F4-intraday-first-hour-pullback"
 
 
 class StrategyComparisonKind(StrEnum):
@@ -43,6 +45,7 @@ class StrategyComparisonKind(StrEnum):
     RESEARCH_D1_D5 = "research_d1_d5"
     EXTENDED_VALIDATION = "extended_validation"
     RESEARCH_INTRADAY_ISOLATION = "research_intraday_isolation"
+    RESEARCH_INTRADAY_NEXT = "research_intraday_next"
 
 
 class StopLossClassification(StrEnum):
@@ -181,6 +184,29 @@ class BacktestTrade(BaseModel):
     opening_gate_failure_reason: str | None = None
     opening_gate_exit_timestamp: datetime | None = None
     opening_gate_exit_reference_price: float | None = None
+    opening_bar_timestamp: datetime | None = None
+    opening_ema20: float | None = None
+    opening_above_ema: bool | None = None
+    first_hour_complete: bool | None = None
+    first_hour_open: float | None = None
+    first_hour_high: float | None = None
+    first_hour_low: float | None = None
+    first_hour_close: float | None = None
+    ema20_at_1030: float | None = None
+    pullback_candidate_timestamp: datetime | None = None
+    pullback_candidate_low: float | None = None
+    pullback_confirmation_timestamp: datetime | None = None
+    pullback_confirmation_close: float | None = None
+    pullback_confirmed: bool = False
+    initial_stop_price: float | None = None
+    stop_distance_pct: float | None = None
+    swing_high_candidate_timestamp: datetime | None = None
+    swing_high_candidate_high: float | None = None
+    swing_high_confirmation_timestamp: datetime | None = None
+    swing_high_confirmed: bool = False
+    intended_exit_timestamp: datetime | None = None
+    actual_exit_timestamp: datetime | None = None
+    swing_high_execution_bar_missing: bool = False
 
 
 class BacktestPosition(BaseModel):
@@ -323,6 +349,29 @@ class BacktestPosition(BaseModel):
     opening_gate_failure_reason: str | None = None
     opening_gate_exit_timestamp: datetime | None = None
     opening_gate_exit_reference_price: float | None = None
+    opening_bar_timestamp: datetime | None = None
+    opening_ema20: float | None = None
+    opening_above_ema: bool | None = None
+    first_hour_complete: bool | None = None
+    first_hour_open: float | None = None
+    first_hour_high: float | None = None
+    first_hour_low: float | None = None
+    first_hour_close: float | None = None
+    ema20_at_1030: float | None = None
+    pullback_candidate_timestamp: datetime | None = None
+    pullback_candidate_low: float | None = None
+    pullback_confirmation_timestamp: datetime | None = None
+    pullback_confirmation_close: float | None = None
+    pullback_confirmed: bool = False
+    initial_stop_price: float | None = None
+    stop_distance_pct: float | None = None
+    swing_high_candidate_timestamp: datetime | None = None
+    swing_high_candidate_high: float | None = None
+    swing_high_confirmation_timestamp: datetime | None = None
+    swing_high_confirmed: bool = False
+    intended_exit_timestamp: datetime | None = None
+    actual_exit_timestamp: datetime | None = None
+    swing_high_execution_bar_missing: bool = False
 
 
 class ExecutionMetrics(BaseModel):

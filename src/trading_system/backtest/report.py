@@ -694,22 +694,17 @@ def _comparison_result_label(comparison: StrategyComparison, result: BacktestRes
         return result.position_management_preset.value
     if comparison.comparison_kind is StrategyComparisonKind.SCORE_VARIANTS:
         return result.strategy_variant.value
-    if comparison.comparison_kind in {
-        StrategyComparisonKind.RESEARCH_D1_D5,
-        StrategyComparisonKind.EXTENDED_VALIDATION,
-    }:
-        from trading_system.backtest.engine import research_strategy_label
+    from trading_system.backtest.research_registry import (
+        RESEARCH_FAMILY_RUNS,
+        comparison_strategy_label,
+    )
 
-        return research_strategy_label(
-            result.strategy_variant, result.position_management_preset
+    if comparison.comparison_kind in RESEARCH_FAMILY_RUNS:
+        return comparison_strategy_label(
+            comparison.comparison_kind,
+            result.strategy_variant,
+            result.position_management_preset,
         )
-    if (
-        comparison.comparison_kind
-        is StrategyComparisonKind.RESEARCH_INTRADAY_ISOLATION
-    ):
-        from trading_system.backtest.intraday_isolation import intraday_isolation_label
-
-        return intraday_isolation_label(result.position_management_preset)
     return f"{result.strategy_variant.value}/{result.position_management_preset.value}"
 
 

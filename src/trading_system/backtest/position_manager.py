@@ -34,6 +34,8 @@ class ExitReason(StrEnum):
     END_OF_BACKTEST = "end_of_backtest"
     PROFIT_LOCK = "profit_lock"
     OPENING_BAR_FAIL = "opening_bar_fail"
+    CONFIRMED_SWING_HIGH = "confirmed_swing_high"
+    SESSION_CLOSE = "session_close"
 
 
 class ProfitLockState(StrEnum):
@@ -158,6 +160,30 @@ class PositionState:
     opening_gate_failure_reason: str | None = None
     opening_gate_exit_timestamp: datetime | None = None
     opening_gate_exit_reference_price: float | None = None
+    candidate_event_index: int | None = None
+    opening_bar_timestamp: datetime | None = None
+    opening_ema20: float | None = None
+    opening_above_ema: bool | None = None
+    first_hour_complete: bool | None = None
+    first_hour_open: float | None = None
+    first_hour_high: float | None = None
+    first_hour_low: float | None = None
+    first_hour_close: float | None = None
+    ema20_at_1030: float | None = None
+    pullback_candidate_timestamp: datetime | None = None
+    pullback_candidate_low: float | None = None
+    pullback_confirmation_timestamp: datetime | None = None
+    pullback_confirmation_close: float | None = None
+    pullback_confirmed: bool = False
+    initial_stop_price: float | None = None
+    stop_distance_pct: float | None = None
+    swing_high_candidate_timestamp: datetime | None = None
+    swing_high_candidate_high: float | None = None
+    swing_high_confirmation_timestamp: datetime | None = None
+    swing_high_confirmed: bool = False
+    intended_exit_timestamp: datetime | None = None
+    actual_exit_timestamp: datetime | None = None
+    swing_high_execution_bar_missing: bool = False
 
     def __post_init__(self) -> None:
         if self.highest_price_since_entry <= 0:

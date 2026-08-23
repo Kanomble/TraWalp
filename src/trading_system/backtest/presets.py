@@ -70,10 +70,25 @@ def position_management_preset(
         PositionManagementPreset.INTRADAY_DYNAMIC,
         PositionManagementPreset.F1_INTRADAY_LOSS_COOLDOWN,
         PositionManagementPreset.F2_INTRADAY_OPENING_SURVIVOR_GATE,
+        PositionManagementPreset.F3_INTRADAY_THESIS_RECOVERY,
     }:
         configured = BarTimeframe(base.bar_timeframe)
         timeframe = configured if configured.intraday else BarTimeframe.MINUTES_15
         return partial.model_copy(update={"bar_timeframe": timeframe})
+
+    if preset is PositionManagementPreset.F4_INTRADAY_FIRST_HOUR_PULLBACK:
+        return PositionManagementConfig(
+            bar_timeframe=BarTimeframe.MINUTES_15,
+            stop_loss=StopLossConfig(enabled=True, percent=0.0075),
+            take_profit=TakeProfitConfig(enabled=False),
+            signal_decay=SignalDecayConfig(enabled=False),
+            partial_take_profit=PartialTakeProfitConfig(enabled=False),
+            max_hold=MaxHoldConfig(
+                enabled=False,
+                days=legacy_max_holding_days,
+                mode="disabled",
+            ),
+        )
 
     if preset in {
         PositionManagementPreset.D1_SWING_PROFIT_LOCK,
