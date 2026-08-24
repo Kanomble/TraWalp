@@ -96,3 +96,24 @@ def test_filing_index_uses_official_xbrl_current_and_archive_paths() -> None:
         "https://www.sec.gov/Archives/edgar/full-index/xbrl.idx",
         "https://www.sec.gov/Archives/edgar/full-index/2025/QTR4/xbrl.idx",
     ]
+
+
+def test_daily_master_resources_use_shared_sec_transport_and_request_counters() -> None:
+    directory = {"directory": {"item": [{"name": "master.20260821.idx"}]}}
+    session = Session([Response(200, directory), Response(200, {"text": "daily master"})])
+    client = SecClient(
+        "Researcher research@example.com",
+        session=session,  # type: ignore[arg-type]
+        request_interval_seconds=0,
+    )
+
+    assert client.daily_master_index_directory(2026, 3) == directory
+    assert client.daily_master_index(2026, 3, "20260821") == "daily master"
+    assert session.urls == [
+        "https://www.sec.gov/Archives/edgar/daily-index/2026/QTR3/index.json",
+        "https://www.sec.gov/Archives/edgar/daily-index/2026/QTR3/master.20260821.idx",
+    ]
+    assert client.request_counts == {
+        "daily_index_directory": 1,
+        "daily_master_index": 1,
+    }

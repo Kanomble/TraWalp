@@ -49,12 +49,54 @@ UNMAPPED_CATEGORIES = (
     "unclassified",
 )
 SEC_IDENTITY_CONFLICT_SOURCE = "sec_identity_conflicts"
+SEC_CHANGE_DETECTION_SOURCE = "sec_change_detection"
+DAILY_MASTER_INDEX_CURSOR_KEY = "daily_master_index"
+LEGACY_XBRL_INDEX_CURSOR_KEY = "xbrl_index"
+# Re-read a small calendar window so late/corrected SEC directory publication is observable.
+# Accession state makes this deliberately repeated work idempotent.
+DAILY_INDEX_OVERLAP_DAYS = 7
+DAILY_MASTER_INDEX_NAME = re.compile(r"^master\.(\d{8})\.idx$")
 
 
 @dataclass(frozen=True)
 class FilingIndexSnapshot:
     last_data_received: date
     accessions_by_cik: dict[str, set[str]]
+
+
+@dataclass(frozen=True, order=True)
+class DailyMasterIndexResource:
+    index_date: date
+    year: int
+    quarter: int
+    filename: str
+
+
+@dataclass(frozen=True)
+class DailyMasterIndexEntry:
+    cik: str
+    company_name: str
+    form: str
+    filed: date
+    filename: str
+    accession: str
+
+
+@dataclass(frozen=True)
+class DailyMasterIndexSnapshot:
+    index_date: date
+    entries: tuple[DailyMasterIndexEntry, ...]
+    accessions_by_cik: dict[str, set[str]]
+
+
+@dataclass(frozen=True)
+class DailyMasterIndexDiscovery:
+    cursor_before: date | None
+    legacy_cursor_bootstrap: bool
+    directories_checked: int
+    indexes_discovered: int
+    indexes_new: int
+    snapshots: tuple[DailyMasterIndexSnapshot, ...]
 
 
 class SecCompanySyncError(Exception):
@@ -88,6 +130,86 @@ def parse_filing_index(payload: str) -> FilingIndexSnapshot:
         if accession:
             accessions_by_cik[cik.zfill(10)].add(accession)
     return FilingIndexSnapshot(last_data_received, dict(accessions_by_cik))
+
+
+def parse_daily_index_directory(
+    payload: Mapping[str, Any], year: int, quarter: int
+) -> tuple[DailyMasterIndexResource, ...]:
+    """Parse an SEC daily-index directory, accepting only exact daily master names."""
+
+    if quarter not in {1, 2, 3, 4}:
+        raise ValueError("quarter must be within 1..4")
+    directory = payload.get("directory")
+    if not isinstance(directory, Mapping):
+        raise ValueError("SEC daily-index directory JSON is missing directory metadata")
+    items = directory.get("item")
+    if not isinstance(items, list):
+        raise ValueError("SEC daily-index directory JSON is missing its item list")
+
+    by_date: dict[date, DailyMasterIndexResource] = {}
+    for item in items:
+        if not isinstance(item, Mapping):
+            raise ValueError("SEC daily-index directory contains a malformed item")
+        name = item.get("name")
+        if not isinstance(name, str):
+            raise ValueError("SEC daily-index directory item is missing a filename")
+        if item.get("type") not in {None, "file"}:
+            continue
+        match = DAILY_MASTER_INDEX_NAME.fullmatch(name)
+        if match is None:
+            continue
+        try:
+            index_date = datetime.strptime(match.group(1), "%Y%m%d").date()
+        except ValueError:
+            continue
+        expected_quarter = (index_date.month - 1) // 3 + 1
+        if index_date.year != year or expected_quarter != quarter:
+            continue
+        resource = DailyMasterIndexResource(index_date, year, quarter, name)
+        previous = by_date.get(index_date)
+        if previous is None or resource.filename < previous.filename:
+            by_date[index_date] = resource
+    return tuple(by_date[item] for item in sorted(by_date))
+
+
+def parse_daily_master_index(payload: str, index_date: date) -> DailyMasterIndexSnapshot:
+    """Parse relevant rows from one daily master index, failing closed after its header."""
+
+    lines = payload.splitlines()
+    expected_header = "CIK|Company Name|Form Type|Date Filed|Filename"
+    try:
+        header_index = next(index for index, line in enumerate(lines) if line == expected_header)
+    except StopIteration as exc:
+        raise ValueError("SEC daily master index is missing required headers") from exc
+
+    entries: list[DailyMasterIndexEntry] = []
+    accessions_by_cik: dict[str, set[str]] = defaultdict(set)
+    filing_path = re.compile(r"^edgar/data/(\d+)/([A-Za-z0-9][A-Za-z0-9-]*)\.txt$")
+    for line_number, line in enumerate(lines[header_index + 1 :], start=header_index + 2):
+        stripped = line.strip()
+        if not stripped or set(stripped) == {"-"}:
+            continue
+        fields = line.split("|")
+        if len(fields) != 5:
+            raise ValueError(f"Malformed SEC daily master row at line {line_number}")
+        raw_cik, company_name, form, raw_filed, filename = (field.strip() for field in fields)
+        if not raw_cik.isdigit() or len(raw_cik) > 10 or not company_name or not form:
+            raise ValueError(f"Malformed SEC daily master row at line {line_number}")
+        try:
+            filed = date.fromisoformat(raw_filed)
+        except ValueError as exc:
+            raise ValueError(f"Malformed SEC daily master row at line {line_number}") from exc
+        if form not in RELEVANT_SEC_FORMS:
+            continue
+        path_match = filing_path.fullmatch(filename)
+        if path_match is None or int(path_match.group(1)) != int(raw_cik):
+            raise ValueError(f"Malformed SEC daily master row at line {line_number}")
+        cik = raw_cik.zfill(10)
+        accession = path_match.group(2)
+        entry = DailyMasterIndexEntry(cik, company_name, form, filed, filename, accession)
+        entries.append(entry)
+        accessions_by_cik[cik].add(accession)
+    return DailyMasterIndexSnapshot(index_date, tuple(entries), dict(accessions_by_cik))
 
 
 def classify_unmapped_asset(asset: TradableAsset) -> str:
@@ -444,18 +566,23 @@ class DataSynchronizer:
         submissions_statuses = self.database.sync_values("sec_submissions_status")
         change_accessions: dict[str, set[str]] = defaultdict(set)
         change_detection_seconds = 0.0
-        change_detection_requests = 0
-        index_through: date | None = None
+        discovery: DailyMasterIndexDiscovery | None = None
+        cursor_after: date | None = None
         negative_cache_hits = 0
         if full:
             candidate_ciks = set(canonical_symbols)
         else:
             detection_started = self.timer()
-            snapshots = self._filing_index_snapshots()
+            discovery = self._daily_master_index_snapshots()
             change_detection_seconds = self.timer() - detection_started
-            change_detection_requests = len(snapshots)
-            index_through = max(snapshot.last_data_received for snapshot in snapshots)
-            for snapshot in snapshots:
+            if discovery.snapshots:
+                cursor_after = max(
+                    discovery.cursor_before or discovery.snapshots[0].index_date,
+                    discovery.snapshots[-1].index_date,
+                )
+            elif not discovery.legacy_cursor_bootstrap:
+                cursor_after = discovery.cursor_before
+            for snapshot in discovery.snapshots:
                 for cik, accessions in snapshot.accessions_by_cik.items():
                     if cik in canonical_symbols:
                         change_accessions[cik].update(accessions)
@@ -463,7 +590,6 @@ class DataSynchronizer:
                 cik
                 for cik in canonical_symbols
                 if change_accessions.get(cik, set()) - set(accession_states.get(cik, []))
-                or cik not in accession_states
                 or self._negative_cache_expired(companyfacts_statuses.get(cik))
                 or self._negative_cache_expired(submissions_statuses.get(cik))
             }
@@ -499,6 +625,32 @@ class DataSynchronizer:
             "identity_conflicts": len(identity.conflicts),
             "identity_conflict_sample": sorted({item.symbol for item in identity.conflicts})[:10],
             "negative_cache_hits": negative_cache_hits,
+            "change_detection_source": None if full else "sec_daily_master_index",
+            "cursor_before": (
+                discovery.cursor_before.isoformat()
+                if discovery and discovery.cursor_before
+                else None
+            ),
+            "cursor_after": cursor_after.isoformat() if cursor_after else None,
+            "legacy_cursor_bootstrap": bool(discovery and discovery.legacy_cursor_bootstrap),
+            "daily_index_overlap_days": DAILY_INDEX_OVERLAP_DAYS if discovery else 0,
+            "daily_index_directories_checked": discovery.directories_checked if discovery else 0,
+            "daily_indexes_discovered": discovery.indexes_discovered if discovery else 0,
+            "daily_indexes_scanned": len(discovery.snapshots) if discovery else 0,
+            "daily_indexes_new": discovery.indexes_new if discovery else 0,
+            "daily_index_first_scanned": (
+                discovery.snapshots[0].index_date.isoformat()
+                if discovery and discovery.snapshots
+                else None
+            ),
+            "daily_index_last_scanned": (
+                discovery.snapshots[-1].index_date.isoformat()
+                if discovery and discovery.snapshots
+                else None
+            ),
+            "relevant_filings_detected": (
+                sum(len(snapshot.entries) for snapshot in discovery.snapshots) if discovery else 0
+            ),
             "request_failures": 0,
             "rate_limit_failures": 0,
             "server_failures": 0,
@@ -515,7 +667,8 @@ class DataSynchronizer:
         parse_and_persist_seconds = 0.0
         logical_requests = {
             "ticker_map": 1,
-            "filing_index": change_detection_requests,
+            "daily_index_directory": discovery.directories_checked if discovery else 0,
+            "daily_master_index": len(discovery.snapshots) if discovery else 0,
             "submissions": 0,
             "companyfacts": 0,
         }
@@ -580,14 +733,16 @@ class DataSynchronizer:
                         exc.resource,
                         exc_info=exc.cause,
                     )
-            if not full and counts["errors"] == 0 and index_through is not None:
+            if not full and counts["errors"] == 0 and cursor_after is not None:
                 self.database.set_sync_value(
-                    "sec_change_detection",
-                    "xbrl_index",
-                    {"last_data_received": index_through.isoformat()},
+                    SEC_CHANGE_DETECTION_SOURCE,
+                    DAILY_MASTER_INDEX_CURSOR_KEY,
+                    {"last_processed_date": cursor_after.isoformat()},
                     connection=write_connection,
                 )
                 write_connection.commit()
+            elif not full and counts["errors"]:
+                counts["cursor_after"] = counts["cursor_before"]
         counts["submissions_seconds"] = round(submissions_seconds, 3)
         counts["companyfacts_seconds"] = round(companyfacts_seconds, 3)
         counts["change_detection_seconds"] = round(change_detection_seconds, 3)
@@ -597,7 +752,14 @@ class DataSynchronizer:
             {
                 "sec_requests_total": sum(request_counts.values()),
                 "ticker_map_requests": request_counts.get("ticker_map", 0),
-                "change_detection_requests": request_counts.get("filing_index", 0),
+                "daily_index_directory_requests": request_counts.get(
+                    "daily_index_directory", 0
+                ),
+                "daily_master_index_requests": request_counts.get("daily_master_index", 0),
+                "change_detection_requests": (
+                    request_counts.get("daily_index_directory", 0)
+                    + request_counts.get("daily_master_index", 0)
+                ),
                 "submissions_requests": request_counts.get("submissions", 0),
                 "companyfacts_requests": request_counts.get("companyfacts", 0),
             }
@@ -780,30 +942,67 @@ class DataSynchronizer:
             "accessions": new_state if needs_facts or initializing_state else None,
         }
 
-    def _filing_index_snapshots(self) -> list[FilingIndexSnapshot]:
+    def _daily_master_index_snapshots(self) -> DailyMasterIndexDiscovery:
+        """Discover and parse available daily master files around the saved cursor."""
+
         if self.sec is None:
             raise ValueError("SEC client is required for SEC synchronization")
         today = self.clock().date()
-        raw_cursor = self.database.sync_value("sec_change_detection", "xbrl_index")
+        raw_cursor = self.database.sync_value(
+            SEC_CHANGE_DETECTION_SOURCE, DAILY_MASTER_INDEX_CURSOR_KEY
+        )
         cursor: date | None = None
-        if isinstance(raw_cursor, dict) and raw_cursor.get("last_data_received"):
+        legacy_cursor_bootstrap = False
+        if raw_cursor is not None:
+            if not isinstance(raw_cursor, Mapping) or not raw_cursor.get("last_processed_date"):
+                raise ValueError("Invalid SEC daily-master-index cursor")
             try:
-                cursor = date.fromisoformat(str(raw_cursor["last_data_received"]))
-            except ValueError as exc:
-                raise ValueError("Invalid SEC XBRL-index cursor") from exc
-            if cursor > today:
-                raise ValueError("SEC XBRL-index cursor is in the future")
-        quarters = _quarters_between(cursor or today, today)
-        current_key = (today.year, (today.month - 1) // 3 + 1)
-        snapshots = [
-            parse_filing_index(
-                self.sec.filing_index(year, quarter, current=(year, quarter) == current_key)
+                cursor = date.fromisoformat(str(raw_cursor["last_processed_date"]))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Invalid SEC daily-master-index cursor") from exc
+        else:
+            legacy = self.database.sync_value(
+                SEC_CHANGE_DETECTION_SOURCE, LEGACY_XBRL_INDEX_CURSOR_KEY
             )
-            for year, quarter in quarters
-        ]
-        if cursor is not None and max(item.last_data_received for item in snapshots) < cursor:
-            raise ValueError("SEC XBRL index regressed behind the saved cursor")
-        return snapshots
+            if isinstance(legacy, Mapping) and legacy.get("last_data_received"):
+                try:
+                    cursor = date.fromisoformat(str(legacy["last_data_received"]))
+                except (TypeError, ValueError):
+                    LOGGER.warning("Ignoring invalid legacy SEC XBRL-index cursor")
+                else:
+                    legacy_cursor_bootstrap = True
+        if cursor is not None and cursor > today:
+            raise ValueError("SEC daily-master-index cursor is in the future")
+
+        discovery_start = (cursor or today) - timedelta(days=DAILY_INDEX_OVERLAP_DAYS)
+        resources_by_date: dict[date, DailyMasterIndexResource] = {}
+        quarters = _quarters_between(discovery_start, today)
+        for year, quarter in quarters:
+            payload = self.sec.daily_master_index_directory(year, quarter)
+            for resource in parse_daily_index_directory(payload, year, quarter):
+                if discovery_start <= resource.index_date <= today:
+                    resources_by_date[resource.index_date] = resource
+
+        resources = tuple(resources_by_date[item] for item in sorted(resources_by_date))
+        snapshots = tuple(
+            parse_daily_master_index(
+                self.sec.daily_master_index(
+                    resource.year,
+                    resource.quarter,
+                    resource.index_date.strftime("%Y%m%d"),
+                ),
+                resource.index_date,
+            )
+            for resource in resources
+        )
+        return DailyMasterIndexDiscovery(
+            cursor_before=cursor,
+            legacy_cursor_bootstrap=legacy_cursor_bootstrap,
+            directories_checked=len(quarters),
+            indexes_discovered=len(resources),
+            indexes_new=sum(cursor is None or item.index_date > cursor for item in resources),
+            snapshots=snapshots,
+        )
 
     def _negative_cache_fresh(self, status: Any) -> bool:
         if not isinstance(status, dict) or status.get("status") != "unavailable":

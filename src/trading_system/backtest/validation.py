@@ -23,6 +23,7 @@ from trading_system.backtest.engine import (
     prepare_strategy_comparison,
     research_strategy_label,
 )
+from trading_system.backtest.qualification import qualify_historical_screen_start
 from trading_system.backtest.report import (
     _atomic_csv,
     _atomic_text,
@@ -31,17 +32,11 @@ from trading_system.backtest.report import (
 )
 from trading_system.config import StrategyConfig
 from trading_system.data.database import Database
-from trading_system.data.market_sessions import (
-    daily_warmup_start,
-    regular_session_bounds,
-    required_daily_warmup_sessions,
-    trading_sessions_between,
-)
+from trading_system.data.market_sessions import regular_session_bounds, trading_sessions_between
 from trading_system.data.qualification import (
     DataQualificationReport,
     qualify_intraday_history,
 )
-from trading_system.data.universe import is_financial_or_reit, is_reit
 from trading_system.models.backtest import (
     BacktestPosition,
     BacktestResult,
@@ -111,132 +106,15 @@ def qualify_validation_start(
     requested_start: date,
     requested_end: date,
 ) -> dict[str, Any]:
-    """Find the first screen with an exact configured Daily warmup in local data."""
+    """Find the first validation screen accepted by the shared Daily-start policy."""
 
-    if requested_start > requested_end:
-        raise ValueError("requested validation start must not follow end")
-    required = required_daily_warmup_sessions(config)
-    conflicts = database.unresolved_sec_identity_conflict_symbols()
-    companies = [
-        company
-        for company in database.list_tradable_companies()
-        if company.symbol not in conflicts
-        and not (
-            config.universe.exclude_reits and is_reit(company.sic)
-        )
-        and not (
-            config.universe.exclude_financials
-            and is_financial_or_reit(company.sic)
-        )
-    ]
-    symbols = tuple(sorted({company.symbol for company in companies}))
-    candidate_sessions = trading_sessions_between(requested_start, requested_end)
-    if not candidate_sessions:
-        raise ValueError("requested OOS interval contains no XNYS sessions")
-    earliest_warmup = daily_warmup_start(candidate_sessions[0], required)
-    bars_by_symbol: dict[str, set[date]] = defaultdict(set)
-    requested_symbols = (*symbols, "SPY")
-    with database.read_only() as connection:
-        for offset in range(0, len(requested_symbols), 400):
-            batch = requested_symbols[offset : offset + 400]
-            placeholders = ",".join("?" for _ in batch)
-            rows = connection.execute(
-                f"""SELECT symbol,timestamp FROM bars
-                WHERE symbol IN ({placeholders}) AND timeframe='1d'
-                AND timestamp>=? AND timestamp<? ORDER BY symbol,timestamp""",
-                [
-                    *batch,
-                    earliest_warmup.isoformat(),
-                    (requested_end + timedelta(days=1)).isoformat(),
-                ],
-            ).fetchall()
-            for symbol, timestamp in rows:
-                bars_by_symbol[str(symbol)].add(
-                    date.fromisoformat(str(timestamp)[:10])
-                )
-
-    actual_session: date | None = None
-    complete_symbols: list[str] = []
-    expected_prior: tuple[date, ...] = ()
-    for session in candidate_sessions:
-        required_history = tuple(
-            trading_sessions_between(
-                daily_warmup_start(session, required), session
-            )
-        )
-        if len(required_history) != required:
-            continue
-        benchmark_complete = set(required_history).issubset(
-            bars_by_symbol.get("SPY", set())
-        )
-        complete = [
-            symbol
-            for symbol in symbols
-            if set(required_history).issubset(bars_by_symbol.get(symbol, set()))
-        ]
-        # The production screen already rejects each insufficient-history symbol.
-        # Qualification therefore requires an exact benchmark warmup and at least
-        # one genuinely screenable member; no arbitrary universe-percentage gate.
-        if benchmark_complete and complete:
-            actual_session = session
-            complete_symbols = complete
-            expected_prior = required_history
-            break
-    if actual_session is None:
-        return {
-            "qualified": False,
-            "failure_reason": (
-                "no session has a complete SPY warmup and any complete eligible symbol"
-            ),
-            "requested_validation_start": requested_start.isoformat(),
-            "requested_validation_end": requested_end.isoformat(),
-            "required_prior_sessions": required,
-            "required_daily_warmup_start": earliest_warmup.isoformat(),
-            "representative_eligible_symbols": len(symbols),
-        }
-
-    internal_gaps = 0
-    edge_gaps = 0
-    symbols_with_internal_gaps = 0
-    expected_set = set(expected_prior)
-    for symbol in symbols:
-        present = bars_by_symbol.get(symbol, set()) & expected_set
-        missing = expected_set - present
-        if not missing:
-            continue
-        if present:
-            first_present = min(present)
-            last_present = max(present)
-            internal = sum(first_present < item < last_present for item in missing)
-        else:
-            internal = 0
-        internal_gaps += internal
-        edge_gaps += len(missing) - internal
-        symbols_with_internal_gaps += int(internal > 0)
-    return {
-        "qualified": True,
-        "qualification_rule": (
-            "exact SPY 300-session completed-screen history plus at least one "
-            "current-universe symbol with all required sessions; insufficient symbols "
-            "retain the production rejection"
-        ),
-        "requested_validation_start": requested_start.isoformat(),
-        "requested_validation_end": requested_end.isoformat(),
-        "required_prior_sessions": required,
-        "required_daily_warmup_start": expected_prior[0].isoformat(),
-        "actual_first_qualified_screen_session": actual_session.isoformat(),
-        "representative_eligible_symbols": len(symbols),
-        "symbols_with_complete_required_history": len(complete_symbols),
-        "percentage_with_complete_required_history": (
-            len(complete_symbols) / len(symbols) if symbols else 0.0
-        ),
-        "symbols_rejected_insufficient_market_history": len(symbols)
-        - len(complete_symbols),
-        "internal_daily_gaps": internal_gaps,
-        "symbols_with_internal_daily_gaps": symbols_with_internal_gaps,
-        "edge_or_lifecycle_daily_gaps": edge_gaps,
-        "benchmark_warmup_complete": True,
-    }
+    return qualify_historical_screen_start(
+        database,
+        config,
+        requested_start,
+        requested_end,
+        allow_start_shift=True,
+    )
 
 
 def discover_intraday_candidate_sessions(

@@ -504,14 +504,34 @@ def test_preflight_daily_failure_stops_candidate_discovery_and_recommends_sync(
     report = SimpleNamespace(
         bars_present=0,
         qualification_start=date(2022, 10, 24),
+        symbols_with_internal_gaps=0,
+        symbols_with_edge_or_lifecycle_gaps=0,
         internal_missing_sessions=0,
+        edge_or_lifecycle_missing_sessions=0,
+        provider_range_verified_symbols=0,
+        structurally_complete_symbols=0,
+        coverage_metadata_mismatches=0,
         model_dump=lambda **_: {"bars_present": 0},
     )
     database = SimpleNamespace(
         list_tradable_companies=lambda: [],
-        bar_date_bounds=lambda: (None, None),
+        unresolved_sec_identity_conflict_symbols=lambda: set(),
+        bar_sessions=lambda *_: [],
+        sync_values=lambda *_: {},
     )
     monkeypatch.setattr(preflight_module, "qualify_daily_history", lambda *a, **k: report)
+    monkeypatch.setattr(
+        preflight_module,
+        "qualify_historical_screen_start",
+        lambda *a, **k: {
+            "failure_reasons": ["SPY benchmark warmup is missing"],
+            "benchmark_warmup_complete": False,
+            "benchmark_missing_warmup_sessions": 300,
+            "screenable_symbol_count_at_start": 0,
+            "symbols_with_complete_initial_warmup": 0,
+            "symbols_rejected_initially_for_insufficient_history": 0,
+        },
+    )
     monkeypatch.setattr(
         preflight_module,
         "prepare_strategy_comparison",
@@ -528,6 +548,7 @@ def test_preflight_daily_failure_stops_candidate_discovery_and_recommends_sync(
     assert output["dataset_ready_for_local_compare"] is False
     assert "sync-daily-history" in output["recommended_manual_sync_daily_history_command"]
     assert candidates["candidate_symbols"] == []
+    assert candidates["discovery_complete"] is False
 
 
 def test_compare_preflight_cli_never_invokes_network_or_backtest(

@@ -70,8 +70,11 @@ class DataQualificationReport(BaseModel):
     invalid_bars: int = Field(ge=0)
     duplicate_bars: int = Field(ge=0)
     symbols_with_internal_gaps: int = Field(ge=0)
+    symbols_with_edge_or_lifecycle_gaps: int = Field(default=0, ge=0)
     internal_missing_sessions: int = Field(ge=0)
     edge_or_lifecycle_missing_sessions: int = Field(ge=0)
+    provider_range_verified_symbols: int = Field(default=0, ge=0)
+    structurally_complete_symbols: int = Field(default=0, ge=0)
     coverage_metadata_mismatches: int = Field(ge=0)
     unresolved_gaps: int = Field(ge=0)
     detail_records: int = Field(ge=0)
@@ -168,6 +171,9 @@ def _qualify(
     metadata_mismatches = 0
     internal_missing_sessions = 0
     edge_missing_sessions = 0
+    symbols_with_edge_gaps = 0
+    provider_verified_symbols = 0
+    structurally_complete_symbols = 0
     duplicate_bars = 0
     total_extra_bars = 0
     total_invalid_bars = 0
@@ -213,6 +219,7 @@ def _qualify(
             ]
             symbol_missing_indexes: list[int] = []
             symbol_has_gap = False
+            symbol_has_edge_gap = False
             symbol_has_missing = False
             first_present = min(present_indexes) if present_indexes else None
             last_present = max(present_indexes) if present_indexes else None
@@ -241,6 +248,7 @@ def _qualify(
                         symbol_has_gap = True
                     else:
                         edge_missing_sessions += 1
+                        symbol_has_edge_gap = True
                 elif missing:
                     structural = QualificationStatus.PARTIAL_SESSION
                     partial_sessions += 1
@@ -295,9 +303,13 @@ def _qualify(
                     detail_records += 1
                     _retain_detail(details, detail, detail_limit)
             symbols_with_internal_gaps += int(symbol_has_gap)
-            if timeframe is BarTimeframe.DAY_1 and _metadata_claims_complete(
+            symbols_with_edge_gaps += int(symbol_has_edge_gap)
+            if not symbol_has_missing:
+                structurally_complete_symbols += 1
+            if timeframe is BarTimeframe.DAY_1 and provider_range_verified(
                 coverage_state.get(symbol), qualification_start, requested_end
             ):
+                provider_verified_symbols += 1
                 metadata_mismatches += int(symbol_has_missing)
 
         orphan_keys = sorted(
@@ -324,11 +336,16 @@ def _qualify(
             extra_or_invalid_sessions += 1
 
     details.sort(key=lambda item: (item.symbol, item.session, item.status.value))
-    warnings = ()
+    warnings: list[str] = []
     if unknown_sessions:
-        warnings = (
+        warnings.append(
             "Missing intraday timestamps are structural gaps only; their market/provider cause "
-            "is unresolved and no synthetic bars were created.",
+            "is unresolved and no synthetic bars were created."
+        )
+    if metadata_mismatches:
+        warnings.append(
+            "Daily provider-range verification records a successfully checked interval; it does "
+            "not assert that every symbol has a stored bar for every XNYS session."
         )
     return DataQualificationReport(
         timeframe=timeframe,
@@ -351,14 +368,17 @@ def _qualify(
         invalid_bars=total_invalid_bars,
         duplicate_bars=duplicate_bars,
         symbols_with_internal_gaps=symbols_with_internal_gaps,
+        symbols_with_edge_or_lifecycle_gaps=symbols_with_edge_gaps,
         internal_missing_sessions=internal_missing_sessions,
         edge_or_lifecycle_missing_sessions=edge_missing_sessions,
+        provider_range_verified_symbols=provider_verified_symbols,
+        structurally_complete_symbols=structurally_complete_symbols,
         coverage_metadata_mismatches=metadata_mismatches,
         unresolved_gaps=missing_sessions + unknown_sessions,
         detail_records=detail_records,
         details_truncated=detail_records > detail_limit,
         details=tuple(details[:detail_limit]),
-        warnings=warnings,
+        warnings=tuple(warnings),
     )
 
 
@@ -421,7 +441,21 @@ def _valid_raw_bar(row: tuple[Any, ...]) -> bool:
     )
 
 
-def _metadata_claims_complete(value: Any, start: date, end: date) -> bool:
+def provider_range_verified(
+    value: Any,
+    start: date,
+    end: date,
+    *,
+    feed: str | None = None,
+    adjustment: str | None = None,
+) -> bool:
+    """Return whether sync metadata says the provider interval was checked successfully.
+
+    This deliberately says nothing about per-session structural completeness: a
+    provider can return no native bar before listing, after delisting, or on another
+    symbol-specific absent session while the requested interval was still checked.
+    """
+
     if not isinstance(value, dict):
         return False
     try:
@@ -429,7 +463,12 @@ def _metadata_claims_complete(value: Any, start: date, end: date) -> bool:
         marked_end = datetime.fromisoformat(str(value["end_exclusive"])).date()
     except (KeyError, TypeError, ValueError):
         return False
-    return marked_start <= start and marked_end >= end + timedelta(days=1)
+    return (
+        marked_start <= start
+        and marked_end >= end + timedelta(days=1)
+        and (feed is None or value.get("feed") == feed)
+        and (adjustment is None or value.get("adjustment") == adjustment)
+    )
 
 
 def _retain_detail(

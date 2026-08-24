@@ -168,14 +168,21 @@ für historische `--as-of`-Screens. Ein späterer SEC-Sync löscht sie automatis
 persistierte und aktuelle Zuordnung wieder übereinstimmen oder kein alter Company-Owner mehr unter
 dem Symbol gespeichert ist.
 
-Der tägliche SEC-Lauf lädt zunächst den offiziellen, ungefähr 2–3 MiB großen XBRL-Index des
-aktuellen Quartals. Er vergleicht dessen Accessions mit dem lokalen Zustand und ruft Submissions und
-Company Facts nur für neue, vom Parser unterstützte 10-K-/10-Q-/20-F-/40-F-/Amendment-Filings ab.
-8-K-/6-K-Filings lösen weiterhin keinen Download aus, weil der Parser daraus keine
-Screening-Facts übernimmt. Verpasste Läufe werden über archivierte Quartalsindizes aufgeholt. Der
-globale Cursor wird nur nach einem fehlerfreien Lauf vorgeschoben; ein unvollständiger oder
-fehlerhafter Index bricht sicher ab. Der aktuelle SEC-Index kann bis zum nächsten Geschäftstag
-hinter einem gerade eingereichten Filing liegen, verliert das Filing aber nicht:
+Der inkrementelle SEC-Lauf entdeckt Änderungen deterministisch über die von SEC in den
+quartalsweisen `daily-index/.../index.json`-Verzeichnissen tatsächlich veröffentlichten
+`master.YYYYMMDD.idx`-Dateien. Wochenenden, Feiertage und ein noch nicht veröffentlichter aktueller
+Tag benötigen keine Indexdatei. Der Cursor `sec_change_detection/daily_master_index` bedeutet
+„neuester erfolgreich verarbeiteter verfügbarer Daily-Master-Index“ – nicht das aktuelle Datum und
+nicht einen `Last Data Received`-Header. Der unzuverlässige Header des rollierenden Root-
+`full-index/xbrl.idx` wird für inkrementelle Änderungserkennung nicht mehr verwendet.
+
+Ein fester kleiner Überlappungszeitraum liest aktuelle Daily-Master-Dateien absichtlich erneut.
+Persistierte Accessions machen das idempotent: Submissions und Company Facts werden nur für CIKs mit
+neuen, vom Parser unterstützten 10-K-/10-Q-/20-F-/40-F-/Amendment-Filings oder für fällige
+Negative-Cache-Wiederholungen geladen. 8-K-/6-K-Filings lösen weiterhin keinen Download aus. Erst
+nach vollständig erfolgreicher Verzeichnis-/Indexverarbeitung und erfolgreichen Company-Updates
+rückt der Cursor monoton bis zur letzten sicher verarbeiteten verfügbaren Indexdatei vor; ein
+gelisteter, aber nicht abrufbarer oder nicht sicher parsebarer Index lässt ihn unverändert:
 
 ```bash
 python -m trading_system.cli sync --incremental
@@ -473,7 +480,8 @@ Exit. Provider-native Lücken werden weder synthetisiert noch aufgefüllt oder �
 ohne einen Backtest zu starten. Es verwendet dieselbe Vergleichsvorbereitung und PIT-
 Kandidatenermittlung wie `compare-strategies`, schreibt einen maschinenlesbaren JSON-Bericht sowie
 einen mit `sync-intraday --candidates-report` kompatiblen Kandidatenbericht und nennt erforderliche
-manuelle Daily-/Intraday-Sync-Befehle, führt sie aber nicht aus:
+manuelle Daily-/Intraday-Sync-Befehle, führt sie aber nicht aus. Der Preflight erzeugt keine
+synthetischen Bars und öffnet weder Alpaca- noch SEC-/andere Netzwerkverbindungen:
 
 ```powershell
 python -m trading_system.cli compare-preflight `
@@ -482,6 +490,27 @@ python -m trading_system.cli compare-preflight `
   --include research-intraday-hybrid `
   --output-stem intraday_hybrid_preflight_2024-01-02_2026-08-12
 ```
+
+Die globale Daily-Startfreigabe verlangt die exakte konfigurierte XNYS-Warmup-Historie für den
+lokalen SPY-Referenzwert, eine lokal repräsentierte letzte Research-Session und mindestens ein
+wirklich screenbares, nicht quarantänisiertes Universe-Mitglied am ersten Screen. Fehlende Historie
+eines einzelnen Symbols bleibt dagegen die normale kausale PIT-Ablehnung
+`insufficient_market_history`; ein späteres IPO, Delisting-/Relisting-Rand oder andere
+Lifecycle-Abwesenheit macht nicht das gesamte Research-Fenster unbrauchbar. Interne Lücken,
+Lifecycle-/Edge-Lücken und Coverage-Metadaten-Widersprüche bleiben im Report sichtbar, werden aber
+nur dann zu einem globalen Blocker, wenn sie die Benchmark-/Startfreigabe oder die lokale
+Periodenrepräsentation tatsächlich verhindern. Bars werden weder aufgefüllt noch interpoliert oder
+vorwärts fortgeschrieben.
+
+`provider_range_verified` bedeutet ausschließlich, dass der Provider das angeforderte Intervall
+erfolgreich geprüft hat; `structural_session_complete` bedeutet separat, dass für jede erwartete
+XNYS-Session ein nativer Bar gespeichert ist. Eine verifizierte Range kann deshalb legitime leere
+Lifecycle-/Provider-Antworten enthalten. Der Preflight empfiehlt denselben Daily-Backfill nicht
+automatisch erneut, wenn eine solche bereits verifizierte Randabwesenheit die einzige Diagnose ist.
+Erst `candidate_discovery.status = COMPLETE` macht eine leere Kandidatenliste eindeutig zu einem
+erfolgreichen Nullergebnis und erlaubt eine kandidatengesteuerte Intraday-Qualifikation. Bei
+fehlender nativer 15-Minuten-Coverage nennt der Report anschließend `sync-intraday` mit dem
+generierten `--candidates-report`, nicht mit einem Full-Universe-Schalter.
 
 Research-Vergleiche rechnen standardmäßig nur das konfigurierte Baseline-Kostenmodell. Erst das
 explizite Flag `--cost-stress` aktiviert 2X-/3X-Slippage, Commission- und vorhandene

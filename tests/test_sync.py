@@ -10,6 +10,8 @@ from trading_system.data.sec_client import SecResourceNotFound
 from trading_system.data.sync import (
     DataSynchronizer,
     classify_unmapped_asset,
+    parse_daily_index_directory,
+    parse_daily_master_index,
     parse_filing_index,
 )
 from trading_system.data.xbrl_parser import parse_company_facts
@@ -263,6 +265,17 @@ def _master_index(*filings: tuple[str, str, str], received: str = "August 12, 20
     return "\n".join(lines)
 
 
+def _daily_directory(*index_dates: date, extra_names: tuple[str, ...] = ()) -> dict:
+    return {
+        "directory": {
+            "item": [
+                *({"name": f"master.{item:%Y%m%d}.idx"} for item in index_dates),
+                *({"name": name} for name in extra_names),
+            ]
+        }
+    }
+
+
 class IncrementalSec:
     def __init__(self) -> None:
         self.accession = "0001"
@@ -272,7 +285,8 @@ class IncrementalSec:
         self.fail_symbols: set[str] = set()
         self.unavailable_submissions: set[str] = set()
         self.unavailable_companyfacts: set[str] = set()
-        self.index_calls: list[tuple[int, int, bool]] = []
+        self.directory_calls: list[tuple[int, int]] = []
+        self.index_calls: list[tuple[int, int, str]] = []
 
     def ticker_to_cik(self) -> dict[str, str]:
         self.ticker_calls += 1
@@ -294,8 +308,19 @@ class IncrementalSec:
         payload["cik"] = int(cik)
         return payload
 
-    def filing_index(self, year: int, quarter: int, *, current: bool) -> str:
-        self.index_calls.append((year, quarter, current))
+    def daily_master_index_directory(self, year: int, quarter: int) -> dict:
+        self.directory_calls.append((year, quarter))
+        available = (datetime.now(UTC).date(), date(2026, 8, 12))
+        return _daily_directory(
+            *(
+                item
+                for item in available
+                if item.year == year and (item.month - 1) // 3 + 1 == quarter
+            )
+        )
+
+    def daily_master_index(self, year: int, quarter: int, filing_date: str) -> str:
+        self.index_calls.append((year, quarter, filing_date))
         return _master_index(
             ("0000000002", "10-Q", self.accession),
             ("0000001234", "10-Q", self.accession),
@@ -321,8 +346,8 @@ class IdentityConflictSec(IncrementalSec):
             "GOODZ": self.following_cik,
         }
 
-    def filing_index(self, year: int, quarter: int, *, current: bool) -> str:
-        self.index_calls.append((year, quarter, current))
+    def daily_master_index(self, year: int, quarter: int, filing_date: str) -> str:
+        self.index_calls.append((year, quarter, filing_date))
         return _master_index(
             (self.proposed_cik, "10-Q", self.accession),
             (self.preceding_cik, "10-Q", self.accession),
@@ -424,7 +449,7 @@ def test_stale_alias_cannot_rename_an_existing_cik(tmp_path) -> None:
     database.set_sync_value("sec_accessions", "0000001234", ["old-accession"])
     sec = IncrementalSec()
     sec.ticker_to_cik = lambda: {"NEW-A": "0000001234"}  # type: ignore[method-assign]
-    sec.filing_index = lambda *_args, **_kwargs: _master_index(  # type: ignore[method-assign]
+    sec.daily_master_index = lambda *_args, **_kwargs: _master_index(  # type: ignore[method-assign]
         ("0000001234", "10-Q", "new-accession")
     )
 
@@ -456,7 +481,9 @@ def test_incremental_sec_skips_unchanged_companyfacts_and_is_idempotent(tmp_path
     assert len(sec.index_calls) == 2
     assert second["submissions_requests"] == 0
     assert second["companyfacts_requests"] == 0
-    assert second["sec_requests_total"] == 2
+    assert second["sec_requests_total"] == 3
+    assert second["daily_index_directory_requests"] == 1
+    assert second["daily_master_index_requests"] == 1
     assert len(database.facts_available_as_of("TEST", date(2024, 5, 6))) == 1
     assert database.cached_sec_payload("0000001234", "companyfacts", max_age=None) is None
     assert database.cached_sec_payload("0000001234", "submissions", max_age=None) is None
@@ -575,7 +602,7 @@ def test_incremental_sec_failure_is_recorded_and_other_companies_continue(tmp_pa
     assert result["errors"] == 1
     assert result["request_failures"] == 1
     assert database.dataset_states()["sec"]["status"] == "partial"
-    assert database.sync_value("sec_change_detection", "xbrl_index") is None
+    assert database.sync_value("sec_change_detection", "daily_master_index") is None
 
 
 def test_companyfacts_not_found_is_expected_and_negative_cached(tmp_path, caplog) -> None:
@@ -692,6 +719,91 @@ def test_xbrl_index_parser_keeps_parser_supported_forms_and_rejects_malformed() 
         parse_filing_index("not an EDGAR index")
 
 
+def test_daily_directory_parser_accepts_only_valid_master_files_in_requested_quarter() -> None:
+    payload = _daily_directory(
+        date(2026, 7, 2),
+        date(2026, 7, 1),
+        date(2026, 7, 1),
+        extra_names=(
+            "company.20260701.idx",
+            "form.20260701.idx",
+            "crawler.20260701.idx",
+            "sitemap.20260701.xml",
+            "master.20260230.idx",
+            "master.20260401.idx.gz",
+            "master.20261001.idx",
+            "master.20250701.idx",
+        ),
+    )
+    payload["directory"]["item"].append(
+        {"name": "master.20260703.idx", "type": "dir"}
+    )
+    parsed = parse_daily_index_directory(
+        payload, 2026, 3
+    )
+
+    assert [item.filename for item in parsed] == [
+        "master.20260701.idx",
+        "master.20260702.idx",
+    ]
+    assert [item.index_date for item in parsed] == [date(2026, 7, 1), date(2026, 7, 2)]
+
+
+def test_daily_directory_parser_rejects_unsafe_metadata_shape() -> None:
+    with pytest.raises(ValueError, match="item list"):
+        parse_daily_index_directory({"directory": {}}, 2026, 3)
+    with pytest.raises(ValueError, match="malformed item"):
+        parse_daily_index_directory({"directory": {"item": [None]}}, 2026, 3)
+
+
+def test_daily_master_parser_extracts_relevant_rows_and_canonical_accessions() -> None:
+    payload = _master_index(
+        ("1234", "10-Q", "0000001234-26-000001"),
+        ("1234", "8-K", "0000001234-26-000002"),
+        ("42", "10-K/A", "0000000042-26-000003"),
+        ("1234", "10-Q", "0000001234-26-000001"),
+    )
+
+    parsed = parse_daily_master_index(payload, date(2026, 8, 12))
+
+    assert parsed.index_date == date(2026, 8, 12)
+    assert parsed.accessions_by_cik == {
+        "0000000042": {"0000000042-26-000003"},
+        "0000001234": {"0000001234-26-000001"},
+    }
+    assert {(item.cik, item.form, item.filed, item.filename) for item in parsed.entries} == {
+        (
+            "0000000042",
+            "10-K/A",
+            date(2026, 8, 12),
+            "edgar/data/42/0000000042-26-000003.txt",
+        ),
+        (
+            "0000001234",
+            "10-Q",
+            date(2026, 8, 12),
+            "edgar/data/1234/0000001234-26-000001.txt",
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        "1234|Missing fields|10-Q|2026-08-12",
+        "not-a-cik|Test Corp|10-Q|2026-08-12|edgar/data/1234/a.txt",
+        "1234|Test Corp|10-Q|not-a-date|edgar/data/1234/a.txt",
+        "1234|Test Corp|10-Q|2026-08-12|edgar/data/9999/a.txt",
+    ],
+)
+def test_daily_master_parser_fails_closed_for_malformed_relevant_rows(row: str) -> None:
+    payload = "\n".join(
+        ["CIK|Company Name|Form Type|Date Filed|Filename", "-" * 80, row]
+    )
+    with pytest.raises(ValueError, match="Malformed SEC daily master row"):
+        parse_daily_master_index(payload, date(2026, 8, 12))
+
+
 def test_malformed_change_source_fails_without_advancing_cursor_or_fetching_companies(
     tmp_path,
 ) -> None:
@@ -699,17 +811,17 @@ def test_malformed_change_source_fails_without_advancing_cursor_or_fetching_comp
     database.initialize()
     _seed_assets(database, "TEST")
     sec = IncrementalSec()
-    sec.filing_index = lambda *_args, **_kwargs: "malformed"  # type: ignore[method-assign]
+    sec.daily_master_index = lambda *_args, **_kwargs: "malformed"  # type: ignore[method-assign]
     sync = DataSynchronizer(database, None, sec)  # type: ignore[arg-type]
 
     with pytest.raises(ValueError, match="required headers"):
         sync.sync_sec_incremental()
 
     assert sec.submission_calls == sec.fact_calls == 0
-    assert database.sync_value("sec_change_detection", "xbrl_index") is None
+    assert database.sync_value("sec_change_detection", "daily_master_index") is None
 
 
-def test_cross_quarter_cursor_fetches_archived_and_current_indexes(tmp_path) -> None:
+def test_cross_quarter_cursor_discovers_and_fetches_daily_master_indexes(tmp_path) -> None:
     database = Database(tmp_path / "catchup.sqlite3")
     database.initialize()
     _seed_assets(database, "TEST")
@@ -719,13 +831,20 @@ def test_cross_quarter_cursor_fetches_archived_and_current_indexes(tmp_path) -> 
     )
     sec = IncrementalSec()
 
-    def filing_index(year: int, quarter: int, *, current: bool) -> str:
-        sec.index_calls.append((year, quarter, current))
-        if current:
-            return _master_index(("0000001234", "10-Q", "q2-accession"), received="April 1, 2026")
-        return _master_index(("0000001234", "10-K", "q1-accession"), received="March 31, 2026")
+    def directory(year: int, quarter: int) -> dict:
+        sec.directory_calls.append((year, quarter))
+        return _daily_directory(
+            date(2026, 3, 31) if quarter == 1 else date(2026, 4, 1)
+        )
 
-    sec.filing_index = filing_index  # type: ignore[method-assign]
+    def master_index(year: int, quarter: int, filing_date: str) -> str:
+        sec.index_calls.append((year, quarter, filing_date))
+        if filing_date == "20260401":
+            return _master_index(("0000001234", "10-Q", "q2-accession"))
+        return _master_index(("0000001234", "10-K", "q1-accession"))
+
+    sec.daily_master_index_directory = directory  # type: ignore[method-assign]
+    sec.daily_master_index = master_index  # type: ignore[method-assign]
     sec.accession = "q2-accession"
     sync = DataSynchronizer(
         database,
@@ -736,16 +855,21 @@ def test_cross_quarter_cursor_fetches_archived_and_current_indexes(tmp_path) -> 
 
     result = sync.sync_sec_incremental()
 
-    assert sec.index_calls == [(2026, 1, False), (2026, 2, True)]
-    assert result["change_detection_requests"] == 2
+    assert sec.directory_calls == [(2026, 1), (2026, 2)]
+    assert sec.index_calls == [(2026, 1, "20260331"), (2026, 2, "20260401")]
+    assert result["change_detection_requests"] == 4
+    assert result["legacy_cursor_bootstrap"] is True
     assert result["companies_checked"] == 1
     assert set(database.sync_value("sec_accessions", "0000001234")) >= {
         "old-accession",
         "q1-accession",
         "q2-accession",
     }
+    assert database.sync_value("sec_change_detection", "daily_master_index") == {
+        "last_processed_date": "2026-04-01"
+    }
     assert database.sync_value("sec_change_detection", "xbrl_index") == {
-        "last_data_received": "2026-04-01"
+        "last_data_received": "2026-03-30"
     }
 
 
@@ -798,7 +922,7 @@ def test_sync_reports_unmapped_categories_and_dot_hyphen_ticker_alias(tmp_path) 
         "TEST": "0000001234",
         "BRK-B": "0000009999",
     }
-    sec.filing_index = lambda *_args, **_kwargs: _master_index(  # type: ignore[method-assign]
+    sec.daily_master_index = lambda *_args, **_kwargs: _master_index(  # type: ignore[method-assign]
         ("0000001234", "10-Q", "0001"),
         ("0000009999", "10-Q", "0001"),
     )

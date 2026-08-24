@@ -6,6 +6,7 @@ import logging
 import time
 from collections import Counter
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 import requests
@@ -131,6 +132,39 @@ class SecClient:
             else f"edgar/full-index/{year}/QTR{quarter}/xbrl.idx"
         )
         return self._get_text(f"{self.ARCHIVES_BASE}/Archives/{path}", resource_type="filing_index")
+
+    def daily_master_index_directory(self, year: int, quarter: int) -> dict[str, Any]:
+        """Return SEC metadata for one daily-index quarter through the shared transport."""
+
+        if year < 1994:
+            raise ValueError("daily master indexes are unavailable before 1994")
+        if quarter not in {1, 2, 3, 4}:
+            raise ValueError("quarter must be within 1..4")
+        return self._get_json(
+            f"{self.ARCHIVES_BASE}/Archives/edgar/daily-index/{year}/QTR{quarter}/index.json",
+            resource_type="daily_index_directory",
+        )
+
+    def daily_master_index(self, year: int, quarter: int, filing_date: str) -> str:
+        """Fetch one explicitly discovered SEC daily master index."""
+
+        if year < 1994:
+            raise ValueError("daily master indexes are unavailable before 1994")
+        if quarter not in {1, 2, 3, 4}:
+            raise ValueError("quarter must be within 1..4")
+        if len(filing_date) != 8 or not filing_date.isdigit():
+            raise ValueError("filing_date must use YYYYMMDD")
+        try:
+            parsed_date = datetime.strptime(filing_date, "%Y%m%d").date()
+        except ValueError as exc:
+            raise ValueError("filing_date must be a valid calendar date") from exc
+        if parsed_date.year != year or (parsed_date.month - 1) // 3 + 1 != quarter:
+            raise ValueError("filing_date must belong to the requested year and quarter")
+        return self._get_text(
+            f"{self.ARCHIVES_BASE}/Archives/edgar/daily-index/"
+            f"{year}/QTR{quarter}/master.{filing_date}.idx",
+            resource_type="daily_master_index",
+        )
 
     def ticker_to_cik(self) -> dict[str, str]:
         result: dict[str, str] = {}

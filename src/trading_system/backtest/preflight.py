@@ -15,6 +15,11 @@ from trading_system.backtest.engine import (
     prepare_strategy_comparison,
 )
 from trading_system.backtest.first_hour_pullback import plan_first_hour_pullback
+from trading_system.backtest.qualification import (
+    BENCHMARK_SYMBOL,
+    IDENTITY_CONFLICT_SAMPLE_LIMIT,
+    qualify_historical_screen_start,
+)
 from trading_system.backtest.report import _atomic_text
 from trading_system.backtest.research_registry import (
     comparison_strategy_label,
@@ -27,7 +32,10 @@ from trading_system.data.market_sessions import (
     required_daily_warmup_sessions,
     trading_sessions_between,
 )
-from trading_system.data.qualification import qualify_daily_history
+from trading_system.data.qualification import (
+    provider_range_verified,
+    qualify_daily_history,
+)
 from trading_system.models.backtest import StrategyComparisonKind
 from trading_system.models.market_data import BarTimeframe, DailyBar
 
@@ -49,27 +57,52 @@ def build_compare_preflight(
         comparison_strategy_label(comparison_kind, variant, preset)
         for variant, preset in runs
     ]
-    symbols = sorted(
-        {company.symbol for company in database.list_tradable_companies()} | {"SPY"}
-    )
+    company_symbols = {company.symbol for company in database.list_tradable_companies()}
+    identity_conflicts = database.unresolved_sec_identity_conflict_symbols()
+    excluded_conflicts = sorted((company_symbols - {BENCHMARK_SYMBOL}) & identity_conflicts)
+    symbols_before_exclusions = company_symbols | {BENCHMARK_SYMBOL}
+    symbols = sorted((company_symbols - identity_conflicts) | {BENCHMARK_SYMBOL})
+    required_warmup = required_daily_warmup_sessions(config)
     daily = qualify_daily_history(
         database,
         symbols,
         start,
         end,
-        warmup_sessions=required_daily_warmup_sessions(config),
+        warmup_sessions=required_warmup,
     )
-    first_daily, last_daily = database.bar_date_bounds()
+    start_qualification = qualify_historical_screen_start(
+        database,
+        config,
+        start,
+        end,
+        allow_start_shift=False,
+    )
     official = trading_sessions_between(start, end)
     required_last = official[-1] if official else end
-    daily_ready = bool(
-        daily.bars_present
-        and first_daily is not None
-        and first_daily <= daily.qualification_start
-        and last_daily is not None
-        and last_daily >= required_last
-        and daily.internal_missing_sessions == 0
-    )
+    local_requested_sessions = set(database.bar_sessions(start, end))
+    requested_period_end_present = required_last in local_requested_sessions
+    global_failure_reasons = list(start_qualification["failure_reasons"])
+    if not requested_period_end_present:
+        global_failure_reasons.append(
+            f"required final XNYS session {required_last} is not represented by any local Daily bar"
+        )
+    daily_ready = not global_failure_reasons
+    daily_global_readiness = {
+        "required_warmup_sessions": required_warmup,
+        "required_warmup_start": daily.qualification_start.isoformat(),
+        "benchmark_symbol": BENCHMARK_SYMBOL,
+        "benchmark_warmup_complete": start_qualification["benchmark_warmup_complete"],
+        "benchmark_missing_warmup_sessions": start_qualification[
+            "benchmark_missing_warmup_sessions"
+        ],
+        "requested_period_end_session": required_last.isoformat(),
+        "requested_period_end_present": requested_period_end_present,
+        "screenable_symbol_count_at_start": start_qualification[
+            "screenable_symbol_count_at_start"
+        ],
+        "ready": daily_ready,
+        "failure_reasons": global_failure_reasons,
+    }
     preparation: StrategyComparisonPreparation | None = None
     discovery_error: str | None = None
     if daily_ready:
@@ -83,27 +116,58 @@ def build_compare_preflight(
             )
         except ValueError as exc:
             discovery_error = str(exc)
-            daily_ready = False
 
     intraday = (
         _intraday_preflight(database, config, preparation)
         if preparation is not None
         else _empty_intraday_preflight(config)
     )
-    ready = bool(daily_ready and intraday["intraday_ready"])
-    required_daily_command = None
-    if not daily_ready:
-        required_daily_command = (
-            ".\\.venv\\Scripts\\python.exe -m trading_system.cli sync-daily-history "
-            f"--start {daily.qualification_start} --end {end}"
-        )
+    discovery_status = "COMPLETE" if preparation is not None else "NOT_COMPLETE"
+    ready = bool(preparation is not None and daily_ready and intraday["intraday_ready"])
+    coverage_state = database.sync_values("daily_history_coverage")
+    required_daily_command, required_daily_reason = _daily_sync_recommendation(
+        daily_qualification_start=daily.qualification_start,
+        end=end,
+        daily_global_readiness=daily_global_readiness,
+        discovery_error=discovery_error,
+        coverage_state=coverage_state,
+        qualification_symbols=symbols,
+        provider_feed=config.universe.market_data_feed,
+        provider_adjustment=config.universe.market_data_adjustment,
+    )
     candidate_report = _candidate_report(
         start,
         end,
         comparison_kind,
         preparation,
         intraday,
+        discovery_error,
     )
+    candidate_discovery = {
+        "status": discovery_status,
+        "candidate_symbols": intraday["candidate_symbols"],
+        "candidate_sessions": intraday["candidate_sessions"],
+        "discovery_error": discovery_error,
+    }
+    daily_symbol_diagnostics = {
+        "symbols_considered": len(symbols_before_exclusions),
+        "identity_conflicts_excluded": len(excluded_conflicts),
+        "identity_conflict_symbols": excluded_conflicts[:IDENTITY_CONFLICT_SAMPLE_LIMIT],
+        "qualification_symbol_count_after_exclusions": len(symbols),
+        "symbols_with_complete_initial_warmup": start_qualification[
+            "symbols_with_complete_initial_warmup"
+        ],
+        "symbols_rejected_initially_for_insufficient_history": start_qualification[
+            "symbols_rejected_initially_for_insufficient_history"
+        ],
+        "symbols_with_internal_gaps": daily.symbols_with_internal_gaps,
+        "internal_missing_sessions": daily.internal_missing_sessions,
+        "symbols_with_edge_or_lifecycle_gaps": daily.symbols_with_edge_or_lifecycle_gaps,
+        "edge_or_lifecycle_missing_sessions": daily.edge_or_lifecycle_missing_sessions,
+        "provider_range_verified_symbols": daily.provider_range_verified_symbols,
+        "structurally_complete_symbols": daily.structurally_complete_symbols,
+        "coverage_metadata_mismatches": daily.coverage_metadata_mismatches,
+    }
     report: dict[str, Any] = {
         "report_type": "local_compare_preflight",
         "local_only": True,
@@ -113,11 +177,21 @@ def build_compare_preflight(
         "required_daily_history_warmup_start": daily.qualification_start.isoformat(),
         "resolved_research_family": comparison_kind.value,
         "strategies": labels,
-        "daily_pit_candidate_discovery_status": (
-            "COMPLETE" if preparation is not None else "NOT_COMPLETE"
-        ),
+        "daily_pit_candidate_discovery_status": discovery_status,
         "daily_candidate_discovery_error": discovery_error,
+        "candidate_discovery": candidate_discovery,
         "daily_qualification": daily.model_dump(mode="json"),
+        "daily_global_readiness": daily_global_readiness,
+        "daily_symbol_diagnostics": daily_symbol_diagnostics,
+        "daily_coverage_semantics": {
+            "provider_range_verified": (
+                "the provider interval was checked successfully, including valid empty responses"
+            ),
+            "structural_session_complete": (
+                "a native Daily bar is stored for every expected XNYS session"
+            ),
+            "coverage_metadata_mismatches_are_diagnostic": True,
+        },
         "daily_ready": daily_ready,
         "intraday": intraday,
         "dataset_ready_for_local_compare": ready,
@@ -126,6 +200,7 @@ def build_compare_preflight(
             "note": "Preflight does not simulate entries or exits.",
         },
         "recommended_manual_sync_daily_history_command": required_daily_command,
+        "recommended_manual_sync_daily_history_reason": required_daily_reason,
         "recommended_manual_sync_intraday_command": None,
         "methodology": {
             "period_label": "historical_extension",
@@ -135,6 +210,9 @@ def build_compare_preflight(
                 "research, not automatically out-of-sample evidence."
             ),
             "synthetic_bars": False,
+            "per_symbol_insufficient_history_policy": (
+                "production PIT screening rejects the symbol for that screen"
+            ),
             "automatic_strategy_promotion": False,
         },
     }
@@ -159,7 +237,11 @@ def export_compare_preflight(
     if existing:
         raise FileExistsError(f"Compare preflight export already exists: {existing[0]}")
     intraday_command = None
-    if not report["intraday"]["intraday_ready"] and candidate_report["candidate_symbols"]:
+    if (
+        candidate_report["discovery_complete"]
+        and not report["intraday"]["intraday_ready"]
+        and candidate_report["candidate_symbols"]
+    ):
         intraday_command = (
             ".\\.venv\\Scripts\\python.exe -m trading_system.cli sync-intraday "
             f"--start {report['requested_period']['start']} "
@@ -170,6 +252,81 @@ def export_compare_preflight(
     _atomic_text(paths["preflight"], json.dumps(report, indent=2))
     _atomic_text(paths["intraday_candidates"], json.dumps(candidate_report, indent=2))
     return paths
+
+
+def _daily_sync_recommendation(
+    *,
+    daily_qualification_start: date,
+    end: date,
+    daily_global_readiness: dict[str, Any],
+    discovery_error: str | None,
+    coverage_state: dict[str, Any],
+    qualification_symbols: list[str],
+    provider_feed: str,
+    provider_adjustment: str,
+) -> tuple[str | None, str]:
+    """Recommend a Daily fetch only when it can address the blocking condition."""
+
+    command = (
+        ".\\.venv\\Scripts\\python.exe -m trading_system.cli sync-daily-history "
+        f"--start {daily_qualification_start} --end {end}"
+    )
+    if not daily_global_readiness["benchmark_warmup_complete"]:
+        return command, "SPY is missing one or more required benchmark warmup sessions."
+    if not daily_global_readiness["requested_period_end_present"]:
+        return command, "The required final research session is not represented locally."
+    if daily_global_readiness["screenable_symbol_count_at_start"] == 0:
+        unverified = [
+            symbol
+            for symbol in qualification_symbols
+            if not provider_range_verified(
+                coverage_state.get(symbol),
+                daily_qualification_start,
+                end,
+                feed=provider_feed,
+                adjustment=provider_adjustment,
+            )
+        ]
+        if unverified:
+            return (
+                command,
+                "No eligible symbol has the required initial history and the provider range has "
+                f"not been verified for {len(unverified)} qualification symbols.",
+            )
+        return (
+            None,
+            "No useful Daily re-sync is known: required provider ranges are already verified; "
+            "lifecycle/provider-native absence is not repairable by requesting the same range.",
+        )
+    if discovery_error is not None and _indicates_missing_daily_history(discovery_error):
+        return (
+            command,
+            f"Candidate preparation reported unavailable Daily history: {discovery_error}",
+        )
+    if discovery_error is not None:
+        return (
+            None,
+            "Candidate preparation failed, but its error does not identify a Daily range that a "
+            f"re-sync can repair: {discovery_error}",
+        )
+    return (
+        None,
+        "Daily global readiness is satisfied; lifecycle, internal-gap, and coverage-metadata "
+        "diagnostics do not by themselves require a re-sync.",
+    )
+
+
+def _indicates_missing_daily_history(error: str) -> bool:
+    normalized = error.casefold()
+    return any(
+        phrase in normalized
+        for phrase in (
+            "daily history",
+            "market history",
+            "local market sessions",
+            "local bar coverage",
+        )
+    )
 
 
 def _intraday_preflight(
@@ -300,6 +457,7 @@ def _candidate_report(
     comparison_kind: StrategyComparisonKind,
     preparation: StrategyComparisonPreparation | None,
     intraday: dict[str, Any],
+    discovery_error: str | None,
 ) -> dict[str, Any]:
     sessions = (
         sorted(
@@ -317,6 +475,11 @@ def _candidate_report(
         "requested_start": start.isoformat(),
         "requested_end": end.isoformat(),
         "research_family": comparison_kind.value,
+        "discovery_complete": preparation is not None,
+        "candidate_discovery_status": (
+            "COMPLETE" if preparation is not None else "NOT_COMPLETE"
+        ),
+        "discovery_error": discovery_error,
         "timeframes": intraday["required_timeframes"],
         "extended_hours": intraday["extended_hours"],
         "warmup_bars": intraday["native_warmup_bars"],
