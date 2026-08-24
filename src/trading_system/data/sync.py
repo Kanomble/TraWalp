@@ -176,11 +176,28 @@ def parse_daily_master_index(payload: str, index_date: date) -> DailyMasterIndex
     """Parse relevant rows from one daily master index, failing closed after its header."""
 
     lines = payload.splitlines()
-    expected_header = "CIK|Company Name|Form Type|Date Filed|Filename"
-    try:
-        header_index = next(index for index, line in enumerate(lines) if line == expected_header)
-    except StopIteration as exc:
-        raise ValueError("SEC daily master index is missing required headers") from exc
+    expected_header = ("cik", "companyname", "formtype", "datefiled", "filename")
+
+    def normalized_header(line: str) -> tuple[str, ...]:
+        return tuple(
+            re.sub(r"\s+", "", field).casefold()
+            for field in line.lstrip("\ufeff").split("|")
+        )
+
+    header_index = next(
+        (index for index, line in enumerate(lines) if normalized_header(line) == expected_header),
+        None,
+    )
+    if header_index is None:
+        payload_start = payload.lstrip("\ufeff\r\n\t ")[:256].casefold()
+        if payload_start.startswith(("<!doctype html", "<html")):
+            raise ValueError(
+                f"SEC daily master index {index_date.isoformat()} returned HTML "
+                "instead of index data"
+            )
+        raise ValueError(
+            f"SEC daily master index {index_date.isoformat()} is missing its delimited header"
+        )
 
     entries: list[DailyMasterIndexEntry] = []
     accessions_by_cik: dict[str, set[str]] = defaultdict(set)

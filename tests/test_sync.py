@@ -787,6 +787,32 @@ def test_daily_master_parser_extracts_relevant_rows_and_canonical_accessions() -
     }
 
 
+def test_daily_master_parser_accepts_semantically_equivalent_sec_header() -> None:
+    payload = "\n".join(
+        [
+            "Description: Daily Master Index",
+            "\ufeff CIK | Company Name | Form Type | Date Filed | File Name ",
+            "-" * 80,
+            "1234|Test Corp|10-Q|2026-08-12|"
+            "edgar/data/1234/0000001234-26-000001.txt",
+        ]
+    )
+
+    parsed = parse_daily_master_index(payload, date(2026, 8, 12))
+
+    assert parsed.accessions_by_cik == {
+        "0000001234": {"0000001234-26-000001"}
+    }
+
+
+def test_daily_master_parser_identifies_html_response_explicitly() -> None:
+    with pytest.raises(ValueError, match="2026-08-12 returned HTML"):
+        parse_daily_master_index(
+            "<!DOCTYPE html><html><title>SEC response</title></html>",
+            date(2026, 8, 12),
+        )
+
+
 @pytest.mark.parametrize(
     "row",
     [
@@ -814,7 +840,7 @@ def test_malformed_change_source_fails_without_advancing_cursor_or_fetching_comp
     sec.daily_master_index = lambda *_args, **_kwargs: "malformed"  # type: ignore[method-assign]
     sync = DataSynchronizer(database, None, sec)  # type: ignore[arg-type]
 
-    with pytest.raises(ValueError, match="required headers"):
+    with pytest.raises(ValueError, match="missing its delimited header"):
         sync.sync_sec_incremental()
 
     assert sec.submission_calls == sec.fact_calls == 0

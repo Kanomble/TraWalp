@@ -117,3 +117,24 @@ def test_daily_master_resources_use_shared_sec_transport_and_request_counters() 
         "daily_index_directory": 1,
         "daily_master_index": 1,
     }
+
+
+def test_daily_master_retries_http_200_html_through_shared_transport() -> None:
+    session = Session(
+        [
+            Response(200, {"text": "<!DOCTYPE html><html>SEC block page</html>"}),
+            Response(200, {"text": "CIK|Company Name|Form Type|Date Filed|File Name"}),
+        ]
+    )
+    sleeps: list[float] = []
+    client = SecClient(
+        "Researcher research@example.com",
+        session=session,  # type: ignore[arg-type]
+        sleeper=sleeps.append,
+        request_interval_seconds=0,
+    )
+
+    assert client.daily_master_index(2026, 3, "20260821").startswith("CIK|")
+    assert session.calls == 2
+    assert client.request_counts == {"daily_master_index": 2}
+    assert any(delay >= 1 for delay in sleeps)

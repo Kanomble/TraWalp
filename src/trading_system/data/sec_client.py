@@ -58,7 +58,14 @@ class SecClient:
 
         return dict(self._request_counts)
 
-    def _get(self, url: str, *, resource_type: str, cik: str | None = None) -> requests.Response:
+    def _get(
+        self,
+        url: str,
+        *,
+        resource_type: str,
+        cik: str | None = None,
+        response_validator: Callable[[requests.Response], None] | None = None,
+    ) -> requests.Response:
         for attempt in range(self.max_retries + 1):
             wait = self.interval - (time.monotonic() - self._last_request_at)
             if wait > 0:
@@ -74,6 +81,8 @@ class SecClient:
                         f"retryable SEC status {response.status_code}", response=response
                     )
                 response.raise_for_status()
+                if response_validator is not None:
+                    response_validator(response)
                 return response
             except SecResourceNotFound:
                 raise
@@ -160,11 +169,22 @@ class SecClient:
             raise ValueError("filing_date must be a valid calendar date") from exc
         if parsed_date.year != year or (parsed_date.month - 1) // 3 + 1 != quarter:
             raise ValueError("filing_date must belong to the requested year and quarter")
-        return self._get_text(
+
+        def reject_html(response: requests.Response) -> None:
+            start = response.text.lstrip("\ufeff\r\n\t ")[:256].casefold()
+            if start.startswith(("<!doctype html", "<html")):
+                raise requests.HTTPError(
+                    "SEC daily master request returned HTML instead of index data",
+                    response=response,
+                )
+
+        response = self._get(
             f"{self.ARCHIVES_BASE}/Archives/edgar/daily-index/"
             f"{year}/QTR{quarter}/master.{filing_date}.idx",
             resource_type="daily_master_index",
+            response_validator=reject_html,
         )
+        return response.text
 
     def ticker_to_cik(self) -> dict[str, str]:
         result: dict[str, str] = {}
