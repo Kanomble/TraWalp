@@ -10,7 +10,10 @@ from collections import defaultdict
 from contextlib import suppress
 from pathlib import Path
 
-from trading_system.data.qualification import DataQualificationReport, QualificationDetail
+from trading_system.data.qualification import (
+    DataQualificationReport,
+    QualificationDetail,
+)
 from trading_system.models.backtest import (
     BacktestPosition,
     BacktestResult,
@@ -84,7 +87,9 @@ def export_comparison(
         existing = [path for path in paths.values() if path.exists()]
         if existing:
             raise FileExistsError(f"Comparison export already exists: {existing[0]}")
-    _atomic_text(paths["json"], json.dumps(comparison.model_dump(mode="json"), indent=2))
+    _atomic_text(
+        paths["json"], json.dumps(comparison.model_dump(mode="json"), indent=2)
+    )
     rows = []
     position_rows = []
     leg_rows = []
@@ -110,10 +115,7 @@ def export_comparison(
             post_exit_rows.append(
                 {
                     "strategy": label,
-                    **{
-                        field: position_row[field]
-                        for field in _post_exit_fields()
-                    },
+                    **{field: position_row[field] for field in _post_exit_fields()},
                 }
             )
         leg_rows.extend(
@@ -154,7 +156,9 @@ def export_research_comparison(
     """Atomically export the D1-D5 baseline and its predeclared diagnostics."""
 
     if comparison.comparison_kind is not StrategyComparisonKind.RESEARCH_D1_D5:
-        raise ValueError("Research export requires the research-d1-d5 comparison family")
+        raise ValueError(
+            "Research export requires the research-d1-d5 comparison family"
+        )
     output_directory.mkdir(parents=True, exist_ok=True)
     research_paths = {
         "diagnostics": output_directory / f"{stem}_diagnostics.json",
@@ -170,18 +174,20 @@ def export_research_comparison(
         "execution_legs": output_directory / f"{stem}_execution_legs.csv",
         "post_exit": output_directory / f"{stem}_post_exit_analysis.csv",
     }
-    existing = [path for path in (*base_paths.values(), *research_paths.values()) if path.exists()]
+    existing = [
+        path
+        for path in (*base_paths.values(), *research_paths.values())
+        if path.exists()
+    ]
     if existing:
-        raise FileExistsError(f"Research comparison export already exists: {existing[0]}")
+        raise FileExistsError(
+            f"Research comparison export already exists: {existing[0]}"
+        )
 
-    paths = export_comparison(
-        comparison, output_directory, stem=stem, overwrite=True
-    )
+    paths = export_comparison(comparison, output_directory, stem=stem, overwrite=True)
     monthly_rows = _research_monthly_rows(comparison)
     symbol_rows, symbol_summary = _research_symbol_rows(comparison)
-    cost_rows = (
-        _research_cost_rows(cost_comparisons) if cost_stress_requested else []
-    )
+    cost_rows = _research_cost_rows(cost_comparisons) if cost_stress_requested else []
     strict_rows = _strict_coverage_rows(strict_comparison)
     diagnostics = {
         "report_type": "d1_d5_strategy_research_diagnostics",
@@ -346,7 +352,12 @@ def _research_symbol_rows(
                         position.entry_timestamp is not None
                         and position.exit_timestamp == position.entry_timestamp
                         and position.exit_reason
-                        in {"stop_loss", "trailing_stop", "atr_trailing_stop", "profit_lock"}
+                        in {
+                            "stop_loss",
+                            "trailing_stop",
+                            "atr_trailing_stop",
+                            "profit_lock",
+                        }
                         for position in positions
                     ),
                     "partial_exits": partials[symbol],
@@ -418,9 +429,7 @@ def _strict_coverage_rows(comparison: StrategyComparison) -> list[dict]:
                 "same_entry_bar_final_exits": diagnostics.get(
                     "same_entry_bar_final_exits"
                 ),
-                "coverage_exclusions": diagnostics.get(
-                    "strict_coverage_exclusions", 0
-                ),
+                "coverage_exclusions": diagnostics.get("strict_coverage_exclusions", 0),
             }
         )
     return rows
@@ -470,7 +479,10 @@ def export_candidate_audit(
     """Persist the bounded audit summary and reusable intraday candidate set."""
 
     output_directory.mkdir(parents=True, exist_ok=True)
-    stem = f"candidate_audit_{audit.requested_start}_{audit.requested_end}"
+    stem = (
+        f"candidate_audit_{audit.strategy_variant.value}_"
+        f"{audit.requested_start}_{audit.requested_end}"
+    )
     paths = {
         "json": output_directory / f"{stem}.json",
         "sessions": output_directory / f"{stem}_sessions.csv",
@@ -488,7 +500,9 @@ def export_candidate_audit(
     failure_rows = [item.model_dump(mode="json") for item in audit.failure_reasons]
     near_miss_rows = [item.model_dump(mode="json") for item in audit.near_misses]
     candidate_rows = [item.model_dump(mode="json") for item in audit.candidates]
-    _atomic_csv(paths["sessions"], session_rows, list(CandidateAuditSession.model_fields))
+    _atomic_csv(
+        paths["sessions"], session_rows, list(CandidateAuditSession.model_fields)
+    )
     _atomic_csv(
         paths["monthly"],
         monthly_rows,
@@ -516,9 +530,12 @@ def export_candidate_audit(
                 "report_type": "historical_candidate_audit_intraday_candidates",
                 "requested_start": audit.requested_start.isoformat(),
                 "requested_end": audit.requested_end.isoformat(),
-                "selection": "all symbols eligible at least once in the production entry funnel",
+                "strategy_variant": audit.strategy_variant.value,
+                "selection": "all symbols eligible at least once in the selected PIT entry funnel",
                 "candidate_count": len(audit.candidate_symbols),
-                "candidates": [{"symbol": symbol} for symbol in audit.candidate_symbols],
+                "candidates": [
+                    {"symbol": symbol} for symbol in audit.candidate_symbols
+                ],
             },
             indent=2,
         ),
@@ -579,7 +596,9 @@ def format_candidate_audit_summary(audit: CandidateAuditResult) -> str:
 def format_backtest_summary(result: BacktestResult) -> str:
     metrics = result.metrics
     benchmark = (
-        _percent(result.benchmark.total_return) if result.benchmark.available else "unavailable"
+        _percent(result.benchmark.total_return)
+        if result.benchmark.available
+        else "unavailable"
     )
     lines = [
         f"TraWalp backtest variant {result.strategy_variant.value} "
@@ -601,7 +620,8 @@ def format_backtest_summary(result: BacktestResult) -> str:
     if result.exits_by_reason:
         lines.append("Execution-leg exit summary:")
         lines.extend(
-            f"  {reason:<24} {count}" for reason, count in result.exits_by_reason.items()
+            f"  {reason:<24} {count}"
+            for reason, count in result.exits_by_reason.items()
         )
     if result.warnings:
         lines.append("Warnings:")
@@ -646,8 +666,7 @@ def format_comparison_table(comparison: StrategyComparison) -> str:
     else:
         state = "enabled" if prefetch.enabled else "disabled"
         rows.append(
-            f"Intraday prefetch: {state} | candidate symbols: "
-            f"{prefetch.candidate_symbols}"
+            f"Intraday prefetch: {state} | candidate symbols: {prefetch.candidate_symbols}"
         )
         for timeframe, details in prefetch.timeframes.items():
             rows.append(
@@ -686,15 +705,16 @@ def format_data_qualification_header(metadata: dict) -> str:
                 f"  complete sessions: {intraday.get('complete_sessions', 0)}",
                 f"  missing sessions: {intraday.get('missing_sessions', 0)}",
                 f"  partial sessions: {intraday.get('partial_sessions', 0)}",
-                "  unknown sessions: "
-                f"{intraday.get('unknown_market_activity_sessions', 0)}",
+                f"  unknown sessions: {intraday.get('unknown_market_activity_sessions', 0)}",
                 f"  missing bars: {intraday.get('missing_bars', 0)}",
             ]
         )
     return "\n".join(lines)
 
 
-def _comparison_result_label(comparison: StrategyComparison, result: BacktestResult) -> str:
+def _comparison_result_label(
+    comparison: StrategyComparison, result: BacktestResult
+) -> str:
     if comparison.comparison_kind is StrategyComparisonKind.POSITION_MANAGEMENT:
         return result.position_management_preset.value
     if comparison.comparison_kind is StrategyComparisonKind.SCORE_VARIANTS:
@@ -714,7 +734,9 @@ def _comparison_result_label(comparison: StrategyComparison, result: BacktestRes
 
 
 def _atomic_text(path: Path, text: str) -> None:
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent, text=True)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent, text=True
+    )
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
             handle.write(text)
@@ -727,7 +749,9 @@ def _atomic_text(path: Path, text: str) -> None:
 
 
 def _atomic_csv(path: Path, rows: list[dict], fields: list[str]) -> None:
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent, text=True)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent, text=True
+    )
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fields)
@@ -758,7 +782,13 @@ def _position_fields() -> list[str]:
 
 
 def _post_exit_fields() -> list[str]:
-    identity = ["position_id", "symbol", "exit_date", "exit_reason", "exit_reference_price"]
+    identity = [
+        "position_id",
+        "symbol",
+        "exit_date",
+        "exit_reason",
+        "exit_reference_price",
+    ]
     forward = [
         field
         for field in BacktestPosition.model_fields

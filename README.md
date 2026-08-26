@@ -24,12 +24,13 @@ Datensatz beendet den Screen nicht, sondern wird mit einem konkreten Ausschlussg
 
 Milestone 4 ergänzt einen lokalen Point-in-Time-Backtester, simuliertes Portfolio- und Risk
 Management, nachvollziehbare Trade-/Equity-Reports, einen lokalen SPY-Benchmark und den fairen
-Vergleich der Strategievarianten A/B/C. Noch **nicht** implementiert ist Milestone 5: Paper Orders.
+Vergleich der Strategievarianten A/B/C sowie die Research-Screenvarianten D/E/F. Noch **nicht**
+implementiert ist Milestone 5: Paper Orders.
 Es existiert weiterhin kein Codepfad, der eine Alpaca-Order absendet.
 
 Die aktuelle Research-Baseline umfasst darüber hinaus historischen Daily-Backfill, Candidate-
 Funnel-Audits, Position- und Execution-Leg-Diagnostik, MFE/MAE, Profit Capture, Re-Entry- und
-Post-Exit-Analysen sowie native `5m`-/`15m`-/`1h`-Bars, Strategy F und Multi-Timeframe-
+Post-Exit-Analysen sowie native `5m`-/`15m`-/`1h`-Bars, F0–F5-Positionsresearch und Multi-Timeframe-
 Strategy-Compare. Diese Erweiterungen ändern nicht die Grenze zu Milestone 5: TraWalp sendet
 weiterhin keine Orders.
 
@@ -51,6 +52,29 @@ Die Gewichte aller berechenbaren Faktoren werden immer proportional als
 `normalized_available_weight` ausgewiesen. Erst wenn die konfigurierte Mindestanzahl erreicht
 ist, werden sie als `effective_weight` für den Gesamtscore wirksam. Andernfalls nennt die
 Explain-Ausgabe den konkreten `reason_score_unavailable`.
+
+Die Daily-Screenvarianten sind zentral in `backtest/screen_strategies.py` definiert:
+
+- `A` = Quality + Value.
+- `B` = Quality + Value + Opportunity.
+- `C` = Full Recovery.
+- `D` = C mit strukturellem Loss-Path-Veto.
+- `E` = Quality/Value Trend Pullback.
+- `F` = Quality/Value Momentum nahe dem 52-Wochen-Hoch.
+
+`D`, `E` und `F` sind `ACTIVE_RESEARCH`-Varianten. Sie ersetzen den unveränderten
+Produktions-Screen nicht automatisch und verändern keine Position-Management-Presets wie D1–D5
+oder F0–F5. `compare-strategies --include score-variants` führt A–F jeweils mit demselben
+`configured`-Position-Management aus.
+
+Die eingefrorenen Startregeln sind: D verlangt mindestens 5 Prozent Erholung vom 63-Session-Tief,
+verwirft einen 126-Session-Maximalverlust unter -40 Prozent und vetoed die Kombination aus
+`momentum126 < -0.25` und `sma200_distance < -0.15`. E verlangt positiven 126-Session-Momentum,
+Kurs über SMA200, einen 5–20-Prozent-Pullback vom 63-Session-Hoch, Kurs über SMA20, positiven
+5-Session-Momentum und steigenden SMA20. F verlangt höchstens 10 Prozent Abstand zum
+52-Wochen-Hoch, positiven 126-Session-Momentum, Kurs über SMA50 und SMA200 sowie steigenden SMA20.
+Technische Bedingungen sind Gates; D rankt unverändert mit dem C-Score, E/F mit dem über Quality
+und Valuation normalisierten Score. Es werden keine Kurse aufgefüllt oder synthetisiert.
 
 ## Architektur
 
@@ -77,7 +101,7 @@ src/trading_system/technical/
 src/trading_system/strategy/scoring.py vier Teil-Scores und Total Score
 src/trading_system/strategy/screener.py PIT-Screen, Universe und Hard Filters
 src/trading_system/strategy/reporting.py CSV/JSON, Rangliste und Explain-Text
-src/trading_system/backtest/            PIT-Engine, Performance-Metriken und Reports
+src/trading_system/backtest/            PIT-Engine, Screen-Registry, Metriken und Reports
 src/trading_system/ai/                Schema und JSON-Export für manuelle AI-Analyse
 src/trading_system/cli.py             Sync-, Screen-, Export-, Explain- und Diagnose-CLI
 tests/                                isolierte Unit-/Integrationstests ohne echte APIs
@@ -415,7 +439,7 @@ am Valuation-Datenqualitätsfilter scheitern.
 Das Backtesting unterstützt zusätzlich ein konfigurierbares dynamisches Position Management mit
 Stop Loss, Take/Partial Profit, profit- und ATR-basierten Trailing Stops, Signal Decay, optionalem
 Max-Hold-Review, Re-Entry und Portfolio Rotation. Presets werden mit `backtest --strategy ...`
-gewählt; `compare-strategies` vergleicht standardmäßig A/B/C und alle Position-Presets auf
+gewählt; `compare-strategies` vergleicht standardmäßig A/B/C/D/E/F und alle Position-Presets auf
 identischen Point-in-Time-Screens. Details, Exit-Prioritäten und Lookahead-Regeln stehen in
 [`docs/position-management.md`](docs/position-management.md).
 Trade-Ideen, Partial-Exit-Legs, Profit Capture, Post-Exit-, Re-Entry-, Stop- und Score-Diagnostik
@@ -510,7 +534,48 @@ automatisch erneut, wenn eine solche bereits verifizierte Randabwesenheit die ei
 Erst `candidate_discovery.status = COMPLETE` macht eine leere Kandidatenliste eindeutig zu einem
 erfolgreichen Nullergebnis und erlaubt eine kandidatengesteuerte Intraday-Qualifikation. Bei
 fehlender nativer 15-Minuten-Coverage nennt der Report anschließend `sync-intraday` mit dem
-generierten `--candidates-report`, nicht mit einem Full-Universe-Schalter.
+generierten `--candidates-report`, nicht mit einem Full-Universe-Schalter. Der empfohlene
+`--candidate-gaps-only`-Lauf prüft ausschließlich die im PIT-Manifest genannten lückenhaften
+Kandidaten- und potenziellen Open-Position-Sessions. Der lokale Preflight qualifiziert dafür ab dem
+ersten kausalen Kandidaten jedes Symbols die konservativ möglichen Holding-Sessions, ohne Trades zu
+simulieren. Vollständig vorhandene Sessions erzeugen keinen Provider-
+Request; unbekannte lokale Lücken werden gezielt angefragt. Eine erfolgreiche Provider-Antwort ohne
+die fehlenden nativen Timestamps wird dauerhaft als `PROVIDER_CONFIRMED_ABSENT` gespeichert, während
+API-/Transportfehler als `PROVIDER_CHECK_FAILED` blockierend und erneut versuchbar bleiben.
+
+Der Remediation-Report (`<stem>.json` plus `<stem>_gaps.csv`) unterscheidet `READY`,
+`READY_WITH_PROVIDER_ABSENCE`, `NOT_READY_LOCAL_GAPS` und
+`NOT_READY_PROVIDER_VERIFICATION_FAILURE`. Provider-bestätigte Abwesenheit erzeugt weder synthetische
+Bars noch Forward-Fills. Für die Hybrid-Research-Familie bleibt sie sichtbar und nutzt ausschließlich
+deren bestehende deterministische Missing-Data-Skip-Semantik. Ein vollständiger Workflow lautet:
+
+```powershell
+python -m trading_system.cli compare-preflight `
+  --start 2024-01-02 `
+  --end 2026-08-12 `
+  --include research-intraday-hybrid `
+  --output-stem intraday_hybrid_preflight_provider_qualified_2024-01-02_2026-08-12
+
+python -m trading_system.cli sync-intraday `
+  --start 2024-01-02 `
+  --end 2026-08-12 `
+  --timeframes 15m `
+  --candidates-report reports/intraday_hybrid_preflight_provider_qualified_2024-01-02_2026-08-12_intraday_candidates.json `
+  --candidate-gaps-only `
+  --output-stem intraday_hybrid_remediation_2024-01-02_2026-08-12
+
+python -m trading_system.cli compare-preflight `
+  --start 2024-01-02 `
+  --end 2026-08-12 `
+  --include research-intraday-hybrid `
+  --output-stem intraday_hybrid_preflight_post_remediation_2024-01-02_2026-08-12
+```
+
+Der Vergleich ist datenbereit, wenn der letzte Preflight `READY` oder
+`READY_WITH_PROVIDER_ABSENCE` meldet und keine lokale bzw. fehlgeschlagene Provider-Prüfung als
+Blocker übrig bleibt. D/E/F mit `configured` Daily-Management benötigen in der registrierten
+Score-Variant-Familie keine Intraday-Bars; F0/F3/F5 leiten ihre 15-Minuten-Anforderungen weiterhin aus
+den kausalen C-Kandidaten ab.
 
 Research-Vergleiche rechnen standardmäßig nur das konfigurierte Baseline-Kostenmodell. Erst das
 explizite Flag `--cost-stress` aktiviert 2X-/3X-Slippage, Commission- und vorhandene
@@ -633,11 +698,12 @@ Mal an. Historische Shares/Fundamentals können dennoch nicht für jede Corporat
 vergleichbar sein.
 
 Die beschleunigte Pipeline ändert die historische Universumsquelle nicht: sie bleibt die heutige
-tradable-Mitgliedschaft und damit survivorship-biased. A/B/C teilen weiterhin denselben PIT-Screen.
+tradable-Mitgliedschaft und damit survivorship-biased. A–F teilen weiterhin denselben PIT-Screen.
 Der gemeinsame Recovery-Gate gilt ausdrücklich auch für A und B; die Varianten sind deshalb ein
 Scoring-/Threshold-Vergleich unter gemeinsamer technischer Entry-Bestätigung und keine reine
 Faktor-Ablation. Diese tatsächliche Definition wird im Konfigurations-Snapshot jedes Reports
-gespeichert.
+gespeichert. D verwendet denselben Gate zusätzlich vor seinem Loss-Veto; E und F verwenden dagegen
+ihre eigenen Trend-/Stärke-Gates und nicht den C-Recovery-Gate.
 
 ## Paper Trading und Sicherheitsmechanismen
 
@@ -708,5 +774,5 @@ fehlgeschlagenen Batches ab.
 - Milestone 3 (fertig): Screener, CLI-Ausgaben und Explainability.
 - Milestone 4 (fertig): Point-in-Time-Backtester, Reports und Strategie-Vergleich.
 - Research-Erweiterungen (fertig): Audits/Diagnostik, Presets, Daily-Backfill und native
-  Multi-Timeframe-/Strategy-F-Pfade.
+  Multi-Timeframe-/F0–F5-Pfade.
 - Milestone 5: ausschließlich Alpaca Paper Trading, Risk Management und Daily Runner.

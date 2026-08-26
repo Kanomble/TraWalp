@@ -3,21 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
 
+from trading_system.backtest.screen_strategies import SCREEN_STRATEGY_DEFINITIONS
 from trading_system.models.backtest import (
     PositionManagementPreset,
+    ResearchLifecycle,
     StrategyComparisonKind,
     StrategyVariant,
 )
-
-
-class ResearchLifecycle(StrEnum):
-    CHAMPION_CONTROL = "CHAMPION_CONTROL"
-    ACTIVE_RESEARCH = "ACTIVE_RESEARCH"
-    PENDING_EVALUATION = "PENDING_EVALUATION"
-    ARCHIVED_RESEARCH = "ARCHIVED_RESEARCH"
-    LEGACY_COMPATIBILITY = "LEGACY_COMPATIBILITY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,15 +171,16 @@ STRATEGY_RESEARCH_REGISTRY: tuple[StrategyResearchMetadata, ...] = (
     *(
         _metadata(
             PositionManagementPreset.CONFIGURED,
-            f"CONTROL-{variant.value}",
+            f"{'CONTROL' if definition.control else 'SCREEN'}-{variant.value}",
             f"{variant.value}/configured",
-            ResearchLifecycle.LEGACY_COMPATIBILITY,
-            "configured-controls",
-            "Configured score-pipeline control retained unchanged.",
+            definition.lifecycle,
+            "configured-controls" if definition.control else "screen-strategy-research",
+            definition.description,
             variant=variant,
-            control=True,
+            control=definition.control,
         )
-        for variant in StrategyVariant
+        for definition in SCREEN_STRATEGY_DEFINITIONS
+        for variant in (definition.variant,)
     ),
 )
 
@@ -298,9 +292,7 @@ def comparison_strategy_label(
 
 def lifecycle_for_preset(preset: PositionManagementPreset) -> ResearchLifecycle:
     matches = [
-        metadata.lifecycle
-        for metadata in STRATEGY_RESEARCH_REGISTRY
-        if metadata.preset is preset
+        metadata.lifecycle for metadata in STRATEGY_RESEARCH_REGISTRY if metadata.preset is preset
     ]
     if not matches:
         raise ValueError(f"Unregistered strategy preset: {preset}")

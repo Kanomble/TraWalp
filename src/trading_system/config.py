@@ -173,9 +173,7 @@ class IntradaySyncConfig(BaseModel):
 
 class IntradayConfig(BaseModel):
     enabled: bool = False
-    timeframes: list[BarTimeframe] = Field(
-        default_factory=lambda: [BarTimeframe.MINUTES_15]
-    )
+    timeframes: list[BarTimeframe] = Field(default_factory=lambda: [BarTimeframe.MINUTES_15])
     extended_hours: bool = False
     warmup_bars: int = Field(50, ge=1)
     sync: IntradaySyncConfig = IntradaySyncConfig()
@@ -217,6 +215,51 @@ class TechnicalConfig(BaseModel):
         if not self.rsi_oversold < self.rsi_recovery_min < self.rsi_recovery_max:
             raise ValueError("RSI thresholds must satisfy oversold < recovery_min < recovery_max")
         return self
+
+
+class LossAwareRecoveryScreenConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min_recovery_from_63d_low: float = Field(0.05, ge=0)
+    max_drawdown_126d_floor: float = Field(-0.40, ge=-1, le=0)
+    structural_momentum126_threshold: float = Field(-0.25, ge=-1, le=0)
+    structural_sma200_distance_threshold: float = Field(-0.15, ge=-1, le=0)
+
+
+class TrendPullbackScreenConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min_drawdown_63d: float = Field(-0.20, ge=-1, le=0)
+    max_drawdown_63d: float = Field(-0.05, ge=-1, le=0)
+    min_momentum126: float = 0.0
+    require_price_above_sma200: bool = True
+    require_price_above_sma20: bool = True
+    min_momentum5: float = 0.0
+    require_sma20_rising: bool = True
+
+    @model_validator(mode="after")
+    def validate_pullback_range(self) -> TrendPullbackScreenConfig:
+        if self.min_drawdown_63d > self.max_drawdown_63d:
+            raise ValueError("trend pullback drawdown minimum must not exceed maximum")
+        return self
+
+
+class QualityValueMomentumScreenConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min_drawdown_52w: float = Field(-0.10, ge=-1, le=0)
+    min_momentum126: float = 0.0
+    require_price_above_sma50: bool = True
+    require_price_above_sma200: bool = True
+    require_sma20_rising: bool = True
+
+
+class ScreenStrategiesConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    loss_aware_recovery: LossAwareRecoveryScreenConfig = LossAwareRecoveryScreenConfig()
+    trend_pullback: TrendPullbackScreenConfig = TrendPullbackScreenConfig()
+    quality_value_momentum: QualityValueMomentumScreenConfig = QualityValueMomentumScreenConfig()
 
 
 class WeightedFactors(BaseModel):
@@ -387,6 +430,7 @@ class StrategyConfig(BaseModel):
     scores: ScoreConfig
     data_quality: DataQualityConfig
     technical: TechnicalConfig = TechnicalConfig()
+    screen_strategies: ScreenStrategiesConfig = ScreenStrategiesConfig()
     filters: FilterConfig
     portfolio: PortfolioConfig = PortfolioConfig()
     risk: RiskConfig = RiskConfig()
@@ -457,9 +501,7 @@ def load_settings(strategy_path: str | Path | None = None) -> Settings:
         update={
             "storage": storage.model_copy(
                 update={
-                    "database_path": _resolve_config_path(
-                        storage.database_path, config_base
-                    ),
+                    "database_path": _resolve_config_path(storage.database_path, config_base),
                     "reports_path": _resolve_config_path(storage.reports_path, config_base),
                 }
             )

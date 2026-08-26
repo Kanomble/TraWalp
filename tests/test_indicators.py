@@ -10,7 +10,9 @@ from trading_system.technical.indicators import (
     ema,
     indicator_frame,
     momentum,
+    recovery_from_low,
     relative_volume,
+    rolling_max_drawdown,
     rsi,
     sma,
 )
@@ -70,6 +72,10 @@ def test_indicator_frame_contains_complete_milestone_two_set() -> None:
         "atr14",
         "relative_volume20",
         "drawdown_52w",
+        "drawdown_63d",
+        "recovery_from_63d_low",
+        "max_drawdown_126d",
+        "sma200_distance",
     }
     assert expected <= set(output.columns)
     assert output.iloc[-1][list(expected)].notna().all()
@@ -92,6 +98,10 @@ def test_recovery_snapshot_requires_prior_oversold_and_current_rise(monkeypatch)
             "atr14": [2.0] * size,
             "relative_volume20": [1.4] * size,
             "drawdown_52w": [-0.25] * size,
+            "drawdown_63d": [-0.10] * size,
+            "recovery_from_63d_low": [0.10] * size,
+            "max_drawdown_126d": [-0.30] * size,
+            "sma200_distance": [100 / 95 - 1] * size,
         }
     )
     monkeypatch.setattr(momentum_module, "indicator_frame", lambda _bars: frame)
@@ -99,3 +109,59 @@ def test_recovery_snapshot_requires_prior_oversold_and_current_rise(monkeypatch)
     assert snapshot.rsi_recovery is True
     assert snapshot.sma20_rising is True
     assert snapshot.momentum20_improving is True
+
+
+def test_new_rolling_price_features_have_exact_window_semantics() -> None:
+    insufficient_63 = pd.Series([100.0] * 62)
+    assert pd.isna(drawdown_from_high(insufficient_63, 63).iloc[-1])
+    assert pd.isna(recovery_from_low(insufficient_63, 63).iloc[-1])
+
+    new_high = pd.Series(np.linspace(80.0, 100.0, 63))
+    assert drawdown_from_high(new_high, 63).iloc[-1] == pytest.approx(0)
+    pullback = pd.Series([100.0] * 62 + [90.0])
+    assert drawdown_from_high(pullback, 63).iloc[-1] == pytest.approx(-0.10)
+
+    at_low = pd.Series([100.0] * 62 + [80.0])
+    assert recovery_from_low(at_low, 63).iloc[-1] == pytest.approx(0)
+    recovered = pd.Series([80.0] + [100.0] * 61 + [88.0])
+    assert recovery_from_low(recovered, 63).iloc[-1] == pytest.approx(0.10)
+
+
+def test_max_drawdown_126d_is_worst_peak_to_trough_not_current_drawdown() -> None:
+    path = pd.Series([100.0] * 123 + [100.0, 70.0, 90.0])
+    assert rolling_max_drawdown(path, 126).iloc[-1] == pytest.approx(-0.30)
+    assert pd.isna(rolling_max_drawdown(path.iloc[:-1], 126).iloc[-1])
+    rising = pd.Series(np.linspace(1.0, 126.0, 126))
+    falling = pd.Series(np.linspace(126.0, 1.0, 126))
+    assert rolling_max_drawdown(rising, 126).iloc[-1] == pytest.approx(0)
+    assert rolling_max_drawdown(falling, 126).iloc[-1] == pytest.approx(1 / 126 - 1)
+
+
+@pytest.mark.parametrize(
+    ("prices", "relation"),
+    [
+        ([100.0] * 199 + [120.0], "above"),
+        ([100.0] * 199 + [80.0], "below"),
+        ([100.0] * 200, "equal"),
+    ],
+)
+def test_sma200_distance(prices: list[float], relation: str) -> None:
+    close = pd.Series(prices)
+    frame = indicator_frame(
+        pd.DataFrame({"high": close + 1, "low": close - 1, "close": close, "volume": 1000})
+    )
+    expected = prices[-1] / (sum(prices[-200:]) / 200) - 1
+    assert frame["sma200_distance"].iloc[-1] == pytest.approx(expected)
+    assert {"above": expected > 0, "below": expected < 0, "equal": expected == 0}[relation]
+
+    unavailable = indicator_frame(
+        pd.DataFrame(
+            {
+                "high": close.iloc[:199] + 1,
+                "low": close.iloc[:199] - 1,
+                "close": close.iloc[:199],
+                "volume": 1000,
+            }
+        )
+    )
+    assert pd.isna(unavailable["sma200_distance"].iloc[-1])

@@ -58,6 +58,7 @@ class CandidateAuditSession(BaseModel):
     price_above_sma20_pass: int = Field(ge=0)
     reached_recovery_gate: int = Field(ge=0)
     recovery_gate_pass: int = Field(ge=0)
+    variant_gate_pass: int = Field(default=0, ge=0)
     eligible_candidates: int = Field(ge=0)
     ranked_candidates: int = Field(ge=0)
     portfolio_eligible: int = Field(default=0, ge=0)
@@ -105,9 +106,7 @@ class CandidateAuditMonthly(BaseModel):
     failure_rates_at_stage: dict[str, float] = Field(default_factory=dict)
     portfolio_blockers: dict[str, int] = Field(default_factory=dict)
     score_distributions: dict[str, DistributionSummary] = Field(default_factory=dict)
-    threshold_distance_distributions: dict[str, DistributionSummary] = Field(
-        default_factory=dict
-    )
+    threshold_distance_distributions: dict[str, DistributionSummary] = Field(default_factory=dict)
     fundamental_metric_coverage_pct: dict[str, float] = Field(default_factory=dict)
     technical_metric_coverage_pct: dict[str, float] = Field(default_factory=dict)
 
@@ -129,6 +128,8 @@ class CandidateNearMiss(BaseModel):
     date: date
     symbol: str
     failed_at: str
+    failure_detail: str | None = None
+    blocking_reasons: tuple[str, ...] = ()
     failure_category: FailureCategory
     distance_to_threshold: float | None = None
     total_score: float | None = None
@@ -141,6 +142,8 @@ class CandidateNearMiss(BaseModel):
     momentum5_above_zero: bool | None = None
     relative_volume: float | None = None
     relative_volume_above_threshold: bool | None = None
+    variant_score: float | None = None
+    technical_evidence: dict[str, float | bool | None] = Field(default_factory=dict)
 
 
 class CandidateAuditEvent(BaseModel):
@@ -163,6 +166,7 @@ class CandidateAuditEvent(BaseModel):
     momentum5_above_zero: bool | None = None
     relative_volume: float | None = None
     relative_volume_above_threshold: bool | None = None
+    technical_evidence: dict[str, float | bool | None] = Field(default_factory=dict)
 
 
 class PointInTimeSample(BaseModel):

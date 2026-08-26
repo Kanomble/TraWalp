@@ -125,9 +125,15 @@ python -m trading_system.cli compare-strategies --start 2025-01-01 --end 2025-12
   --include position-management
 ```
 
-`compare-strategies` vergleicht standardmäßig sowohl A/B/C als auch alle Position-Management-
+`compare-strategies` vergleicht standardmäßig sowohl A/B/C/D/E/F als auch alle Position-Management-
 Presets auf denselben gecachten Point-in-Time-Screens. Mit `--include score-variants` oder
 `--include position-management` lässt sich der Vergleich auf eine Familie begrenzen.
+Die A–F-Score-Familie verwendet für alle sechs Screens exakt das `configured`-Preset. Explizite,
+teure Research-Familien behalten ihre registrierten Run-Sets und werden nicht mit D/E/F
+kombinatorisch vervielfacht. D/E/F sind Screen-Research und dürfen nicht mit den anders benannten
+D1–D5-/F0–F5-Position-Management-Experimenten verwechselt werden.
+Der Score-Varianten-JSON-Report enthält außerdem gebundene Auswahl-Überlappungen für C/D/E/F und
+eine Stichprobe der C-Kandidaten, die D mit konkretem Loss-Path-Grund verwirft.
 `backtest-compare` bleibt als kompatibler Alias für den reinen Position-Management-Vergleich
 erhalten. Nicht ausführbare Strategien – etwa `intraday-dynamic` bei fehlender lokaler Historie – stehen
 mit Begründung in `skipped_strategies`, statt den vollständigen Vergleich abzubrechen.

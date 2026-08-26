@@ -12,6 +12,17 @@ class StrategyVariant(StrEnum):
     QUALITY_VALUE = "A"
     QUALITY_VALUE_OPPORTUNITY = "B"
     FULL = "C"
+    LOSS_AWARE_RECOVERY = "D"
+    TREND_PULLBACK = "E"
+    QUALITY_VALUE_MOMENTUM = "F"
+
+
+class ResearchLifecycle(StrEnum):
+    CHAMPION_CONTROL = "CHAMPION_CONTROL"
+    ACTIVE_RESEARCH = "ACTIVE_RESEARCH"
+    PENDING_EVALUATION = "PENDING_EVALUATION"
+    ARCHIVED_RESEARCH = "ARCHIVED_RESEARCH"
+    LEGACY_COMPATIBILITY = "LEGACY_COMPATIBILITY"
 
 
 class PositionManagementPreset(StrEnum):
@@ -36,9 +47,7 @@ class PositionManagementPreset(StrEnum):
     F2_INTRADAY_OPENING_SURVIVOR_GATE = "F2-intraday-opening-survivor-gate"
     F3_INTRADAY_THESIS_RECOVERY = "F3-intraday-thesis-recovery"
     F4_INTRADAY_FIRST_HOUR_PULLBACK = "F4-intraday-first-hour-pullback"
-    F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT = (
-        "F5-intraday-first-hour-pullback-f0-management"
-    )
+    F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT = "F5-intraday-first-hour-pullback-f0-management"
 
 
 class StrategyComparisonKind(StrEnum):
@@ -637,3 +646,4 @@ class StrategyComparison(BaseModel):
     warnings: tuple[str, ...] = ()
     strict_coverage_sensitivity: bool = False
     research_diagnostics: dict = Field(default_factory=dict)
+    screen_selection_diagnostics: dict = Field(default_factory=dict)

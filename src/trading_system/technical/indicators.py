@@ -97,6 +97,24 @@ def drawdown_from_high(close: pd.Series, period: int = 252) -> pd.Series:
     return close.astype(float) / rolling_high - 1
 
 
+def recovery_from_low(close: pd.Series, period: int) -> pd.Series:
+    rolling_low = close.astype(float).rolling(period, min_periods=period).min()
+    return close.astype(float) / rolling_low - 1
+
+
+def rolling_max_drawdown(close: pd.Series, period: int) -> pd.Series:
+    """Worst peak-to-trough close drawdown inside each complete rolling window."""
+
+    return (
+        close.astype(float)
+        .rolling(period, min_periods=period)
+        .apply(
+            lambda window: float(np.min(window / np.maximum.accumulate(window) - 1)),
+            raw=True,
+        )
+    )
+
+
 def indicator_frame(bars: pd.DataFrame) -> pd.DataFrame:
     """Add all strategy indicators to an OHLCV frame without mutating it."""
 
@@ -117,4 +135,8 @@ def indicator_frame(bars: pd.DataFrame) -> pd.DataFrame:
     output["atr14"] = atr(output["high"], output["low"], output["close"], 14)
     output["relative_volume20"] = relative_volume(output["volume"], 20)
     output["drawdown_52w"] = drawdown_from_high(output["close"], 252)
+    output["drawdown_63d"] = drawdown_from_high(output["close"], 63)
+    output["recovery_from_63d_low"] = recovery_from_low(output["close"], 63)
+    output["max_drawdown_126d"] = rolling_max_drawdown(output["close"], 126)
+    output["sma200_distance"] = output["close"].astype(float) / output["sma200"] - 1
     return output

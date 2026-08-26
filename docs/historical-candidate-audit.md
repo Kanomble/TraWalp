@@ -17,7 +17,8 @@ python -m trading_system.cli audit-candidates `
   --variant C
 ```
 
-Variant `C` is the default. `--near-miss-limit` controls the bounded number of late-stage
+Variant `C` is the unchanged default. `--variant` accepts `A|B|C|D|E|F`; D/E/F are research
+screens and do not replace the production default. `--near-miss-limit` controls the bounded number of late-stage
 rejections retained per session (default 10). Full session and monthly summaries are always
 written even when no candidates exist.
 
@@ -42,6 +43,7 @@ identity
 → weighted total threshold
 → price above SMA20
 → recovery gate
+→ variant-specific D/E/F gate (when applicable)
 → eligible candidate
 → portfolio/ranking
 → entry order
@@ -101,24 +103,27 @@ For candidates that reach recovery, reports retain:
 - relative volume above the configured threshold,
 - passes through each trigger and failures of all triggers.
 
-Near misses are late-stage rejections (opportunity, timing, total, SMA20, or recovery). The JSON
-and CSV contain score components, threshold distance, and recovery evidence. Only the configured
-top N per session is retained to keep the long audit bounded.
+Near misses are late-stage rejections (opportunity, timing, total, SMA20, recovery, or the
+variant-specific D/E/F gate). The JSON and CSV contain score components, threshold distance,
+all variant blocking reasons, and bounded technical evidence. D rows retain max drawdown,
+63-session recovery, momentum126 and SMA200 distance; E/F rows retain their price, moving-average,
+pullback and strength inputs. Only the configured top N per session is retained to keep the long
+audit bounded.
 
 ## Reports
 
 The report directory receives:
 
 ```text
-candidate_audit_<start>_<end>.json
-candidate_audit_<start>_<end>_sessions.csv
-candidate_audit_<start>_<end>_monthly.csv
-candidate_audit_<start>_<end>_failures.csv
-candidate_audit_<start>_<end>_near_misses.csv
-candidate_audit_<start>_<end>_candidates.csv
-candidate_audit_<start>_<end>_intraday_candidates.json
-candidate_audit_<start>_<end>_entry_symbols.json
-candidate_audit_<start>_<end>_near_miss_symbols.json
+candidate_audit_<variant>_<start>_<end>.json
+candidate_audit_<variant>_<start>_<end>_sessions.csv
+candidate_audit_<variant>_<start>_<end>_monthly.csv
+candidate_audit_<variant>_<start>_<end>_failures.csv
+candidate_audit_<variant>_<start>_<end>_near_misses.csv
+candidate_audit_<variant>_<start>_<end>_candidates.csv
+candidate_audit_<variant>_<start>_<end>_intraday_candidates.json
+candidate_audit_<variant>_<start>_<end>_entry_symbols.json
+candidate_audit_<variant>_<start>_<end>_near_miss_symbols.json
 ```
 
 The failure CSV is monthly and includes both the raw count and rejection rate relative to the
@@ -137,7 +142,7 @@ python -m trading_system.cli sync-intraday `
   --start 2025-04-21 `
   --end 2026-08-12 `
   --timeframes 15m `
-  --candidates-report reports/candidate_audit_2025-04-21_2026-08-12_intraday_candidates.json
+  --candidates-report reports/candidate_audit_C_2025-04-21_2026-08-12_intraday_candidates.json
 ```
 
 This sync is a separate, explicit step. Running the audit never downloads provider data.

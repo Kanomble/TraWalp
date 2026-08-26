@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from trading_system.backtest import preflight as preflight_module
-from trading_system.backtest.engine import BacktestEngine
+from trading_system.backtest.engine import BacktestEngine, IntradayPrefetchRequirement
 from trading_system.backtest.qualification import qualify_historical_screen_start
 from trading_system.backtest.research_registry import (
     comparison_strategy_label,
@@ -156,9 +156,7 @@ def test_perfect_daily_universe_is_ready_and_complete_zero_is_unambiguous(
     assert report["recommended_manual_sync_daily_history_command"] is None
 
 
-def test_later_ipo_edge_is_diagnostic_and_does_not_block_discovery(
-    tmp_path, monkeypatch
-) -> None:
+def test_later_ipo_edge_is_diagnostic_and_does_not_block_discovery(tmp_path, monkeypatch) -> None:
     sessions = _sessions()
     database = _database(
         tmp_path,
@@ -269,9 +267,7 @@ def test_requested_period_end_missing_blocks_preparation(tmp_path, monkeypatch) 
     assert "sync-daily-history" in report["recommended_manual_sync_daily_history_command"]
 
 
-def test_identity_conflict_is_excluded_by_shared_operational_guard(
-    tmp_path, monkeypatch
-) -> None:
+def test_identity_conflict_is_excluded_by_shared_operational_guard(tmp_path, monkeypatch) -> None:
     sessions = _sessions()
     database = _database(
         tmp_path,
@@ -362,12 +358,30 @@ def test_candidate_report_and_intraday_recommendation_are_candidate_driven(
 ) -> None:
     sessions = _sessions()
     database = _database(tmp_path, {"AAA": sessions, "SPY": sessions})
-    requirement = SimpleNamespace(candidate_execution_sessions=(("AAA", END),))
+    requirement = SimpleNamespace(
+        candidate_execution_sessions=(("AAA", END),),
+        first_execution_sessions=(("AAA", END),),
+        comparison_sessions=(END,),
+        timeframe=BarTimeframe.MINUTES_15,
+    )
     _successful_preparation(monkeypatch, (requirement,))
     intraday = preflight_module._empty_intraday_preflight(_config()) | {
         "candidate_symbols": ["AAA"],
         "candidate_symbol_count": 1,
         "candidate_sessions": 1,
+        "required_sessions": [
+            {
+                "symbol": "AAA",
+                "session": END.isoformat(),
+                "timeframe": "15m",
+                "candidate_paths": [
+                    "F0/C-intraday-dynamic",
+                    "F3/C-intraday-thesis-recovery",
+                    "F5/C-intraday-first-hour-pullback-f0-management",
+                ],
+                "requirement_type": "candidate_session",
+            }
+        ],
         "intraday_ready": False,
     }
     monkeypatch.setattr(preflight_module, "_intraday_preflight", lambda *args: intraday)
@@ -386,9 +400,7 @@ def test_candidate_report_and_intraday_recommendation_are_candidate_driven(
         stem="candidate-driven",
     )
     exported = json.loads(paths["preflight"].read_text(encoding="utf-8"))
-    exported_candidates = json.loads(
-        paths["intraday_candidates"].read_text(encoding="utf-8")
-    )
+    exported_candidates = json.loads(paths["intraday_candidates"].read_text(encoding="utf-8"))
     command = exported["recommended_manual_sync_intraday_command"]
 
     assert exported_candidates["discovery_complete"] is True
@@ -400,7 +412,73 @@ def test_candidate_report_and_intraday_recommendation_are_candidate_driven(
     assert "sync-intraday" in command
     assert "--timeframes 15m" in command
     assert f"--candidates-report {paths['intraday_candidates']}" in command
+    assert "--candidate-gaps-only" in command
+    assert "--output-stem candidate-driven_intraday_remediation" in command
     assert "--universe all" not in command
+    assert exported_candidates["required_sessions"][0]["candidate_paths"] == [
+        "F0/C-intraday-dynamic",
+        "F3/C-intraday-thesis-recovery",
+        "F5/C-intraday-first-hour-pullback-f0-management",
+    ]
+    assert exported_candidates["potential_position_ranges"] == [
+        {
+            "symbol": "AAA",
+            "first_execution_session": END.isoformat(),
+            "last_potential_session": END.isoformat(),
+            "timeframe": "15m",
+            "candidate_paths": [
+                "F0/C-intraday-dynamic",
+                "F3/C-intraday-thesis-recovery",
+                "F5/C-intraday-first-hour-pullback-f0-management",
+            ],
+        }
+    ]
+
+
+def test_intraday_preflight_qualifies_every_potential_holding_session(tmp_path) -> None:
+    sessions = tuple(trading_sessions_between(date(2025, 5, 1), date(2025, 5, 5)))
+    database = Database(tmp_path / "potential-holding.sqlite3")
+    database.initialize()
+    opening = datetime.combine(sessions[0], datetime.min.time(), tzinfo=UTC)
+    requirement = IntradayPrefetchRequirement(
+        timeframe=BarTimeframe.MINUTES_15,
+        variants=(),
+        symbols=("AAA",),
+        first_execution_sessions=(("AAA", sessions[0]),),
+        candidate_execution_sessions=(("AAA", sessions[0]),),
+        comparison_sessions=sessions,
+        requested_start=opening - timedelta(days=2),
+        requested_end=datetime.combine(
+            sessions[-1] + timedelta(days=1), datetime.min.time(), tzinfo=UTC
+        ),
+        warmup_bars=0,
+        extended_hours=False,
+    )
+    preparation = SimpleNamespace(intraday_requirements=(requirement,))
+
+    report = preflight_module._intraday_preflight(
+        database,
+        _config(),
+        preparation,
+        ["F0/C", "F3/C", "F5/C"],
+        sessions[0],
+        sessions[-1],
+    )
+
+    assert report["candidate_path_qualification"]["candidate_symbol_sessions_required"] == len(
+        sessions
+    )
+    assert [item["requirement_type"] for item in report["required_sessions"]] == [
+        "candidate_session",
+        *("potential_open_position_session" for _ in sessions[1:]),
+    ]
+    assert report["required_local_missing_count"] == len(sessions)
+    assert [item["strategy"] for item in report["not_required_for_candidate_path"]] == [
+        "C/configured",
+        "D/configured",
+        "E/configured",
+        "F/configured",
+    ]
 
 
 def test_preflight_family_is_exact_and_build_path_does_not_run_backtest(monkeypatch) -> None:

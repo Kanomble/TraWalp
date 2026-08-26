@@ -208,18 +208,10 @@ class FillingIntradaySynchronizer:
         self.provide_data = provide_data
         self.calls = []
 
-    def sync_intraday(
-        self, symbols, timeframes, start, end, *, incremental, extended_hours
-    ):
+    def sync_intraday(self, symbols, timeframes, start, end, *, incremental, extended_hours):
         selected = tuple(symbols)
-        self.calls.append(
-            (selected, tuple(timeframes), start, end, incremental, extended_hours)
-        )
-        bars = (
-            _required_intraday_bars(self.requirement, selected)
-            if self.provide_data
-            else []
-        )
+        self.calls.append((selected, tuple(timeframes), start, end, incremental, extended_hours))
+        bars = _required_intraday_bars(self.requirement, selected) if self.provide_data else []
         stats = self.database.upsert_bars_with_stats(bars)
         return {
             **stats,
@@ -407,13 +399,17 @@ def test_historical_screen_source_never_reads_current_snapshot(tmp_path, monkeyp
     assert report.records[0].technical.price == 100
 
 
-def test_variants_change_only_component_mix_and_share_recovery_gate() -> None:
+def test_control_variants_change_only_component_mix_and_share_recovery_gate() -> None:
     config = _config()
     record = _record()
+    controls = (
+        StrategyVariant.QUALITY_VALUE,
+        StrategyVariant.QUALITY_VALUE_OPPORTUNITY,
+        StrategyVariant.FULL,
+    )
 
     scores = [
-        engine_module._variant_entry_score(record, variant, config)[0]
-        for variant in StrategyVariant
+        engine_module._variant_entry_score(record, variant, config)[0] for variant in controls
     ]
 
     assert scores[0] == pytest.approx((90 * 0.4 + 80 * 0.3) / 0.7)
@@ -429,7 +425,7 @@ def test_variants_change_only_component_mix_and_share_recovery_gate() -> None:
     assert all(
         engine_module._variant_entry_score(no_recovery, variant, config)
         == (None, "recovery_signal_required")
-        for variant in StrategyVariant
+        for variant in controls
     )
 
 
@@ -444,7 +440,12 @@ def test_short_horizon_and_common_gate_are_explicit_in_result_metadata(tmp_path)
 
     assert result.annualized_metrics_reliable is False
     assert any("annualized metrics are unstable" in warning for warning in result.warnings)
-    assert result.configuration["common_recovery_gate"]["applies_to"] == ["A", "B", "C"]
+    assert result.configuration["common_recovery_gate"]["applies_to"] == [
+        "A",
+        "B",
+        "C",
+        "D",
+    ]
 
 
 def test_filing_and_future_bar_never_leak_backward(tmp_path) -> None:
@@ -526,9 +527,9 @@ def test_strategy_comparison_reuses_each_session_screen(monkeypatch, tmp_path) -
         stem="d1_d5_test",
     )
     assert all(path.exists() for path in research_paths.values())
-    assert "strict_coverage_sensitivity" in research_paths[
-        "diagnostics"
-    ].read_text(encoding="utf-8")
+    assert "strict_coverage_sensitivity" in research_paths["diagnostics"].read_text(
+        encoding="utf-8"
+    )
     with pytest.raises(FileExistsError, match="already exists"):
         export_research_comparison(
             research,
@@ -557,7 +558,9 @@ def test_unified_strategy_comparison_includes_score_and_position_strategies(
     )
 
     assert comparison.comparison_kind is StrategyComparisonKind.ALL
-    assert len(comparison.variants) == 13
+    # ALL adds the three new configured screen runs, but does not multiply any
+    # position-management or explicit expensive research family.
+    assert len(comparison.variants) == 16
     assert comparison.shared_screen_sessions == 2
     assert source.calls == sessions[:-1]
     assert comparison.skipped_strategies == {
@@ -581,9 +584,7 @@ def test_unified_strategy_comparison_includes_score_and_position_strategies(
     assert "C/atr-trailing,C,atr-trailing" in csv_text
 
 
-def test_score_variant_comparison_does_not_initialize_intraday_sync(
-    monkeypatch, tmp_path
-) -> None:
+def test_score_variant_comparison_does_not_initialize_intraday_sync(monkeypatch, tmp_path) -> None:
     sessions = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
     database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
     source = FixtureScreens({sessions[0]: (_record(),)})
@@ -621,7 +622,7 @@ def test_score_variant_comparison_does_not_initialize_intraday_sync(
     assert preparation.intraday_requirements == ()
     assert factory_calls == 0
     assert prefetch.required is False
-    assert len(comparison.variants) == 3
+    assert len(comparison.variants) == 6
 
 
 def test_intraday_prefetch_uses_only_pit_candidates_and_reuses_shared_screens(
@@ -673,9 +674,7 @@ def test_intraday_prefetch_uses_only_pit_candidates_and_reuses_shared_screens(
     assert source.calls == sessions[:-1]
 
 
-def test_intraday_prefetch_never_expands_candidates_to_universe(
-    monkeypatch, tmp_path
-) -> None:
+def test_intraday_prefetch_never_expands_candidates_to_universe(monkeypatch, tmp_path) -> None:
     sessions = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
     universe = [f"U{index:03d}" for index in range(100)]
     database = _database(
@@ -707,9 +706,7 @@ def test_intraday_prefetch_never_expands_candidates_to_universe(
     assert synchronizer.calls[0][0] == tuple(candidates)
 
 
-def test_complete_intraday_candidate_coverage_needs_no_provider(
-    monkeypatch, tmp_path
-) -> None:
+def test_complete_intraday_candidate_coverage_needs_no_provider(monkeypatch, tmp_path) -> None:
     sessions = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
     database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
     source = FixtureScreens({sessions[0]: (_record(),)})
@@ -767,9 +764,7 @@ class RecordingIntradayProvider:
         ]
 
 
-def test_partial_intraday_history_uses_existing_incremental_sync(
-    monkeypatch, tmp_path
-) -> None:
+def test_partial_intraday_history_uses_existing_incremental_sync(monkeypatch, tmp_path) -> None:
     sessions = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
     database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
     source = FixtureScreens({sessions[0]: (_record(),)})
@@ -807,9 +802,7 @@ def test_partial_intraday_history_uses_existing_incremental_sync(
     assert prefetch.timeframes["15m"].failure_reasons == ()
 
 
-def test_missing_intraday_warmup_is_prefetched_before_backtest(
-    monkeypatch, tmp_path
-) -> None:
+def test_missing_intraday_warmup_is_prefetched_before_backtest(monkeypatch, tmp_path) -> None:
     sessions = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
     database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
     source = FixtureScreens({sessions[0]: (_record(),)})
@@ -821,9 +814,7 @@ def test_missing_intraday_warmup_is_prefetched_before_backtest(
     requirement = preparation.intraday_requirements[0]
     all_bars = _required_intraday_bars(requirement)
     execution_session = dict(requirement.first_execution_sessions)["AAA"]
-    database.upsert_bars(
-        [bar for bar in all_bars if bar.timestamp.date() >= execution_session]
-    )
+    database.upsert_bars([bar for bar in all_bars if bar.timestamp.date() >= execution_session])
     assessments = engine_module.assess_comparison_intraday_coverage(
         database, preparation.intraday_requirements
     )
@@ -845,9 +836,7 @@ def test_missing_intraday_warmup_is_prefetched_before_backtest(
     assert "C/intraday-dynamic" not in comparison.skipped_strategies
 
 
-def test_provider_without_candidate_data_skips_only_intraday_run(
-    monkeypatch, tmp_path
-) -> None:
+def test_provider_without_candidate_data_skips_only_intraday_run(monkeypatch, tmp_path) -> None:
     sessions = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
     database = _database(tmp_path, [_bar("XYZ", session) for session in sessions])
     source = FixtureScreens({sessions[0]: (_record("XYZ"),)})
@@ -874,13 +863,11 @@ def test_provider_without_candidate_data_skips_only_intraday_run(
         intraday_prefetch=prefetch,
     )
 
-    assert prefetch.timeframes["15m"].failure_reasons == (
-        "provider returned no 15m data for XYZ",
-    )
+    assert prefetch.timeframes["15m"].failure_reasons == ("provider returned no 15m data for XYZ",)
     assert comparison.skipped_strategies == {
         "C/intraday-dynamic": "provider returned no 15m data for XYZ"
     }
-    assert len(comparison.variants) == 13
+    assert len(comparison.variants) == 16
 
 
 def test_intraday_requirement_planner_keeps_multiple_timeframes_separate(
@@ -892,13 +879,9 @@ def test_intraday_requirement_planner_keeps_multiple_timeframes_separate(
     original = position_management_preset
 
     def multi_timeframe_preset(base, preset, *, legacy_max_holding_days):
-        resolved = original(
-            base, preset, legacy_max_holding_days=legacy_max_holding_days
-        )
+        resolved = original(base, preset, legacy_max_holding_days=legacy_max_holding_days)
         if preset is PositionManagementPreset.DYNAMIC_HOLD:
-            return resolved.model_copy(
-                update={"bar_timeframe": BarTimeframe.MINUTES_5}
-            )
+            return resolved.model_copy(update={"bar_timeframe": BarTimeframe.MINUTES_5})
         if preset is PositionManagementPreset.INTRADAY_DYNAMIC:
             return resolved.model_copy(update={"bar_timeframe": BarTimeframe.HOUR_1})
         return resolved
@@ -1054,9 +1037,7 @@ def test_d4_uses_only_canonical_opening_bar_and_exact_0945_execution(
     final_open, _ = regular_session_bounds(final_session)
     intraday = [_intraday_bar("AAA", signal_open)]
     if opening_present:
-        intraday.append(
-            _intraday_bar("AAA", entry_open, opening="100", close=opening_close)
-        )
+        intraday.append(_intraday_bar("AAA", entry_open, opening="100", close=opening_close))
     if execution_present:
         intraday.append(
             _intraday_bar(
@@ -1179,12 +1160,8 @@ def test_d5_ranks_only_confirmed_execution_eligible_candidates_by_daily_score(
 
 
 def test_negative_reentry_cooldown_is_one_xnys_session_and_winner_is_exempt() -> None:
-    loser = BacktestPosition.model_construct(
-        exit_date=date(2024, 1, 5), position_return=-0.01
-    )
-    winner = BacktestPosition.model_construct(
-        exit_date=date(2024, 1, 5), position_return=0.01
-    )
+    loser = BacktestPosition.model_construct(exit_date=date(2024, 1, 5), position_return=-0.01)
+    winner = BacktestPosition.model_construct(exit_date=date(2024, 1, 5), position_return=0.01)
 
     assert BacktestEngine._negative_cooldown_blocked(loser, date(2024, 1, 8)) is True
     assert BacktestEngine._negative_cooldown_blocked(loser, date(2024, 1, 9)) is False
@@ -1229,8 +1206,7 @@ def test_research_family_is_opt_in_ordered_and_has_no_a_d_variant() -> None:
     all_runs = engine_module._comparison_runs(StrategyComparisonKind.ALL)
     research = engine_module._comparison_runs(StrategyComparisonKind.RESEARCH_D1_D5)
     labels = [
-        engine_module.research_strategy_label(variant, preset)
-        for variant, preset in research
+        engine_module.research_strategy_label(variant, preset) for variant, preset in research
     ]
 
     assert all(preset not in engine_module.RESEARCH_PRESETS for _, preset in all_runs)
@@ -1249,12 +1225,9 @@ def test_research_family_is_opt_in_ordered_and_has_no_a_d_variant() -> None:
     ]
     assert not any(label.startswith("D") and "/A-" in label for label in labels)
 
-    extended = engine_module._comparison_runs(
-        StrategyComparisonKind.EXTENDED_VALIDATION
-    )
+    extended = engine_module._comparison_runs(StrategyComparisonKind.EXTENDED_VALIDATION)
     extended_labels = [
-        engine_module.research_strategy_label(variant, preset)
-        for variant, preset in extended
+        engine_module.research_strategy_label(variant, preset) for variant, preset in extended
     ]
     assert extended_labels == [
         "B/configured",
@@ -1341,9 +1314,7 @@ def test_intraday_close_rule_uses_last_native_bar_price_and_timestamp(tmp_path) 
             "intraday": base.intraday.model_copy(update={"warmup_bars": 1}),
         }
     )
-    source = FixtureScreens(
-        {signal_session: (_record(),), entry_session: (weak,)}
-    )
+    source = FixtureScreens({signal_session: (_record(),), entry_session: (weak,)})
 
     result = BacktestEngine(database, config, screen_source=source).run(
         signal_session, final_session
@@ -1477,9 +1448,7 @@ def test_signal_exit_can_reenter_only_through_fresh_ranking(tmp_path) -> None:
         }
     )
 
-    result = BacktestEngine(database, strategy, screen_source=source).run(
-        sessions[0], sessions[-1]
-    )
+    result = BacktestEngine(database, strategy, screen_source=source).run(sessions[0], sessions[-1])
 
     assert [trade.symbol for trade in result.trades] == ["AAA", "AAA"]
     assert result.trades[0].exit_reason == "signal_decay"
@@ -1498,9 +1467,7 @@ def test_signal_exit_can_reenter_only_through_fresh_ranking(tmp_path) -> None:
 def test_reentry_without_trigger_reset_is_diagnosed_as_not_fresh(tmp_path) -> None:
     sessions = [date(2024, 1, day) for day in (2, 3, 4)]
     database = _database(tmp_path, [_bar("AAA", session) for session in sessions])
-    weak_but_still_triggered = _record(
-        quality=40, valuation=40, opportunity=40, timing=40
-    )
+    weak_but_still_triggered = _record(quality=40, valuation=40, opportunity=40, timing=40)
     strategy = _config().model_copy(
         update={
             "position_management": PositionManagementConfig(
@@ -1511,13 +1478,9 @@ def test_reentry_without_trigger_reset_is_diagnosed_as_not_fresh(tmp_path) -> No
             )
         }
     )
-    source = FixtureScreens(
-        {sessions[0]: (_record(),), sessions[1]: (weak_but_still_triggered,)}
-    )
+    source = FixtureScreens({sessions[0]: (_record(),), sessions[1]: (weak_but_still_triggered,)})
 
-    result = BacktestEngine(database, strategy, screen_source=source).run(
-        sessions[0], sessions[-1]
-    )
+    result = BacktestEngine(database, strategy, screen_source=source).run(sessions[0], sessions[-1])
 
     assert len(result.positions) == 2
     assert result.positions[1].is_reentry is True
@@ -1584,13 +1547,9 @@ def test_score_diagnostics_use_only_available_session_screens(tmp_path) -> None:
             )
         }
     )
-    source = FixtureScreens(
-        {sessions[0]: (_record(),), sessions[1]: (low,), sessions[2]: (high,)}
-    )
+    source = FixtureScreens({sessions[0]: (_record(),), sessions[1]: (low,), sessions[2]: (high,)})
 
-    result = BacktestEngine(database, strategy, screen_source=source).run(
-        sessions[0], sessions[-1]
-    )
+    result = BacktestEngine(database, strategy, screen_source=source).run(sessions[0], sessions[-1])
     position = result.positions[0]
 
     assert [point.date for point in position.score_history] == sessions[:-1]

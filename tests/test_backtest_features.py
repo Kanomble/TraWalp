@@ -123,7 +123,7 @@ def _config():
     )
 
 
-@pytest.mark.parametrize("length", [14, 15, 20, 50, 200, 252, 320])
+@pytest.mark.parametrize("length", [14, 15, 20, 50, 62, 63, 125, 126, 199, 200, 252, 320])
 def test_fast_technical_snapshot_matches_canonical_prefix(length: int) -> None:
     bars = _bars("AAA", length)
     config = _config()
@@ -138,6 +138,46 @@ def test_fast_technical_snapshot_matches_canonical_prefix(length: int) -> None:
             assert actual == pytest.approx(expected, rel=1e-12, abs=1e-12)
         else:
             assert actual == expected
+
+
+@pytest.mark.parametrize(
+    "closes",
+    [
+        [100.0] * 300,
+        [50.0 + index * 0.5 for index in range(300)],
+        [300.0 - index * 0.5 for index in range(300)],
+        [100.0] * 150 + [70.0] * 30 + [70.0 + index * 0.5 for index in range(120)],
+        [100.0] * 250 + [100.0 - index * 0.3 for index in range(50)],
+    ],
+    ids=["flat", "uptrend", "downtrend", "decline-recovery", "pullback"],
+)
+def test_new_technical_features_match_on_synthetic_price_paths(closes: list[float]) -> None:
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    bars = [
+        DailyBar(
+            symbol="AAA",
+            timestamp=start + timedelta(days=index),
+            open=Decimal(str(close)),
+            high=Decimal(str(close + 1)),
+            low=Decimal(str(close - 1)),
+            close=Decimal(str(close)),
+            volume=2_000_000,
+        )
+        for index, close in enumerate(closes)
+    ]
+    config = _config()
+    canonical = technical_snapshot(_bar_frame(bars), config.technical)
+    optimized = _fast_technical_snapshot(bars, config)
+
+    for name in (
+        "drawdown_63d",
+        "recovery_from_63d_low",
+        "max_drawdown_126d",
+        "sma200_distance",
+    ):
+        assert getattr(optimized, name) == pytest.approx(
+            getattr(canonical, name), rel=1e-12, abs=1e-12
+        )
 
 
 def test_accounting_cache_is_filing_aware_and_cannot_leak_later_filing() -> None:

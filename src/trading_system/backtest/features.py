@@ -317,9 +317,11 @@ class HistoricalFeatureScreenSource:
         cheap_market = self._cheap_exclusions.get(company.symbol, {}).get(session)
         market = self._market.get(company.symbol, {}).get(session)
         if cheap_market is None:
-            reasons = [static, "insufficient_market_history"] if static else [
-                "insufficient_market_history"
-            ]
+            reasons = (
+                [static, "insufficient_market_history"]
+                if static
+                else ["insufficient_market_history"]
+            )
             return _empty_candidate(company, session, *reasons)
         if static == "reit_excluded":
             reasons = list(cheap_market)
@@ -500,6 +502,7 @@ def _fast_technical_snapshot(
     recent_rsi = recent_rsi[np.isfinite(recent_rsi)]
     sma20 = _trailing_mean(close, 20)
     sma20_prior = _trailing_mean(close, 20, end=len(close) - rules.sma_slope_lookback)
+    sma200 = _trailing_mean(close, 200)
     momentum20 = _momentum_at(close, 20, len(close) - 1)
     momentum20_prior = _momentum_at(close, 20, len(close) - 6)
     true_ranges = np.maximum.reduce(
@@ -524,7 +527,7 @@ def _fast_technical_snapshot(
         price=float(close[-1]),
         sma20=sma20,
         sma50=_trailing_mean(close, 50),
-        sma200=_trailing_mean(close, 200),
+        sma200=sma200,
         sma20_rising=(sma20 > sma20_prior)
         if sma20 is not None and sma20_prior is not None
         else None,
@@ -549,6 +552,16 @@ def _fast_technical_snapshot(
         atr14=_last_finite(atr_values),
         relative_volume=relative_volume,
         drawdown_52w=(float(close[-1] / np.max(close[-252:]) - 1)) if len(close) >= 252 else None,
+        drawdown_63d=(float(close[-1] / np.max(close[-63:]) - 1)) if len(close) >= 63 else None,
+        recovery_from_63d_low=(float(close[-1] / np.min(close[-63:]) - 1))
+        if len(close) >= 63
+        else None,
+        max_drawdown_126d=(
+            float(np.min(close[-126:] / np.maximum.accumulate(close[-126:]) - 1))
+            if len(close) >= 126
+            else None
+        ),
+        sma200_distance=(float(close[-1] / sma200 - 1)) if sma200 is not None else None,
     )
 
 

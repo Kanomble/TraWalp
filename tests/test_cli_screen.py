@@ -1,3 +1,4 @@
+import json
 from datetime import date
 from types import SimpleNamespace
 
@@ -75,9 +76,7 @@ def test_explain_cli_reports_unknown_local_symbol(tmp_path, monkeypatch, capsys)
     assert "MISSING" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize(
-    "command", ["backtest", "compare-strategies", "backtest-compare"]
-)
+@pytest.mark.parametrize("command", ["backtest", "compare-strategies", "backtest-compare"])
 def test_backtest_cli_rejects_invalid_period_clearly(
     tmp_path, monkeypatch, capsys, command
 ) -> None:
@@ -101,9 +100,7 @@ def test_backtest_cli_rejects_invalid_period_clearly(
     assert "start must not be after end" in capsys.readouterr().err
 
 
-def test_research_local_only_flag_never_invokes_intraday_prefetch(
-    tmp_path, monkeypatch
-) -> None:
+def test_research_local_only_flag_never_invokes_intraday_prefetch(tmp_path, monkeypatch) -> None:
     load_settings.cache_clear()
     settings = load_settings()
     strategy = settings.strategy.model_copy(
@@ -158,9 +155,7 @@ def test_research_local_only_flag_never_invokes_intraday_prefetch(
     assert result == 0
 
 
-def test_extended_validation_cli_never_constructs_a_synchronizer(
-    tmp_path, monkeypatch
-) -> None:
+def test_extended_validation_cli_never_constructs_a_synchronizer(tmp_path, monkeypatch) -> None:
     load_settings.cache_clear()
     settings = load_settings()
     strategy = settings.strategy.model_copy(
@@ -182,9 +177,7 @@ def test_extended_validation_cli_never_constructs_a_synchronizer(
     bundle = SimpleNamespace()
     monkeypatch.setattr(cli, "run_extended_validation", lambda *_args: bundle)
     monkeypatch.setattr(cli, "export_extended_validation", lambda *_args: {})
-    monkeypatch.setattr(
-        cli, "format_extended_validation_summary", lambda _bundle: "validation"
-    )
+    monkeypatch.setattr(cli, "format_extended_validation_summary", lambda _bundle: "validation")
 
     assert cli.main(["validate-extended"]) == 0
 
@@ -209,9 +202,7 @@ class RoutedSynchronizer:
         self.called = "bars"
         return {"records_updated": 1}
 
-    def sync_daily_history(
-        self, symbols, start, end, *, incremental, include_benchmark
-    ):
+    def sync_daily_history(self, symbols, start, end, *, incremental, include_benchmark):
         self.called = "daily_history"
         return {
             "symbols": symbols,
@@ -225,9 +216,7 @@ class RoutedSynchronizer:
         self.called = "market"
         return {"symbols_updated": 1}
 
-    def sync_intraday(
-        self, symbols, timeframes, start, end, *, incremental, extended_hours
-    ):
+    def sync_intraday(self, symbols, timeframes, start, end, *, incremental, extended_hours):
         self.called = "intraday"
         return {
             "symbols": list(symbols),
@@ -325,6 +314,97 @@ def test_sync_intraday_cli_routes_explicit_symbols_and_multiple_timeframes(
     assert '"AAPL"' in payload and '"NVDA"' in payload
     assert '"timeframes": [' in payload
     assert '"5m"' in payload and '"15m"' in payload and '"1h"' in payload
+
+
+def test_sync_intraday_candidate_gaps_only_uses_bounded_manifest_and_exports_report(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    load_settings.cache_clear()
+    settings = load_settings()
+    strategy = settings.strategy.model_copy(
+        update={
+            "storage": StorageConfig(
+                database_path=tmp_path / "candidate-gaps.sqlite3",
+                reports_path=tmp_path / "reports",
+            )
+        }
+    )
+    candidate_report = tmp_path / "candidates.json"
+    candidate_report.write_text(
+        json.dumps(
+            {
+                "discovery_complete": True,
+                "requested_start": "2025-05-01",
+                "requested_end": "2025-05-03",
+                "strategies": ["F0/C", "F3/C", "F5/C"],
+                "candidate_sessions": [{"symbol": "AAA", "execution_session": "2025-05-02"}],
+                "required_sessions": [
+                    {
+                        "symbol": "AAA",
+                        "execution_session": "2025-05-02",
+                        "candidate_paths": ["F0/C", "F3/C", "F5/C"],
+                        "requirement_type": "candidate_session",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def remediate(_database, requirements, **kwargs):
+        captured["requirements"] = tuple(requirements)
+        captured.update(kwargs)
+        return {
+            "candidate_symbol_sessions_required": 1,
+            "required_present_count": 1,
+            "required_local_missing_count": 0,
+            "provider_confirmed_absent_count": 0,
+            "provider_check_failed_count": 0,
+            "fetch_attempted_count": 0,
+            "fetch_success_count": 0,
+            "fetch_failed_count": 0,
+            "qualification_status": "READY",
+            "details": [],
+        }
+
+    monkeypatch.setattr(
+        cli, "load_settings", lambda _path: settings.model_copy(update={"strategy": strategy})
+    )
+    monkeypatch.setattr(cli, "remediate_candidate_intraday_coverage", remediate)
+    monkeypatch.setattr(
+        cli,
+        "_synchronizer",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("CLI must preserve the lazy provider factory")
+        ),
+    )
+
+    result = cli.main(
+        [
+            "sync-intraday",
+            "--start",
+            "2025-05-01",
+            "--end",
+            "2025-05-03",
+            "--timeframes",
+            "15m",
+            "--candidates-report",
+            str(candidate_report),
+            "--candidate-gaps-only",
+            "--output-stem",
+            "candidate-gap-result",
+        ]
+    )
+
+    assert result == 0
+    assert [(item.symbol, item.session.isoformat()) for item in captured["requirements"]] == [
+        ("AAA", "2025-05-02")
+    ]
+    assert captured["strategies_considered"] == ["F0/C", "F3/C", "F5/C"]
+    assert (tmp_path / "reports" / "candidate-gap-result.json").exists()
+    assert (tmp_path / "reports" / "candidate-gap-result_gaps.csv").exists()
+    assert "Final qualification: READY" in capsys.readouterr().out
 
 
 def test_status_cli_reads_persisted_freshness_without_credentials(

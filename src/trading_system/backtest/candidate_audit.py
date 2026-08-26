@@ -18,6 +18,10 @@ from trading_system.backtest.engine import (
     EntryFilterEvaluation,
     evaluate_variant_entry,
 )
+from trading_system.backtest.screen_strategies import (
+    ScreenEntryPolicy,
+    screen_strategy_definition,
+)
 from trading_system.config import StrategyConfig
 from trading_system.data.database import Database
 from trading_system.models.backtest import (
@@ -61,6 +65,7 @@ FUNNEL_STAGES: tuple[tuple[str, str], ...] = (
     ("total_threshold", "total_score_pass"),
     ("price_above_sma20", "price_above_sma20_pass"),
     ("recovery_gate", "recovery_gate_pass"),
+    ("variant_gate", "variant_gate_pass"),
 )
 STAGE_INDEX = {stage: index for index, (stage, _) in enumerate(FUNNEL_STAGES)}
 
@@ -78,11 +83,19 @@ FUNDAMENTAL_METRICS = (
 )
 TECHNICAL_METRICS = (
     "sma20",
+    "sma50",
+    "sma200",
     "sma20_rising",
     "rsi14",
     "momentum5",
+    "momentum126",
     "relative_volume",
     "atr14",
+    "drawdown_52w",
+    "drawdown_63d",
+    "recovery_from_63d_low",
+    "max_drawdown_126d",
+    "sma200_distance",
 )
 NEAR_MISS_FAILURES = {
     "opportunity_threshold",
@@ -120,6 +133,7 @@ class _CandidateState:
     momentum5_above_zero: bool | None = None
     relative_volume: float | None = None
     relative_volume_above_threshold: bool | None = None
+    technical_evidence: dict[str, float | bool | None] = field(default_factory=dict)
 
 
 class HistoricalCandidateAuditCollector:
@@ -211,7 +225,11 @@ class HistoricalCandidateAuditCollector:
                 technical_missing,
                 relative_volume,
             )
-            if _reached_stage(reason, "recovery_gate"):
+            definition = screen_strategy_definition(variant)
+            if definition.entry_policy in {
+                ScreenEntryPolicy.COMMON_RECOVERY,
+                ScreenEntryPolicy.LOSS_AWARE_RECOVERY,
+            } and _reached_stage(reason, "recovery_gate"):
                 recovery["reached_recovery_gate"] += 1
                 if evaluation.rsi_recovery is True:
                     recovery["passed_via_rsi"] += 1
@@ -224,13 +242,13 @@ class HistoricalCandidateAuditCollector:
                 else:
                     recovery["failed_all_recovery_triggers"] += 1
 
-            if reason in NEAR_MISS_FAILURES:
+            if _is_near_miss_failure(reason):
                 near_misses.append(_near_miss(report.as_of, record, evaluation, reason, config))
 
             if (
                 record.pit_fact_count > 0
                 and len(self._pit_samples) < 25
-                and (reason in NEAR_MISS_FAILURES or reason is None)
+                and (_is_near_miss_failure(reason) or reason is None)
             ):
                 self._pit_samples.append(
                     PointInTimeSample(
@@ -336,9 +354,8 @@ class HistoricalCandidateAuditCollector:
                 rsi_recovery=evaluation.rsi_recovery,
                 momentum5_above_zero=evaluation.momentum5_above_zero,
                 relative_volume=record.technical.relative_volume,
-                relative_volume_above_threshold=(
-                    evaluation.relative_volume_above_threshold
-                ),
+                relative_volume_above_threshold=(evaluation.relative_volume_above_threshold),
+                technical_evidence=_technical_evidence(record),
             )
 
         near_misses.sort(key=_near_miss_sort_key)
@@ -364,9 +381,7 @@ class HistoricalCandidateAuditCollector:
         candidate = self._candidates.get((signal_date, symbol))
         if outcome == "order_created":
             state.values["portfolio_eligible"] = state.values.get("portfolio_eligible", 0) + 1
-            state.values["entry_orders_created"] = state.values.get(
-                "entry_orders_created", 0
-            ) + 1
+            state.values["entry_orders_created"] = state.values.get("entry_orders_created", 0) + 1
             if candidate is not None:
                 candidate.order_created = True
                 candidate.status = "entry_order_created"
@@ -425,6 +440,7 @@ class HistoricalCandidateAuditCollector:
                 momentum5_above_zero=item.momentum5_above_zero,
                 relative_volume=item.relative_volume,
                 relative_volume_above_threshold=item.relative_volume_above_threshold,
+                technical_evidence=item.technical_evidence,
             )
             for item in sorted(self._candidates.values(), key=lambda item: (item.date, item.symbol))
         )
@@ -495,9 +511,7 @@ class HistoricalCandidateAuditCollector:
             near_misses=tuple(self._near_misses),
             candidates=candidates,
             data_coverage=aggregate,
-            score_distributions={
-                item.month: item.score_distributions for item in monthly
-            },
+            score_distributions={item.month: item.score_distributions for item in monthly},
             recovery_gate_analysis=dict(recovery_total),
             portfolio_blockers=dict(sorted(portfolio_total.items())),
             execution_blockers=dict(sorted(execution_total.items())),
@@ -564,12 +578,10 @@ class HistoricalCandidateAuditCollector:
             return
         month = self._current_month
         self._monthly_score_summaries[month] = {
-            name: distribution(values)
-            for name, values in self._current_score_values.items()
+            name: distribution(values) for name, values in self._current_score_values.items()
         }
         self._monthly_distance_summaries[month] = {
-            name: distribution(values)
-            for name, values in self._current_distance_values.items()
+            name: distribution(values) for name, values in self._current_distance_values.items()
         }
         self._current_score_values = defaultdict(list)
         self._current_distance_values = defaultdict(list)
@@ -648,15 +660,9 @@ class HistoricalCandidateAuditCollector:
                     month=month,
                     screens=len(items),
                     universe_observations=sum(item.universe_total for item in items),
-                    market_history_available=sum(
-                        item.market_history_available for item in items
-                    ),
-                    pit_fundamental_coverage_pct=(
-                        with_facts / requiring if requiring else None
-                    ),
-                    candidates_before_recovery=sum(
-                        item.reached_recovery_gate for item in items
-                    ),
+                    market_history_available=sum(item.market_history_available for item in items),
+                    pit_fundamental_coverage_pct=(with_facts / requiring if requiring else None),
+                    candidates_before_recovery=sum(item.reached_recovery_gate for item in items),
                     recovery_passes=sum(item.recovery_gate_pass for item in items),
                     eligible_candidates=sum(item.eligible_candidates for item in items),
                     entry_orders_created=sum(item.entry_orders_created for item in items),
@@ -721,9 +727,7 @@ def run_candidate_audit(
 ) -> CandidateAuditResult:
     """Run a configured backtest while observing its exact historical entry funnel."""
 
-    collector = HistoricalCandidateAuditCollector(
-        config, variant, near_miss_limit=near_miss_limit
-    )
+    collector = HistoricalCandidateAuditCollector(config, variant, near_miss_limit=near_miss_limit)
     result = BacktestEngine(database, config, audit_observer=collector).run(
         start,
         end,
@@ -779,6 +783,8 @@ def _diagnostic_failure_reason(
 
 
 def _failure_stage(reason: str) -> str:
+    if reason.startswith(("loss_aware_", "trend_pullback_", "qv_momentum_")):
+        return "variant_gate"
     mapping = {
         "identity_conflict": "identity",
         "reit_excluded": "static_filters",
@@ -827,6 +833,10 @@ def _failure_category(
 
 
 def _category_from_reason(reason: str) -> FailureCategory:
+    if reason.startswith(("loss_aware_", "trend_pullback_", "qv_momentum_")):
+        if reason.endswith("_unavailable"):
+            return FailureCategory.DATA_QUALITY
+        return FailureCategory.STRATEGY_REJECTION
     if reason in {
         "identity_conflict",
         "insufficient_market_history",
@@ -877,9 +887,7 @@ def _threshold_distances(
     rules = config.backtest
     return {
         "quality_threshold": _distance(evaluation.quality_score, rules.min_quality_score),
-        "valuation_threshold": _distance(
-            evaluation.valuation_score, rules.min_valuation_score
-        ),
+        "valuation_threshold": _distance(evaluation.valuation_score, rules.min_valuation_score),
         "opportunity_threshold": _distance(
             evaluation.opportunity_score, rules.min_opportunity_score
         ),
@@ -911,6 +919,8 @@ def _near_miss(
         date=session,
         symbol=record.symbol,
         failed_at=reason,
+        failure_detail=evaluation.failure_detail,
+        blocking_reasons=evaluation.variant_blocking_reasons,
         failure_category=_category_from_reason(reason),
         distance_to_threshold=_threshold_distances(record, evaluation, config).get(reason),
         total_score=evaluation.weighted_score,
@@ -923,22 +933,44 @@ def _near_miss(
         momentum5_above_zero=evaluation.momentum5_above_zero,
         relative_volume=record.technical.relative_volume,
         relative_volume_above_threshold=evaluation.relative_volume_above_threshold,
+        variant_score=evaluation.weighted_score,
+        technical_evidence=_technical_evidence(record),
     )
+
+
+def _is_near_miss_failure(reason: str | None) -> bool:
+    return reason in NEAR_MISS_FAILURES or bool(
+        reason and reason.startswith(("loss_aware_", "trend_pullback_", "qv_momentum_"))
+    )
+
+
+def _technical_evidence(record: ScreenRecord) -> dict[str, float | bool | None]:
+    technical = record.technical
+    return {
+        "price": technical.price,
+        "sma20": technical.sma20,
+        "sma50": technical.sma50,
+        "sma200": technical.sma200,
+        "sma20_rising": technical.sma20_rising,
+        "momentum5": technical.momentum5,
+        "momentum126": technical.momentum126,
+        "drawdown_52w": technical.drawdown_52w,
+        "drawdown_63d": technical.drawdown_63d,
+        "recovery_from_63d_low": technical.recovery_from_63d_low,
+        "max_drawdown_126d": technical.max_drawdown_126d,
+        "sma200_distance": technical.sma200_distance,
+    }
 
 
 def _near_miss_sort_key(item: CandidateNearMiss) -> tuple[int, float, float, str]:
     stage = STAGE_INDEX[_failure_stage(item.failed_at)]
     distance = (
-        abs(item.distance_to_threshold)
-        if item.distance_to_threshold is not None
-        else math.inf
+        abs(item.distance_to_threshold) if item.distance_to_threshold is not None else math.inf
     )
     return (-stage, distance, -(item.total_score or -math.inf), item.symbol)
 
 
-def _coverage_percentages(
-    available: Counter[str], missing: Counter[str]
-) -> dict[str, float]:
+def _coverage_percentages(available: Counter[str], missing: Counter[str]) -> dict[str, float]:
     names = set(available) | set(missing)
     return {
         name: available[name] / (available[name] + missing[name])
@@ -972,9 +1004,7 @@ def _aggregate_coverage(sessions: tuple[CandidateAuditSession, ...]) -> dict:
         "companies_with_valid_pit_fundamentals": valid,
         "companies_with_incomplete_pit_fundamentals": incomplete,
         "companies_without_pit_fundamentals": without,
-        "pit_fundamental_coverage_pct": (
-            (valid + incomplete) / requiring if requiring else None
-        ),
+        "pit_fundamental_coverage_pct": ((valid + incomplete) / requiring if requiring else None),
         "fundamental_metric_coverage_pct": _coverage_percentages(
             fundamental_available, fundamental_missing
         ),
@@ -993,9 +1023,7 @@ def _aggregate_coverage(sessions: tuple[CandidateAuditSession, ...]) -> dict:
     }
 
 
-def _first_transition(
-    sessions: tuple[CandidateAuditSession, ...], first: date | None
-) -> dict:
+def _first_transition(sessions: tuple[CandidateAuditSession, ...], first: date | None) -> dict:
     if first is None:
         return {}
     index = next(i for i, item in enumerate(sessions) if item.date == first)
@@ -1049,9 +1077,7 @@ def _period_comparison(
                 "end": items[-1].date.isoformat(),
                 "screens": len(items),
                 "pit_fundamental_coverage_pct": with_facts / requiring if requiring else None,
-                "candidates_before_recovery": sum(
-                    item.reached_recovery_gate for item in items
-                ),
+                "candidates_before_recovery": sum(item.reached_recovery_gate for item in items),
                 "recovery_passes": sum(item.recovery_gate_pass for item in items),
                 "eligible_candidates": sum(item.eligible_candidates for item in items),
                 "actual_entries": sum(item.actual_entries for item in items),
@@ -1070,8 +1096,7 @@ def _classify_audit(
     data_share = data_failures / classified if classified else 0.0
     requiring = sum(item.companies_requiring_fundamentals for item in sessions)
     with_facts = sum(
-        item.companies_with_valid_pit_fundamentals
-        + item.companies_with_incomplete_pit_fundamentals
+        item.companies_with_valid_pit_fundamentals + item.companies_with_incomplete_pit_fundamentals
         for item in sessions
     )
     pit_coverage = with_facts / requiring if requiring else None

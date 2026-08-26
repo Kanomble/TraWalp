@@ -59,6 +59,12 @@ from trading_system.config import StrategyConfig, load_settings
 from trading_system.data.alpaca_client import AlpacaDataClient
 from trading_system.data.daily_history import warmup_coverage_at
 from trading_system.data.database import Database
+from trading_system.data.intraday_remediation import (
+    IntradayQualificationStatus,
+    candidate_requirements_from_report,
+    export_intraday_remediation_report,
+    remediate_candidate_intraday_coverage,
+)
 from trading_system.data.market_sessions import (
     effective_trading_session,
     intraday_warmup_start,
@@ -193,6 +199,18 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Request the complete interval instead of incremental local overlap ranges",
     )
+    intraday.add_argument(
+        "--candidate-gaps-only",
+        action="store_true",
+        help=(
+            "Use a PIT candidate report to check and fetch only required missing "
+            "symbol-sessions, persisting successful provider-absence evidence"
+        ),
+    )
+    intraday.add_argument(
+        "--output-stem",
+        help="Non-existing report stem required with --candidate-gaps-only",
+    )
     refresh_market = commands.add_parser(
         "refresh-market", help="Refresh batched current snapshots without downloading history"
     )
@@ -299,18 +317,10 @@ def _parser() -> argparse.ArgumentParser:
         "validate-extended",
         help="Run the frozen local-only D1/C and C/intraday extended OOS validation",
     )
-    validation.add_argument(
-        "--start", type=date.fromisoformat, default=date(2025, 5, 1)
-    )
-    validation.add_argument(
-        "--end", type=date.fromisoformat, default=date(2026, 4, 30)
-    )
-    validation.add_argument(
-        "--reference-start", type=date.fromisoformat, default=date(2026, 5, 1)
-    )
-    validation.add_argument(
-        "--reference-end", type=date.fromisoformat, default=date(2026, 8, 12)
-    )
+    validation.add_argument("--start", type=date.fromisoformat, default=date(2025, 5, 1))
+    validation.add_argument("--end", type=date.fromisoformat, default=date(2026, 4, 30))
+    validation.add_argument("--reference-start", type=date.fromisoformat, default=date(2026, 5, 1))
+    validation.add_argument("--reference-end", type=date.fromisoformat, default=date(2026, 8, 12))
     position_comparison = commands.add_parser(
         "backtest-compare", help="Compare the daily position-management presets"
     )
@@ -451,20 +461,100 @@ def main(argv: list[str] | None = None) -> int:
             if args.start > args.end:
                 print("Intraday sync refused: --start must not be after --end", file=sys.stderr)
                 return 2
+            if args.candidate_gaps_only and args.candidates_report is None:
+                print(
+                    "Intraday sync refused: --candidate-gaps-only requires --candidates-report",
+                    file=sys.stderr,
+                )
+                return 2
+            if args.candidate_gaps_only and not args.output_stem:
+                print(
+                    "Intraday sync refused: --candidate-gaps-only requires --output-stem",
+                    file=sys.stderr,
+                )
+                return 2
+            if args.candidate_gaps_only and args.full_window:
+                print(
+                    "Intraday sync refused: --full-window is incompatible with "
+                    "--candidate-gaps-only",
+                    file=sys.stderr,
+                )
+                return 2
             try:
                 timeframes = _parse_intraday_timeframes(args.timeframes)
-                requested = _intraday_symbols(args, database)
+                if args.candidate_gaps_only:
+                    payload = json.loads(args.candidates_report.read_text(encoding="utf-8"))
+                    requirements = candidate_requirements_from_report(
+                        payload,
+                        start=args.start,
+                        end=args.end,
+                        timeframes=timeframes,
+                    )
+                    if not requirements:
+                        raise ValueError(
+                            "candidate report has no requirements in the requested range"
+                        )
+                else:
+                    requested = _intraday_symbols(args, database)
             except ValueError as exc:
                 print(f"Intraday sync refused: {exc}", file=sys.stderr)
                 return 2
-            synchronizer = _synchronizer(
-                settings, database, with_alpaca=True, with_sec=False
-            )
             extended_hours = (
                 settings.strategy.intraday.extended_hours
                 if args.extended_hours is None
                 else args.extended_hours
             )
+            if args.candidate_gaps_only:
+                strategies = payload.get("strategies") or [
+                    str(payload.get("research_family", "candidate_report"))
+                ]
+                result = remediate_candidate_intraday_coverage(
+                    database,
+                    requirements,
+                    validation_start=args.start,
+                    validation_end=args.end,
+                    strategies_considered=strategies,
+                    feed=settings.strategy.universe.market_data_feed,
+                    adjustment=settings.strategy.universe.market_data_adjustment,
+                    extended_hours=extended_hours,
+                    warmup_bars=settings.strategy.intraday.warmup_bars,
+                    synchronizer_factory=lambda: _synchronizer(
+                        settings, database, with_alpaca=True, with_sec=False
+                    ),
+                )
+                try:
+                    paths = export_intraday_remediation_report(
+                        result,
+                        settings.strategy.storage.reports_path,
+                        stem=args.output_stem,
+                    )
+                except FileExistsError as exc:
+                    print(f"Intraday sync refused: {exc}", file=sys.stderr)
+                    return 2
+                print(
+                    "Candidate-path intraday remediation"
+                    f"\n  Required symbol-sessions: "
+                    f"{result['candidate_symbol_sessions_required']}"
+                    f"\n  Already covered: {result['required_present_count']}"
+                    f"\n  Locally missing: {result['required_local_missing_count']}"
+                    f"\n  Provider absent: {result['provider_confirmed_absent_count']}"
+                    f"\n  Provider check failed: {result['provider_check_failed_count']}"
+                    f"\n  Fetch attempted: {result['fetch_attempted_count']}"
+                    f"\n  Fetch succeeded: {result['fetch_success_count']}"
+                    f"\n  Fetch failed: {result['fetch_failed_count']}"
+                    f"\n  Final qualification: {result['qualification_status']}"
+                    "\n\n" + "\n".join(f"{name}: {path}" for name, path in paths.items())
+                )
+                return (
+                    0
+                    if result["qualification_status"]
+                    in {
+                        IntradayQualificationStatus.READY.value,
+                        IntradayQualificationStatus.READY_WITH_PROVIDER_ABSENCE.value,
+                    }
+                    else 1
+                )
+            synchronizer = _synchronizer(settings, database, with_alpaca=True, with_sec=False)
             requested_start = min(
                 intraday_warmup_start(
                     args.start,
@@ -495,18 +585,12 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             requested = (
                 sorted(
-                    {
-                        symbol.strip().upper()
-                        for symbol in args.symbols.split(",")
-                        if symbol.strip()
-                    }
+                    {symbol.strip().upper() for symbol in args.symbols.split(",") if symbol.strip()}
                 )
                 if args.symbols
                 else None
             )
-            synchronizer = _synchronizer(
-                settings, database, with_alpaca=True, with_sec=False
-            )
+            synchronizer = _synchronizer(settings, database, with_alpaca=True, with_sec=False)
             result = synchronizer.sync_daily_history(
                 requested,
                 args.start,
@@ -602,9 +686,7 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             print(f"Candidate audit refused: {exc}", file=sys.stderr)
             return 1
-        paths = export_candidate_audit(
-            audit_result, settings.strategy.storage.reports_path
-        )
+        paths = export_candidate_audit(audit_result, settings.strategy.storage.reports_path)
         print(format_candidate_audit_summary(audit_result))
         print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
         return 0
@@ -631,9 +713,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.reference_start,
                 args.reference_end,
             )
-            paths = export_extended_validation(
-                bundle, settings.strategy.storage.reports_path
-            )
+            paths = export_extended_validation(bundle, settings.strategy.storage.reports_path)
         except (FileExistsError, ValueError) as exc:
             print(f"Extended validation refused: {exc}", file=sys.stderr)
             return 1
@@ -647,9 +727,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.strict_intraday_coverage
                 and comparison_kind is not StrategyComparisonKind.RESEARCH_D1_D5
             ):
-                raise ValueError(
-                    "--strict-intraday-coverage is available only with research-d1-d5"
-                )
+                raise ValueError("--strict-intraday-coverage is available only with research-d1-d5")
             print("Preparing strategy comparison...", flush=True)
             preparation = prepare_strategy_comparison(
                 database,
@@ -681,9 +759,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             elif args.no_intraday_prefetch:
                 print("\nIntraday prefetch: disabled (--no-intraday-prefetch)")
-                prefetch = comparison_intraday_prefetch_metadata(
-                    preparation, enabled=False
-                )
+                prefetch = comparison_intraday_prefetch_metadata(preparation, enabled=False)
             else:
                 assessments = assess_comparison_intraday_coverage(
                     database, preparation.intraday_requirements
@@ -719,14 +795,11 @@ def main(argv: list[str] | None = None) -> int:
                     settings.strategy,
                     preparation,
                     assessments,
-                    lambda: _synchronizer(
-                        settings, database, with_alpaca=True, with_sec=False
-                    ),
+                    lambda: _synchronizer(settings, database, with_alpaca=True, with_sec=False),
                 )
                 if sync_count:
                     synchronized_symbols = sum(
-                        item.sync_requested_symbols
-                        for item in prefetch.timeframes.values()
+                        item.sync_requested_symbols for item in prefetch.timeframes.values()
                     )
                     print(
                         f"  Symbols requested: {synchronized_symbols}"
@@ -767,9 +840,7 @@ def main(argv: list[str] | None = None) -> int:
                     settings.strategy.backtest.slippage_bps != 5
                     or settings.strategy.backtest.commission_bps != 0
                 ):
-                    raise ValueError(
-                        "research-d1-d5 requires the frozen 5 bps / 0 bps baseline"
-                    )
+                    raise ValueError("research-d1-d5 requires the frozen 5 bps / 0 bps baseline")
                 print("\nRunning strict intraday coverage sensitivity...", flush=True)
                 strict_comparison = compare_strategies(
                     database,
@@ -820,8 +891,8 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError(
                         "research-intraday-isolation requires the frozen 5 bps / 0 bps baseline"
                     )
-                comparison_result, isolation_coverage_rows = (
-                    annotate_intraday_isolation_coverage(database, comparison_result)
+                comparison_result, isolation_coverage_rows = annotate_intraday_isolation_coverage(
+                    database, comparison_result
                 )
                 if args.cost_stress:
                     cost_comparisons = {"BASE": comparison_result}
@@ -898,8 +969,8 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError(
                         "research-intraday-hybrid requires the frozen 5 bps / 0 bps baseline"
                     )
-                comparison_result, hybrid_coverage_rows = (
-                    annotate_intraday_hybrid_coverage(database, comparison_result)
+                comparison_result, hybrid_coverage_rows = annotate_intraday_hybrid_coverage(
+                    database, comparison_result
                 )
                 if args.cost_stress:
                     cost_comparisons = {"BASE": comparison_result}
@@ -934,9 +1005,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         try:
             if strict_comparison is not None:
-                research_stem = args.output_stem or (
-                    f"d1_d5_research_{args.start}_{args.end}"
-                )
+                research_stem = args.output_stem or (f"d1_d5_research_{args.start}_{args.end}")
                 paths = export_research_comparison(
                     comparison_result,
                     strict_comparison,
@@ -946,9 +1015,7 @@ def main(argv: list[str] | None = None) -> int:
                     cost_stress_requested=args.cost_stress,
                 )
             elif comparison_kind is StrategyComparisonKind.RESEARCH_INTRADAY_ISOLATION:
-                isolation_stem = args.output_stem or (
-                    f"intraday_isolation_{args.start}_{args.end}"
-                )
+                isolation_stem = args.output_stem or (f"intraday_isolation_{args.start}_{args.end}")
                 paths = export_intraday_isolation_comparison(
                     comparison_result,
                     cost_comparisons,
@@ -958,9 +1025,7 @@ def main(argv: list[str] | None = None) -> int:
                     cost_stress_requested=args.cost_stress,
                 )
             elif comparison_kind is StrategyComparisonKind.RESEARCH_INTRADAY_NEXT:
-                next_stem = args.output_stem or (
-                    f"intraday_next_{args.start}_{args.end}"
-                )
+                next_stem = args.output_stem or (f"intraday_next_{args.start}_{args.end}")
                 paths = export_intraday_next_comparison(
                     comparison_result,
                     cost_comparisons,
@@ -970,9 +1035,7 @@ def main(argv: list[str] | None = None) -> int:
                     cost_stress_requested=args.cost_stress,
                 )
             elif comparison_kind is StrategyComparisonKind.RESEARCH_INTRADAY_HYBRID:
-                hybrid_stem = args.output_stem or (
-                    f"intraday_hybrid_{args.start}_{args.end}"
-                )
+                hybrid_stem = args.output_stem or (f"intraday_hybrid_{args.start}_{args.end}")
                 paths = export_intraday_hybrid_comparison(
                     comparison_result,
                     cost_comparisons,
@@ -1105,9 +1168,7 @@ def _parse_intraday_timeframes(raw: str) -> tuple[BarTimeframe, ...]:
     try:
         parsed = tuple(
             dict.fromkeys(
-                BarTimeframe(item.strip().lower())
-                for item in raw.split(",")
-                if item.strip()
+                BarTimeframe(item.strip().lower()) for item in raw.split(",") if item.strip()
             )
         )
     except ValueError as exc:
@@ -1119,9 +1180,7 @@ def _parse_intraday_timeframes(raw: str) -> tuple[BarTimeframe, ...]:
 
 def _intraday_symbols(args, database: Database) -> list[str]:
     if args.symbols:
-        symbols = sorted(
-            {item.strip().upper() for item in args.symbols.split(",") if item.strip()}
-        )
+        symbols = sorted({item.strip().upper() for item in args.symbols.split(",") if item.strip()})
     elif args.universe == "all":
         symbols = [company.symbol for company in database.list_tradable_companies()]
     else:
@@ -1261,9 +1320,7 @@ def _comparison_data_qualification(
     config: StrategyConfig,
     preparation: StrategyComparisonPreparation,
 ) -> dict[str, DataQualificationReport]:
-    symbols = sorted(
-        {company.symbol for company in database.list_tradable_companies()} | {"SPY"}
-    )
+    symbols = sorted({company.symbol for company in database.list_tradable_companies()} | {"SPY"})
     reports = {
         "daily": qualify_daily_history(
             database,

@@ -27,6 +27,11 @@ from trading_system.backtest.research_registry import (
 )
 from trading_system.config import StrategyConfig
 from trading_system.data.database import Database
+from trading_system.data.intraday_remediation import (
+    CandidateIntradayRequirement,
+    IntradayQualificationStatus,
+    qualify_candidate_intraday_coverage,
+)
 from trading_system.data.market_sessions import (
     regular_session_bounds,
     required_daily_warmup_sessions,
@@ -36,7 +41,7 @@ from trading_system.data.qualification import (
     provider_range_verified,
     qualify_daily_history,
 )
-from trading_system.models.backtest import StrategyComparisonKind
+from trading_system.models.backtest import StrategyComparisonKind, StrategyVariant
 from trading_system.models.market_data import BarTimeframe, DailyBar
 
 
@@ -54,8 +59,7 @@ def build_compare_preflight(
         raise ValueError("Preflight start must not be after end")
     runs = research_family_runs(comparison_kind)
     labels = [
-        comparison_strategy_label(comparison_kind, variant, preset)
-        for variant, preset in runs
+        comparison_strategy_label(comparison_kind, variant, preset) for variant, preset in runs
     ]
     company_symbols = {company.symbol for company in database.list_tradable_companies()}
     identity_conflicts = database.unresolved_sec_identity_conflict_symbols()
@@ -97,9 +101,7 @@ def build_compare_preflight(
         ],
         "requested_period_end_session": required_last.isoformat(),
         "requested_period_end_present": requested_period_end_present,
-        "screenable_symbol_count_at_start": start_qualification[
-            "screenable_symbol_count_at_start"
-        ],
+        "screenable_symbol_count_at_start": start_qualification["screenable_symbol_count_at_start"],
         "ready": daily_ready,
         "failure_reasons": global_failure_reasons,
     }
@@ -118,7 +120,7 @@ def build_compare_preflight(
             discovery_error = str(exc)
 
     intraday = (
-        _intraday_preflight(database, config, preparation)
+        _intraday_preflight(database, config, preparation, labels, start, end)
         if preparation is not None
         else _empty_intraday_preflight(config)
     )
@@ -196,8 +198,16 @@ def build_compare_preflight(
         "intraday": intraday,
         "dataset_ready_for_local_compare": ready,
         "candidate_trade_path_gaps": {
-            "status": "NOT_KNOWABLE_WITHOUT_EXECUTED_POSITIONS",
-            "note": "Preflight does not simulate entries or exits.",
+            "status": intraday["qualification_status"],
+            "candidate_session_requirements": (
+                intraday.get("candidate_path_qualification") or {}
+            ).get("candidate_symbol_sessions_required", 0),
+            "note": (
+                "Candidate entry sessions and every conservative potential open-position session "
+                "after a symbol's first candidate are qualified without simulating entries or "
+                "exits. Provider-confirmed absence remains explicit and uses the research family's "
+                "deterministic missing-data skips."
+            ),
         },
         "recommended_manual_sync_daily_history_command": required_daily_command,
         "recommended_manual_sync_daily_history_reason": required_daily_reason,
@@ -246,7 +256,8 @@ def export_compare_preflight(
             ".\\.venv\\Scripts\\python.exe -m trading_system.cli sync-intraday "
             f"--start {report['requested_period']['start']} "
             f"--end {report['requested_period']['end']} --timeframes 15m "
-            f"--candidates-report {paths['intraday_candidates']}"
+            f"--candidates-report {paths['intraday_candidates']} "
+            f"--candidate-gaps-only --output-stem {stem}_intraday_remediation"
         )
     report = {**report, "recommended_manual_sync_intraday_command": intraday_command}
     _atomic_text(paths["preflight"], json.dumps(report, indent=2))
@@ -333,10 +344,65 @@ def _intraday_preflight(
     database: Database,
     config: StrategyConfig,
     preparation: StrategyComparisonPreparation,
+    strategy_labels: list[str],
+    validation_start: date,
+    validation_end: date,
 ) -> dict[str, Any]:
-    assessments = assess_comparison_intraday_coverage(
-        database, preparation.intraday_requirements
+    assessments = assess_comparison_intraday_coverage(database, preparation.intraday_requirements)
+    coverage_requirements: list[CandidateIntradayRequirement] = []
+    candidate_pairs: set[tuple[str, date, BarTimeframe]] = set()
+    for assessment in assessments:
+        requirement = assessment.requirement
+        for symbol, session in requirement.candidate_execution_sessions:
+            candidate_pairs.add((symbol, session, requirement.timeframe))
+            coverage_requirements.append(
+                CandidateIntradayRequirement(
+                    symbol=symbol,
+                    session=session,
+                    timeframe=requirement.timeframe,
+                    candidate_paths=tuple(strategy_labels),
+                )
+            )
+        comparison_index = {
+            session: index for index, session in enumerate(requirement.comparison_sessions)
+        }
+        for symbol, first_execution in requirement.first_execution_sessions:
+            for session in requirement.comparison_sessions[comparison_index[first_execution] :]:
+                if (symbol, session, requirement.timeframe) in candidate_pairs:
+                    continue
+                coverage_requirements.append(
+                    CandidateIntradayRequirement(
+                        symbol=symbol,
+                        session=session,
+                        timeframe=requirement.timeframe,
+                        candidate_paths=tuple(strategy_labels),
+                        requirement_type="potential_open_position_session",
+                    )
+                )
+    coverage = qualify_candidate_intraday_coverage(
+        database,
+        coverage_requirements,
+        validation_start=validation_start,
+        validation_end=validation_end,
+        strategies_considered=strategy_labels,
+        feed=config.universe.market_data_feed,
+        adjustment=config.universe.market_data_adjustment,
+        extended_hours=config.intraday.extended_hours,
+        warmup_bars=config.intraday.warmup_bars,
     )
+    coverage_by_key = {
+        (item["symbol"], item["session"], item["timeframe"]): item for item in coverage["details"]
+    }
+    unresolved_coverage_details = [
+        item for item in coverage["details"] if item["classification"] != "REQUIRED_PRESENT"
+    ]
+    bounded_coverage = {
+        **coverage,
+        "details": unresolved_coverage_details,
+        "required_present_details_omitted": (
+            len(coverage["details"]) - len(unresolved_coverage_details)
+        ),
+    }
     details: list[dict[str, Any]] = []
     candidate_symbols: set[str] = set()
     candidate_sessions: set[tuple[str, date]] = set()
@@ -360,9 +426,7 @@ def _intraday_preflight(
         for symbol, session in requirement.candidate_execution_sessions:
             opening, closing = regular_session_bounds(session)
             symbol_bars = sorted(by_symbol[symbol], key=lambda item: item.timestamp)
-            session_bars = [
-                bar for bar in symbol_bars if opening <= bar.timestamp < closing
-            ]
+            session_bars = [bar for bar in symbol_bars if opening <= bar.timestamp < closing]
             prior = [bar for bar in symbol_bars if bar.timestamp < opening]
             entry_present = bool(session_bars)
             warmup_count = len(prior)
@@ -396,15 +460,27 @@ def _intraday_preflight(
                     "warmup_required_native_bars": requirement.warmup_bars,
                     "warmup_available_native_bars": warmup_count,
                     "warmup_sufficient": warmup_sufficient,
+                    "candidate_path_coverage": coverage_by_key.get(
+                        (symbol, session.isoformat(), requirement.timeframe.value)
+                    ),
                 }
             )
-    intraday_ready = not any(
-        (missing_entries, missing_first_hours, missing_f5_execution, insufficient_warmup)
-    )
+    ready_statuses = {
+        IntradayQualificationStatus.READY.value,
+        IntradayQualificationStatus.READY_WITH_PROVIDER_ABSENCE.value,
+    }
+    intraday_ready = coverage["qualification_status"] in ready_statuses
+    unresolved = [
+        item
+        for item in unresolved_coverage_details
+        if item["classification"]
+        in {
+            "LOCAL_MISSING_FETCHABLE",
+            "PROVIDER_CHECK_FAILED",
+        }
+    ]
     return {
-        "required_timeframes": sorted(
-            {item.requirement.timeframe.value for item in assessments}
-        ),
+        "required_timeframes": sorted({item.requirement.timeframe.value for item in assessments}),
         "regular_session_only": not config.intraday.extended_hours,
         "extended_hours": config.intraday.extended_hours,
         "native_warmup_bars": config.intraday.warmup_bars,
@@ -415,6 +491,27 @@ def _intraday_preflight(
         "missing_required_first_hour_f5_sessions": missing_first_hours,
         "missing_f5_pullback_execution_bars": missing_f5_execution,
         "insufficient_native_warmup_sessions": insufficient_warmup,
+        "candidate_path_qualification": bounded_coverage,
+        "qualification_status": coverage["qualification_status"],
+        "required_present_count": coverage["required_present_count"],
+        "required_local_missing_count": coverage["required_local_missing_count"],
+        "provider_confirmed_absent_count": coverage["provider_confirmed_absent_count"],
+        "provider_check_failed_count": coverage["provider_check_failed_count"],
+        "irrelevant_gap_count": coverage["irrelevant_gap_count"],
+        "blocking_reasons": coverage["blocking_reasons"],
+        "unresolved_or_ambiguous": unresolved,
+        "not_required_for_candidate_path": [
+            {
+                "strategy": f"{variant.value}/configured",
+                "reason": "the registered score-variant run uses Daily position management",
+            }
+            for variant in (
+                StrategyVariant.FULL,
+                StrategyVariant.LOSS_AWARE_RECOVERY,
+                StrategyVariant.TREND_PULLBACK,
+                StrategyVariant.QUALITY_VALUE_MOMENTUM,
+            )
+        ],
         "structural_coverage": [
             {
                 "timeframe": item.requirement.timeframe.value,
@@ -426,6 +523,7 @@ def _intraday_preflight(
             for item in assessments
         ],
         "candidate_session_details": details,
+        "required_sessions": unresolved_coverage_details,
         "intraday_ready": intraday_ready,
         "synthetic_bars_created": False,
     }
@@ -444,8 +542,19 @@ def _empty_intraday_preflight(config: StrategyConfig) -> dict[str, Any]:
         "missing_required_first_hour_f5_sessions": None,
         "missing_f5_pullback_execution_bars": None,
         "insufficient_native_warmup_sessions": None,
+        "candidate_path_qualification": None,
+        "qualification_status": "NOT_READY_LOCAL_GAPS",
+        "required_present_count": 0,
+        "required_local_missing_count": 0,
+        "provider_confirmed_absent_count": 0,
+        "provider_check_failed_count": 0,
+        "irrelevant_gap_count": 0,
+        "blocking_reasons": ["Daily candidate discovery did not complete"],
+        "unresolved_or_ambiguous": [],
+        "not_required_for_candidate_path": [],
         "structural_coverage": [],
         "candidate_session_details": [],
+        "required_sessions": [],
         "intraday_ready": False,
         "synthetic_bars_created": False,
     }
@@ -459,6 +568,10 @@ def _candidate_report(
     intraday: dict[str, Any],
     discovery_error: str | None,
 ) -> dict[str, Any]:
+    strategies = [
+        comparison_strategy_label(comparison_kind, variant, preset)
+        for variant, preset in research_family_runs(comparison_kind)
+    ]
     sessions = (
         sorted(
             {
@@ -475,19 +588,39 @@ def _candidate_report(
         "requested_start": start.isoformat(),
         "requested_end": end.isoformat(),
         "research_family": comparison_kind.value,
+        "strategies": strategies,
         "discovery_complete": preparation is not None,
-        "candidate_discovery_status": (
-            "COMPLETE" if preparation is not None else "NOT_COMPLETE"
-        ),
+        "candidate_discovery_status": ("COMPLETE" if preparation is not None else "NOT_COMPLETE"),
         "discovery_error": discovery_error,
         "timeframes": intraday["required_timeframes"],
         "extended_hours": intraday["extended_hours"],
         "warmup_bars": intraday["native_warmup_bars"],
-        "candidate_symbols": [
-            {"symbol": symbol} for symbol in intraday["candidate_symbols"]
-        ],
+        "candidate_symbols": [{"symbol": symbol} for symbol in intraday["candidate_symbols"]],
         "candidate_sessions": [
             {"symbol": symbol, "execution_session": session.isoformat()}
             for symbol, session in sessions
+        ],
+        "required_sessions": [
+            {
+                "symbol": item["symbol"],
+                "execution_session": item["session"],
+                "timeframe": item["timeframe"],
+                "candidate_paths": item["candidate_paths"],
+                "requirement_type": item["requirement_type"],
+            }
+            for item in intraday.get("required_sessions", ())
+        ],
+        "potential_position_ranges": [
+            {
+                "symbol": symbol,
+                "first_execution_session": first_execution.isoformat(),
+                "last_potential_session": requirement.comparison_sessions[-1].isoformat(),
+                "timeframe": requirement.timeframe.value,
+                "candidate_paths": strategies,
+            }
+            for requirement in (
+                preparation.intraday_requirements if preparation is not None else ()
+            )
+            for symbol, first_execution in requirement.first_execution_sessions
         ],
     }

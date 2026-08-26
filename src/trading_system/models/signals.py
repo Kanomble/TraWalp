@@ -26,3 +26,7 @@ class TechnicalSnapshot(BaseModel):
     atr14: float | None = None
     relative_volume: float | None = None
     drawdown_52w: float | None = None
+    drawdown_63d: float | None = None
+    recovery_from_63d_low: float | None = None
+    max_drawdown_126d: float | None = None
+    sma200_distance: float | None = None

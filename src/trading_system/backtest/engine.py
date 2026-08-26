@@ -48,6 +48,14 @@ from trading_system.backtest.research_registry import (
 from trading_system.backtest.research_registry import (
     research_strategy_label as registered_research_strategy_label,
 )
+from trading_system.backtest.screen_strategies import (
+    ScreenEntryPolicy,
+    evaluate_strategy_gate,
+    screen_strategy_definition,
+)
+from trading_system.backtest.screen_strategies import (
+    variant_score_value as defined_variant_score_value,
+)
 from trading_system.config import PositionManagementConfig, StrategyConfig
 from trading_system.data.database import Database
 from trading_system.data.market_sessions import (
@@ -171,6 +179,7 @@ class EntryFilterEvaluation:
     first_failure: str | None
     failure_detail: str | None
     blocking_reasons: tuple[str, ...]
+    variant_blocking_reasons: tuple[str, ...]
     quality_score: float | None
     valuation_score: float | None
     opportunity_score: float | None
@@ -273,11 +282,7 @@ class StrategyComparisonPreparation:
     @property
     def intraday_candidate_symbols(self) -> int:
         return len(
-            {
-                symbol
-                for requirement in self.intraday_requirements
-                for symbol in requirement.symbols
-            }
+            {symbol for requirement in self.intraday_requirements for symbol in requirement.symbols}
         )
 
 
@@ -388,21 +393,16 @@ class BacktestEngine:
         first_hour_pullback_entry = preset in FIRST_HOUR_PULLBACK_ENTRY_PRESETS
         f4_swing_management = preset in F4_SWING_MANAGEMENT_PRESETS
         native_intraday_loop = intraday_monitoring or confirmed_entry
-        execution_timeframe = (
-            BarTimeframe.MINUTES_15 if confirmed_entry else position_timeframe
-        )
+        execution_timeframe = BarTimeframe.MINUTES_15 if confirmed_entry else position_timeframe
         self.position_manager = PositionManager(
             self.position_management,
             slippage_bps=self.config.backtest.slippage_bps,
             commission_bps=self.config.backtest.commission_bps,
         )
-        self._legacy_reason_compat = (
-            preset is PositionManagementPreset.LEGACY
-            or (
-                preset is PositionManagementPreset.CONFIGURED
-                and _uses_legacy_position_defaults(
-                    self.config.position_management, self.config.backtest.max_holding_days
-                )
+        self._legacy_reason_compat = preset is PositionManagementPreset.LEGACY or (
+            preset is PositionManagementPreset.CONFIGURED
+            and _uses_legacy_position_defaults(
+                self.config.position_management, self.config.backtest.max_holding_days
             )
         )
         self._position_sequence = 0
@@ -450,9 +450,7 @@ class BacktestEngine:
             trades.append(trade)
             execution_legs.setdefault(position.position_id, []).append(trade)
             if closed:
-                completed = finalize_position(
-                    position, execution_legs[position.position_id]
-                )
+                completed = finalize_position(position, execution_legs[position.position_id])
                 completed_positions.append(completed)
                 self._complete_candidate_event(position, completed)
                 f4_exit_detectors.pop(position.position_id, None)
@@ -495,9 +493,7 @@ class BacktestEngine:
                         regular_open <= intraday_bar.timestamp < regular_close
                     ):
                         continue
-                    intraday_by_symbol.setdefault(intraday_bar.symbol, []).append(
-                        intraday_bar
-                    )
+                    intraday_by_symbol.setdefault(intraday_bar.symbol, []).append(intraday_bar)
                     last_intraday_bars[intraday_bar.symbol] = intraday_bar
                 missing = sorted(active_symbols - set(intraday_by_symbol))
                 if (
@@ -507,9 +503,7 @@ class BacktestEngine:
                     and not self.strict_coverage_sensitivity
                     and not self.allow_missing_intraday_data
                 ):
-                    raise self._missing_intraday_data(
-                        missing, start, end, execution_timeframe
-                    )
+                    raise self._missing_intraday_data(missing, start, end, execution_timeframe)
 
                 for symbol in sorted(active_symbols):
                     history = intraday_histories.get(symbol)
@@ -540,17 +534,12 @@ class BacktestEngine:
                         )
                         if not self.config.intraday.extended_hours:
                             gap = [
-                                item
-                                for item in gap
-                                if is_regular_session_timestamp(item.timestamp)
+                                item for item in gap if is_regular_session_timestamp(item.timestamp)
                             ]
                         history.extend(gap)
 
             opening_bars = (
-                {
-                    symbol: symbol_bars[0]
-                    for symbol, symbol_bars in intraday_by_symbol.items()
-                }
+                {symbol: symbol_bars[0] for symbol, symbol_bars in intraday_by_symbol.items()}
                 if native_intraday_loop
                 else bars
             )
@@ -604,11 +593,9 @@ class BacktestEngine:
                                 execution_failure_reason="missing_intraday_entry_session",
                             )
                             if self.strict_coverage_sensitivity:
-                                order.intraday_session_status = (
-                                    self.intraday_session_statuses.get(
-                                        (order.record.symbol, session),
-                                        "UNKNOWN",
-                                    )
+                                order.intraday_session_status = self.intraday_session_statuses.get(
+                                    (order.record.symbol, session),
+                                    "UNKNOWN",
                                 )
                                 skipped["strict_incomplete_session"] += 1
                                 continue
@@ -624,9 +611,7 @@ class BacktestEngine:
                             raise self._missing_intraday_data(
                                 [order.record.symbol], start, end, execution_timeframe
                             )
-                        pending_by_timestamp.setdefault(regular_bars[0].timestamp, []).append(
-                            order
-                        )
+                        pending_by_timestamp.setdefault(regular_bars[0].timestamp, []).append(order)
                         order.intended_entry_timestamp = regular_bars[0].timestamp
                         order.execution_bar_present = True
                         canonical_entry_present = any(
@@ -638,9 +623,7 @@ class BacktestEngine:
                             entry_bar_present=canonical_entry_present,
                             actual_entry_timestamp=regular_bars[0].timestamp.isoformat(),
                             execution_failure_reason=(
-                                None
-                                if canonical_entry_present
-                                else "missing_canonical_entry_bar"
+                                None if canonical_entry_present else "missing_canonical_entry_bar"
                             ),
                         )
 
@@ -663,22 +646,16 @@ class BacktestEngine:
                             )
                             if decision.action is PositionAction.HOLD:
                                 break
-                            if execute_position_decision(
-                                symbol, session, decision, daily_bar
-                            ):
+                            if execute_position_decision(symbol, session, decision, daily_bar):
                                 break
                         if symbol not in positions:
                             continue
                         position = positions[symbol]
                         while True:
-                            decision = self.position_manager.evaluate_intrabar(
-                                position, daily_bar
-                            )
+                            decision = self.position_manager.evaluate_intrabar(position, daily_bar)
                             if decision.action is PositionAction.HOLD:
                                 break
-                            if execute_position_decision(
-                                symbol, session, decision, daily_bar
-                            ):
+                            if execute_position_decision(symbol, session, decision, daily_bar):
                                 break
                         if symbol in positions:
                             next_atr = self._atr_as_of(
@@ -734,9 +711,7 @@ class BacktestEngine:
                                         order,
                                         executed=False,
                                         warmup_sufficient=False,
-                                        execution_failure_reason=(
-                                            "insufficient_intraday_warmup"
-                                        ),
+                                        execution_failure_reason=("insufficient_intraday_warmup"),
                                     )
                                     self._observe_execution(
                                         order,
@@ -759,17 +734,12 @@ class BacktestEngine:
                         position, cash, reason = self._open_position(
                             order,
                             timestamp_bars[symbol],
-                            {
-                                key: value[0]
-                                for key, value in intraday_by_symbol.items()
-                            },
+                            {key: value[0] for key, value in intraday_by_symbol.items()},
                             positions,
                             cash,
                             entry_atr=entry_atr,
                             warmup_history=(
-                                intraday_histories[symbol]
-                                if intraday_monitoring
-                                else None
+                                intraday_histories[symbol] if intraday_monitoring else None
                             ),
                         )
                         if position is None:
@@ -802,12 +772,8 @@ class BacktestEngine:
                             order,
                             executed=True,
                             warmup_sufficient=position.warmup_sufficient,
-                            warmup_available_native_bars=(
-                                position.warmup_available_native_bars
-                            ),
-                            actual_entry_timestamp=timestamp_bars[
-                                symbol
-                            ].timestamp.isoformat(),
+                            warmup_available_native_bars=(position.warmup_available_native_bars),
+                            actual_entry_timestamp=timestamp_bars[symbol].timestamp.isoformat(),
                         )
 
                     session_peak_market_value = max(
@@ -834,8 +800,7 @@ class BacktestEngine:
                                 if detector.exit_due(bar.timestamp):
                                     if (
                                         detector.intended_exit_timestamp is not None
-                                        and bar.timestamp
-                                        > detector.intended_exit_timestamp
+                                        and bar.timestamp > detector.intended_exit_timestamp
                                     ):
                                         detector.execution_bar_missing = True
                                         position.swing_high_execution_bar_missing = True
@@ -980,9 +945,7 @@ class BacktestEngine:
                             reason="missing_next_session_bar",
                         )
                         continue
-                    position, cash, reason = self._open_position(
-                        order, bar, bars, positions, cash
-                    )
+                    position, cash, reason = self._open_position(order, bar, bars, positions, cash)
                     if position is None:
                         skipped[reason or "entry_rejected"] += 1
                         self._observe_execution(
@@ -1021,9 +984,7 @@ class BacktestEngine:
                             session,
                             self.position_management.atr_trailing_stop.atr_period,
                         )
-                        self.position_manager.update_after_bar(
-                            position, bar, next_atr=next_atr
-                        )
+                        self.position_manager.update_after_bar(position, bar, next_atr=next_atr)
 
             # 4. Close-based score, rotation and time rules use this completed session only.
             report = None if final_session else screen_source.screen(session)
@@ -1033,11 +994,7 @@ class BacktestEngine:
             best_symbol, best_score = self._best_candidate(report, variant, positions)
             for symbol in list(positions):
                 position = positions[symbol]
-                bar = (
-                    last_intraday_bars.get(symbol)
-                    if intraday_monitoring
-                    else bars.get(symbol)
-                )
+                bar = last_intraday_bars.get(symbol) if intraday_monitoring else bars.get(symbol)
                 if bar is None:
                     continue
                 record = records.get(symbol)
@@ -1059,9 +1016,7 @@ class BacktestEngine:
                     )
                     trades.append(trade)
                     execution_legs.setdefault(position.position_id, []).append(trade)
-                    completed = finalize_position(
-                        position, execution_legs[position.position_id]
-                    )
+                    completed = finalize_position(position, execution_legs[position.position_id])
                     completed_positions.append(completed)
                     self._complete_candidate_event(position, completed)
                     f4_exit_detectors.pop(position.position_id, None)
@@ -1074,9 +1029,7 @@ class BacktestEngine:
                 for symbol in list(positions):
                     position = positions[symbol]
                     bar = (
-                        last_intraday_bars.get(symbol)
-                        if intraday_monitoring
-                        else bars.get(symbol)
+                        last_intraday_bars.get(symbol) if intraday_monitoring else bars.get(symbol)
                     )
                     if bar is None:
                         history = self.database.bars_available_as_of(
@@ -1103,9 +1056,7 @@ class BacktestEngine:
                     )
                     trades.append(trade)
                     execution_legs.setdefault(position.position_id, []).append(trade)
-                    completed = finalize_position(
-                        position, execution_legs[position.position_id]
-                    )
+                    completed = finalize_position(position, execution_legs[position.position_id])
                     completed_positions.append(completed)
                     self._complete_candidate_event(position, completed)
                     f4_exit_detectors.pop(position.position_id, None)
@@ -1237,9 +1188,7 @@ class BacktestEngine:
             warnings=tuple(warnings),
             exits_by_reason=dict(sorted(Counter(trade.exit_reason for trade in trades).items())),
             strict_coverage_sensitivity=self.strict_coverage_sensitivity,
-            research_diagnostics=self._research_diagnostics(
-                trades, diagnosed_positions, skipped
-            ),
+            research_diagnostics=self._research_diagnostics(trades, diagnosed_positions, skipped),
         )
 
     def _entry_orders(
@@ -1290,9 +1239,7 @@ class BacktestEngine:
                         else None
                     ),
                     fresh_trigger_since_previous_exit=(
-                        trackers[record.symbol].fresh_trigger
-                        if record.symbol in trackers
-                        else None
+                        trackers[record.symbol].fresh_trigger if record.symbol in trackers else None
                     ),
                 )
             )
@@ -1303,9 +1250,7 @@ class BacktestEngine:
             candidate.daily_candidate_count = candidate_count
             if self.current_preset in RESEARCH_CANDIDATE_EVENT_PRESETS:
                 candidate.candidate_event_index = len(self._candidate_events)
-                self._candidate_events.append(
-                    self._candidate_event(candidate, execution_session)
-                )
+                self._candidate_events.append(self._candidate_event(candidate, execution_session))
 
         if self.current_preset is PositionManagementPreset.D4_INTRADAY_CONFIRMED_ENTRY:
             candidates = candidates[:1]
@@ -1323,8 +1268,8 @@ class BacktestEngine:
                 continue
             if self.current_preset in THESIS_RECOVERY_PRESETS:
                 previous = candidate.previous_position
-                failed, recovered, blocked, score_delta = (
-                    self._thesis_recovery_decision(previous, candidate.variant_score)
+                failed, recovered, blocked, score_delta = self._thesis_recovery_decision(
+                    previous, candidate.variant_score
                 )
                 self._update_candidate_event(
                     candidate,
@@ -1418,8 +1363,7 @@ class BacktestEngine:
                     )
                 continue
             if (
-                self.current_preset
-                is not PositionManagementPreset.D5_HYBRID_CONFIRMED_SWING
+                self.current_preset is not PositionManagementPreset.D5_HYBRID_CONFIRMED_SWING
                 and len(orders) >= capacity
             ):
                 self._update_candidate_event(candidate, selection_outcome="max_positions_reached")
@@ -1437,10 +1381,7 @@ class BacktestEngine:
                 selection_outcome="order_created",
                 entry_opportunity_required=True,
             )
-            if (
-                self.current_preset
-                is not PositionManagementPreset.D5_HYBRID_CONFIRMED_SWING
-            ):
+            if self.current_preset is not PositionManagementPreset.D5_HYBRID_CONFIRMED_SWING:
                 sector_counts[sector] += 1
             if self.audit_observer is not None:
                 self.audit_observer.observe_portfolio_decision(
@@ -1489,20 +1430,14 @@ class BacktestEngine:
                 order,
                 **plan.diagnostics,
                 intraday_session_status=order.intraday_session_status,
-                entry_opportunity_required=plan.diagnostics.get(
-                    "pullback_confirmed", False
-                ),
-                entry_bar_expected_timestamp=plan.diagnostics.get(
-                    "intended_entry_timestamp"
-                ),
+                entry_opportunity_required=plan.diagnostics.get("pullback_confirmed", False),
+                entry_bar_expected_timestamp=plan.diagnostics.get("intended_entry_timestamp"),
                 entry_bar_present=plan.executable,
             )
             if not plan.executable:
                 reason = plan.failure_reason or f"{counter_prefix}_entry_rejected"
                 skipped[reason] += 1
-                self._observe_execution(
-                    order, session, executed=False, reason=reason
-                )
+                self._observe_execution(order, session, executed=False, reason=reason)
                 continue
             assert plan.entry_timestamp is not None
             order.intended_entry_timestamp = plan.entry_timestamp
@@ -1523,9 +1458,7 @@ class BacktestEngine:
         for order in pending:
             self._research_counters["confirmation_attempts"] += 1
             symbol = order.record.symbol
-            status = self.intraday_session_statuses.get(
-                (symbol, session), "NATIVE_SESSION"
-            )
+            status = self.intraday_session_statuses.get((symbol, session), "NATIVE_SESSION")
             order.intraday_session_status = status
             order.confirmation_bar_expected_timestamp = opening_timestamp
             order.intended_entry_timestamp = execution_timestamp
@@ -1534,9 +1467,7 @@ class BacktestEngine:
                 skipped["strict_incomplete_session"] += 1
                 self._research_counters["strict_coverage_exclusions"] += 1
                 continue
-            timestamp_bars = {
-                bar.timestamp: bar for bar in intraday_by_symbol.get(symbol, ())
-            }
+            timestamp_bars = {bar.timestamp: bar for bar in intraday_by_symbol.get(symbol, ())}
             opening_bar = timestamp_bars.get(opening_timestamp)
             execution_bar = timestamp_bars.get(execution_timestamp)
             order.execution_bar_present = execution_bar is not None
@@ -1555,9 +1486,7 @@ class BacktestEngine:
             order.confirmation_vwap = (
                 float(opening_bar.vwap) if opening_bar.vwap is not None else None
             )
-            order.confirmation_passed = (
-                order.confirmation_close > order.confirmation_open
-            )
+            order.confirmation_passed = order.confirmation_close > order.confirmation_open
             if not order.confirmation_passed:
                 order.confirmation_failure_reason = "opening_bar_not_green"
                 skipped["confirmation_rejected"] += 1
@@ -1649,9 +1578,7 @@ class BacktestEngine:
             return False
         gross_return = previous.gross_market_return
         if gross_return is None:
-            gross_return = (
-                previous.exit_reference_price / previous.entry_reference_price - 1
-            )
+            gross_return = previous.exit_reference_price / previous.entry_reference_price - 1
         if gross_return >= 0 or execution_session <= previous.exit_date:
             return False
         next_session = BacktestEngine._next_xnys_session(previous.exit_date)
@@ -1668,10 +1595,15 @@ class BacktestEngine:
         if gross_return is None:
             gross_return = previous.exit_reference_price / previous.entry_reference_price - 1
         if gross_return >= 0:
-            return False, None, False, (
-                current_c_score - previous.entry_score
-                if previous.entry_score is not None
-                else None
+            return (
+                False,
+                None,
+                False,
+                (
+                    current_c_score - previous.entry_score
+                    if previous.entry_score is not None
+                    else None
+                ),
             )
         previous_score = previous.entry_score
         if previous_score is None:
@@ -1700,9 +1632,7 @@ class BacktestEngine:
                 previous_gross_return = (
                     previous.exit_reference_price / previous.entry_reference_price - 1
                 )
-        next_session = (
-            self._next_xnys_session(previous.exit_date) if previous is not None else None
-        )
+        next_session = self._next_xnys_session(previous.exit_date) if previous is not None else None
         return {
             "symbol": candidate.record.symbol,
             "signal_session": candidate.signal_date.isoformat(),
@@ -1716,9 +1646,7 @@ class BacktestEngine:
             "previous_same_symbol_position_id": (
                 previous.position_id if previous is not None else None
             ),
-            "previous_entry_C_score": (
-                previous.entry_score if previous is not None else None
-            ),
+            "previous_entry_C_score": (previous.entry_score if previous is not None else None),
             "previous_exit_session": (
                 previous.exit_date.isoformat() if previous is not None else None
             ),
@@ -1729,18 +1657,14 @@ class BacktestEngine:
                 else None
             ),
             "previous_trade_failed": (
-                previous_gross_return < 0
-                if previous_gross_return is not None
-                else False
+                previous_gross_return < 0 if previous_gross_return is not None else False
             ),
             "thesis_recovered": None,
             "thesis_recovery_blocked": False,
             "previous_same_symbol_exit_session": (
                 previous.exit_date.isoformat() if previous is not None else None
             ),
-            "previous_same_symbol_gross_return": (
-                previous_gross_return
-            ),
+            "previous_same_symbol_gross_return": (previous_gross_return),
             "previous_same_symbol_net_return": (
                 previous.position_return if previous is not None else None
             ),
@@ -1783,14 +1707,10 @@ class BacktestEngine:
             values, "swing_high_candidate_timestamp"
         )
         position.swing_high_candidate_high = values.get("swing_high_candidate_high")
-        position.swing_high_confirmation_timestamp = (
-            BacktestEngine._metadata_datetime(
-                values, "swing_high_confirmation_timestamp"
-            )
+        position.swing_high_confirmation_timestamp = BacktestEngine._metadata_datetime(
+            values, "swing_high_confirmation_timestamp"
         )
-        position.swing_high_confirmed = bool(
-            values.get("swing_high_confirmed", False)
-        )
+        position.swing_high_confirmed = bool(values.get("swing_high_confirmed", False))
         position.intended_exit_timestamp = BacktestEngine._metadata_datetime(
             values, "intended_exit_timestamp"
         )
@@ -1825,9 +1745,7 @@ class BacktestEngine:
                     if position.exit_timestamp is not None
                     else None
                 ),
-                "swing_high_execution_bar_missing": (
-                    state.swing_high_execution_bar_missing
-                ),
+                "swing_high_execution_bar_missing": (state.swing_high_execution_bar_missing),
             }
         )
 
@@ -1874,8 +1792,8 @@ class BacktestEngine:
         position.opening_gate_volume = bar.volume
         position.opening_gate_vwap = float(bar.vwap) if bar.vwap is not None else None
         execution_timestamp = bar.timestamp + BarTimeframe.MINUTES_15.duration
-        position.opening_gate_executable = (
-            position.symbol in bars_by_timestamp.get(execution_timestamp, {})
+        position.opening_gate_executable = position.symbol in bars_by_timestamp.get(
+            execution_timestamp, {}
         )
 
     def _complete_opening_survivor_gate(
@@ -2085,11 +2003,7 @@ class BacktestEngine:
             stop_price=(
                 f4_stop_price
                 if f4_stop_price is not None
-                else (
-                    fill - stop_distance
-                    if self.position_management.stop_loss.enabled
-                    else None
-                )
+                else (fill - stop_distance if self.position_management.stop_loss.enabled else None)
             ),
             target_price=(
                 fill * (1 + take_profit_percent)
@@ -2152,8 +2066,7 @@ class BacktestEngine:
             trail_guard_enabled=(
                 self.position_management.atr_trailing_stop.enabled
                 and (
-                    self.position_management.atr_trailing_stop
-                    .minimum_completed_bars_before_activation
+                    self.position_management.atr_trailing_stop.minimum_completed_bars_before_activation
                     > 0
                 )
             ),
@@ -2162,9 +2075,7 @@ class BacktestEngine:
             daily_candidate_score=order.variant_score,
             daily_candidate_variant=order.variant,
             confirmation_required=self.current_preset in CONFIRMED_ENTRY_PRESETS,
-            confirmation_bar_expected_timestamp=(
-                order.confirmation_bar_expected_timestamp
-            ),
+            confirmation_bar_expected_timestamp=(order.confirmation_bar_expected_timestamp),
             confirmation_bar_timestamp=order.confirmation_bar_timestamp,
             confirmation_bar_present=order.confirmation_bar_present,
             confirmation_open=order.confirmation_open,
@@ -2198,17 +2109,11 @@ class BacktestEngine:
                 else None
             ),
             warmup_required_bars=warmup.get("warmup_required_bars"),
-            warmup_available_native_bars=warmup.get(
-                "warmup_available_native_bars"
-            ),
+            warmup_available_native_bars=warmup.get("warmup_available_native_bars"),
             warmup_sufficient=warmup.get("warmup_sufficient"),
             earliest_warmup_timestamp=warmup.get("earliest_warmup_timestamp"),
-            latest_pre_entry_warmup_timestamp=warmup.get(
-                "latest_pre_entry_warmup_timestamp"
-            ),
-            warmup_expected_timestamp_gap_count=warmup.get(
-                "warmup_expected_timestamp_gap_count"
-            ),
+            latest_pre_entry_warmup_timestamp=warmup.get("latest_pre_entry_warmup_timestamp"),
+            warmup_expected_timestamp_gap_count=warmup.get("warmup_expected_timestamp_gap_count"),
             opening_gate_expected_timestamp=opening_gate_expected,
             opening_gate_evaluable=opening_gate_evaluable,
             opening_gate_failure_reason=opening_gate_failure,
@@ -2227,18 +2132,12 @@ class BacktestEngine:
             pullback_candidate_timestamp=self._metadata_datetime(
                 order.research_metadata, "pullback_candidate_timestamp"
             ),
-            pullback_candidate_low=order.research_metadata.get(
-                "pullback_candidate_low"
-            ),
+            pullback_candidate_low=order.research_metadata.get("pullback_candidate_low"),
             pullback_confirmation_timestamp=self._metadata_datetime(
                 order.research_metadata, "pullback_confirmation_timestamp"
             ),
-            pullback_confirmation_close=order.research_metadata.get(
-                "pullback_confirmation_close"
-            ),
-            pullback_confirmed=bool(
-                order.research_metadata.get("pullback_confirmed", False)
-            ),
+            pullback_confirmation_close=order.research_metadata.get("pullback_confirmation_close"),
+            pullback_confirmed=bool(order.research_metadata.get("pullback_confirmed", False)),
             initial_stop_price=(
                 f4_stop_price
                 if f4_stop_price is not None
@@ -2288,9 +2187,7 @@ class BacktestEngine:
                 decision.reason is ExitReason.PARTIAL_TAKE_PROFIT
                 and decision.partial_level is not None
             ):
-                level = self.position_management.partial_take_profit.levels[
-                    decision.partial_level
-                ]
+                level = self.position_management.partial_take_profit.levels[decision.partial_level]
                 trigger = position.entry_price * (1 + level.profit)
                 position.gap_affected_trade = float(bar.open) > trigger
         quantity = min(decision.quantity or position.quantity, position.quantity)
@@ -2318,9 +2215,7 @@ class BacktestEngine:
             ExitReason.TAKE_PROFIT,
             ExitReason.PARTIAL_TAKE_PROFIT,
         }:
-            position.highest_price_since_entry = max(
-                position.highest_price_since_entry, reference
-            )
+            position.highest_price_since_entry = max(position.highest_price_since_entry, reference)
             position.lowest_price_since_entry = min(
                 position.lowest_price_since_entry, float(bar.open), reference
             )
@@ -2395,17 +2290,13 @@ class BacktestEngine:
             is_partial_exit=not closed,
             partial_level=decision.partial_level,
             position_id=position.position_id,
-            execution_leg_id=(
-                f"{position.position_id}-L{position.execution_legs_count:02d}"
-            ),
+            execution_leg_id=(f"{position.position_id}-L{position.execution_legs_count:02d}"),
             daily_candidate_rank=position.daily_candidate_rank,
             daily_candidate_count=position.daily_candidate_count,
             daily_candidate_score=position.daily_candidate_score,
             daily_candidate_variant=position.daily_candidate_variant,
             confirmation_required=position.confirmation_required,
-            confirmation_bar_expected_timestamp=(
-                position.confirmation_bar_expected_timestamp
-            ),
+            confirmation_bar_expected_timestamp=(position.confirmation_bar_expected_timestamp),
             confirmation_bar_timestamp=position.confirmation_bar_timestamp,
             confirmation_bar_present=position.confirmation_bar_present,
             confirmation_open=position.confirmation_open,
@@ -2423,14 +2314,11 @@ class BacktestEngine:
             trail_guard_enabled=(
                 self.position_management.atr_trailing_stop.enabled
                 and (
-                    self.position_management.atr_trailing_stop
-                    .minimum_completed_bars_before_activation
+                    self.position_management.atr_trailing_stop.minimum_completed_bars_before_activation
                     > 0
                 )
             ),
-            completed_bars_before_trail_arm=(
-                position.completed_bars_before_trail_arm
-            ),
+            completed_bars_before_trail_arm=(position.completed_bars_before_trail_arm),
             trail_armed_timestamp=position.trail_armed_timestamp,
             trail_armed_reference_price=position.trail_armed_reference_price,
             atr_at_trail_activation=position.atr_at_trail_activation,
@@ -2447,9 +2335,7 @@ class BacktestEngine:
                 if self.position_management.profit_lock.enabled
                 else None
             ),
-            profit_lock_activation_timestamp=(
-                position.profit_lock_activation_timestamp
-            ),
+            profit_lock_activation_timestamp=(position.profit_lock_activation_timestamp),
             break_even_lock_timestamp=position.break_even_lock_timestamp,
             one_r_lock_timestamp=position.one_r_lock_timestamp,
             active_profit_lock_stop=position.profit_lock_stop_price,
@@ -2465,12 +2351,8 @@ class BacktestEngine:
             warmup_available_native_bars=position.warmup_available_native_bars,
             warmup_sufficient=position.warmup_sufficient,
             earliest_warmup_timestamp=position.earliest_warmup_timestamp,
-            latest_pre_entry_warmup_timestamp=(
-                position.latest_pre_entry_warmup_timestamp
-            ),
-            warmup_expected_timestamp_gap_count=(
-                position.warmup_expected_timestamp_gap_count
-            ),
+            latest_pre_entry_warmup_timestamp=(position.latest_pre_entry_warmup_timestamp),
+            warmup_expected_timestamp_gap_count=(position.warmup_expected_timestamp_gap_count),
             opening_gate_expected_timestamp=position.opening_gate_expected_timestamp,
             opening_gate_actual_timestamp=position.opening_gate_actual_timestamp,
             opening_gate_open=position.opening_gate_open,
@@ -2493,9 +2375,7 @@ class BacktestEngine:
             opening_gate_executable=position.opening_gate_executable,
             opening_gate_failure_reason=position.opening_gate_failure_reason,
             opening_gate_exit_timestamp=position.opening_gate_exit_timestamp,
-            opening_gate_exit_reference_price=(
-                position.opening_gate_exit_reference_price
-            ),
+            opening_gate_exit_reference_price=(position.opening_gate_exit_reference_price),
         )
         position.realized_profit += pnl
         if decision.partial_level is not None:
@@ -2578,8 +2458,7 @@ class BacktestEngine:
         recovered = [
             event
             for event in self._candidate_events
-            if event.get("previous_trade_failed") is True
-            and event.get("thesis_recovered") is True
+            if event.get("previous_trade_failed") is True and event.get("thesis_recovered") is True
         ]
         f4_positions = (
             list(positions)
@@ -2620,20 +2499,15 @@ class BacktestEngine:
                 for trade in trades
             ),
             "confirmation_pass_rate": passes / attempts if attempts else None,
-            "confirmation_rejection_count": self._research_counters[
-                "confirmation_rejections"
-            ],
+            "confirmation_rejection_count": self._research_counters["confirmation_rejections"],
             "missing_opening_bar_skips": skipped["missing_confirmation_bar"],
             "missing_execution_bar_skips": skipped["missing_execution_bar"],
             "cooldown_blocked_entries": skipped["reentry_cooldown"],
             "candidates_evaluated": len(self._candidate_events),
             "cooldown_blocks": len(cooldown_events),
-            "unique_symbols_blocked": len(
-                {event["symbol"] for event in cooldown_events}
-            ),
+            "unique_symbols_blocked": len({event["symbol"] for event in cooldown_events}),
             "subsequent_session_candidate_availability": sum(
-                event.get("execution_session")
-                == event.get("next_xnys_session_after_previous_exit")
+                event.get("execution_session") == event.get("next_xnys_session_after_previous_exit")
                 for event in self._candidate_events
                 if event.get("next_xnys_session_after_previous_exit") is not None
             ),
@@ -2650,8 +2524,7 @@ class BacktestEngine:
                 position.opening_gate_green is False for position in opening_gate_evaluated
             ),
             "opening_bar_fail_exits": sum(
-                position.exit_reason == ExitReason.OPENING_BAR_FAIL.value
-                for position in positions
+                position.exit_reason == ExitReason.OPENING_BAR_FAIL.value for position in positions
             ),
             "opening_gate_missing_opening_bars": sum(
                 position.opening_gate_failure_reason == "missing_opening_bar"
@@ -2662,17 +2535,12 @@ class BacktestEngine:
                 for position in positions
             ),
             "baseline_first_bar_trail_exits": sum(
-                position.baseline_first_bar_trail_exit_occurred
-                for position in positions
+                position.baseline_first_bar_trail_exit_occurred for position in positions
             ),
             "partial_target_count": len(partial_ids),
             "runner_positions": len(runners),
-            "runner_final_return": average(
-                position.position_return for position in runners
-            ),
-            "runner_mfe": average(
-                position.maximum_favorable_excursion for position in runners
-            ),
+            "runner_final_return": average(position.position_return for position in runners),
+            "runner_mfe": average(position.maximum_favorable_excursion for position in runners),
             "runner_giveback": average(position.profit_giveback for position in runners),
             "reached_1r_mfe": len(reached_one_r),
             "reached_2r_mfe": len(reached_two_r),
@@ -2682,12 +2550,8 @@ class BacktestEngine:
             "one_r_lock_activations": sum(
                 position.one_r_lock_timestamp is not None for position in positions
             ),
-            "losses_after_1r_mfe": sum(
-                position.net_pnl < 0 for position in reached_one_r
-            ),
-            "losses_after_2r_mfe": sum(
-                position.net_pnl < 0 for position in reached_two_r
-            ),
+            "losses_after_1r_mfe": sum(position.net_pnl < 0 for position in reached_one_r),
+            "losses_after_2r_mfe": sum(position.net_pnl < 0 for position in reached_two_r),
             "average_giveback_after_profit_lock_activation": average(
                 position.profit_giveback for position in locked
             ),
@@ -2698,16 +2562,14 @@ class BacktestEngine:
             ),
             "f4_executed_trades": len(f4_positions),
             "f4_stop_exits": sum(
-                position.exit_reason == ExitReason.STOP_LOSS.value
-                for position in f4_positions
+                position.exit_reason == ExitReason.STOP_LOSS.value for position in f4_positions
             ),
             "f4_confirmed_swing_high_exits": sum(
                 position.exit_reason == ExitReason.CONFIRMED_SWING_HIGH.value
                 for position in f4_positions
             ),
             "f4_session_close_exits": sum(
-                position.exit_reason == ExitReason.SESSION_CLOSE.value
-                for position in f4_positions
+                position.exit_reason == ExitReason.SESSION_CLOSE.value for position in f4_positions
             ),
             "f4_average_entry_minutes_after_midnight_utc": average(
                 position.entry_timestamp.hour * 60 + position.entry_timestamp.minute
@@ -2716,16 +2578,14 @@ class BacktestEngine:
             ),
             "f5_executed_trades": len(f5_positions),
             "f5_stop_exits": sum(
-                position.exit_reason == ExitReason.STOP_LOSS.value
-                for position in f5_positions
+                position.exit_reason == ExitReason.STOP_LOSS.value for position in f5_positions
             ),
             "f5_atr_trailing_exits": sum(
                 position.exit_reason == ExitReason.ATR_TRAILING_STOP.value
                 for position in f5_positions
             ),
             "f5_signal_decay_exits": sum(
-                position.exit_reason == ExitReason.SIGNAL_DECAY.value
-                for position in f5_positions
+                position.exit_reason == ExitReason.SIGNAL_DECAY.value for position in f5_positions
             ),
             "f5_average_entry_minutes_after_midnight_utc": average(
                 position.entry_timestamp.hour * 60 + position.entry_timestamp.minute
@@ -2815,13 +2675,21 @@ class BacktestEngine:
                 "close_rules": "signal_decay, portfolio_rotation, max_hold",
                 "end_of_backtest": "last available close",
             },
-            "variant_definition": {
-                "A": "Quality + Value scoring with common technical recovery entry gate",
-                "B": "Quality + Value + Opportunity scoring with common recovery gate",
-                "C": "Quality + Value + Opportunity + Timing scoring with common recovery gate",
-            }[variant.value],
+            "variant_definition": screen_strategy_definition(variant).description,
+            "variant_name": screen_strategy_definition(variant).name,
+            "variant_lifecycle": screen_strategy_definition(variant).lifecycle.value,
+            "variant_entry_policy": screen_strategy_definition(variant).entry_policy.value,
+            "screen_strategy_thresholds": self.config.screen_strategies.model_dump(mode="json"),
             "common_recovery_gate": {
-                "applies_to": [item.value for item in StrategyVariant],
+                "applies_to": [
+                    item.value
+                    for item in StrategyVariant
+                    if screen_strategy_definition(item).entry_policy
+                    in {
+                        ScreenEntryPolicy.COMMON_RECOVERY,
+                        ScreenEntryPolicy.LOSS_AWARE_RECOVERY,
+                    }
+                ],
                 "price_above_sma20": True,
                 "any_of": [
                     "rsi_recovery",
@@ -2836,9 +2704,7 @@ class BacktestEngine:
 def _backtest_sessions(database: Database, start: date, end: date) -> list[date]:
     official_sessions = set(trading_sessions_between(start, end))
     sessions = [
-        session
-        for session in database.bar_sessions(start, end)
-        if session in official_sessions
+        session for session in database.bar_sessions(start, end) if session in official_sessions
     ]
     if len(sessions) < 2:
         first, last = database.bar_date_bounds()
@@ -2901,9 +2767,7 @@ def determine_intraday_comparison_requirements(
         return ()
 
     earliest_execution: dict[BarTimeframe, dict[str, date]] = {
-        timeframe: {}
-        for timeframes in timeframes_by_variant.values()
-        for timeframe in timeframes
+        timeframe: {} for timeframes in timeframes_by_variant.values() for timeframe in timeframes
     }
     candidate_execution: dict[BarTimeframe, set[tuple[str, date]]] = {
         timeframe: set() for timeframe in earliest_execution
@@ -2942,9 +2806,7 @@ def determine_intraday_comparison_requirements(
                 ),
                 symbols=tuple(sorted(candidates)),
                 first_execution_sessions=tuple(sorted(candidates.items())),
-                candidate_execution_sessions=tuple(
-                    sorted(candidate_execution[timeframe])
-                ),
+                candidate_execution_sessions=tuple(sorted(candidate_execution[timeframe])),
                 comparison_sessions=sessions,
                 requested_start=intraday_warmup_start(
                     first_execution,
@@ -2981,9 +2843,7 @@ def assess_comparison_intraday_coverage(
     for requirement in requirements:
         first_execution = dict(requirement.first_execution_sessions)
         if not requirement.symbols:
-            assessments.append(
-                IntradayCoverageAssessment(requirement, (), (), ())
-            )
+            assessments.append(IntradayCoverageAssessment(requirement, (), (), ()))
             continue
         coverage_sessions = trading_sessions_between(
             requirement.requested_start.date(), requirement.comparison_sessions[-1]
@@ -2991,9 +2851,7 @@ def assess_comparison_intraday_coverage(
         session_windows = [
             (
                 session,
-                *intraday_session_bounds(
-                    session, extended_hours=requirement.extended_hours
-                ),
+                *intraday_session_bounds(session, extended_hours=requirement.extended_hours),
             )
             for session in coverage_sessions
         ]
@@ -3105,10 +2963,7 @@ def prefetch_comparison_intraday_data(
                 try:
                     synchronizer = synchronizer_factory()
                 except Exception as exc:
-                    factory_failure = (
-                        "intraday prefetch failed: "
-                        f"{type(exc).__name__}: {exc}"
-                    )
+                    factory_failure = f"intraday prefetch failed: {type(exc).__name__}: {exc}"
             if factory_failure is not None:
                 failure_reasons.append(factory_failure)
             else:
@@ -3137,9 +2992,7 @@ def prefetch_comparison_intraday_data(
                             f"{requirement.timeframe.value}: {provider_errors} provider "
                             "request batch(es) failed"
                         )
-                    post_sync = assess_comparison_intraday_coverage(
-                        database, (requirement,)
-                    )[0]
+                    post_sync = assess_comparison_intraday_coverage(database, (requirement,))[0]
                     failure_reasons.extend(_coverage_failure_messages(post_sync))
         timeframes[requirement.timeframe.value] = IntradayPrefetchTimeframe(
             candidate_symbols=len(requirement.symbols),
@@ -3166,9 +3019,7 @@ def _coverage_failure_messages(
     reasons = dict(assessment.incomplete_reasons)
     no_data = [symbol for symbol, items in reasons.items() if "no_data" in items]
     warmup = [
-        symbol
-        for symbol, items in reasons.items()
-        if "warmup" in items and symbol not in no_data
+        symbol for symbol, items in reasons.items() if "warmup" in items and symbol not in no_data
     ]
     session_gaps = [
         symbol
@@ -3179,17 +3030,12 @@ def _coverage_failure_messages(
     ]
     messages: list[str] = []
     if no_data:
-        messages.append(
-            f"provider returned no {timeframe} data for {_compact_symbols(no_data)}"
-        )
+        messages.append(f"provider returned no {timeframe} data for {_compact_symbols(no_data)}")
     if warmup:
-        messages.append(
-            f"insufficient {timeframe} warmup for {_compact_symbols(warmup)}"
-        )
+        messages.append(f"insufficient {timeframe} warmup for {_compact_symbols(warmup)}")
     if session_gaps:
         messages.append(
-            f"local {timeframe} data remains incomplete for "
-            f"{_compact_symbols(session_gaps)}"
+            f"local {timeframe} data remains incomplete for {_compact_symbols(session_gaps)}"
         )
     return tuple(messages)
 
@@ -3231,9 +3077,7 @@ def compare_strategies(
     shared = prepared.screen_source
     generated_at = clock().isoformat()
     runs = prepared.runs
-    prefetch = intraday_prefetch or comparison_intraday_prefetch_metadata(
-        prepared, enabled=False
-    )
+    prefetch = intraday_prefetch or comparison_intraday_prefetch_metadata(prepared, enabled=False)
     results: list[BacktestResult] = []
     skipped: dict[str, str] = {}
     for variant, preset in runs:
@@ -3304,6 +3148,12 @@ def compare_strategies(
             ): result.research_diagnostics
             for result in results
         },
+        screen_selection_diagnostics=(
+            _screen_selection_diagnostics(shared.cache, config)
+            if comparison_kind
+            in {StrategyComparisonKind.SCORE_VARIANTS, StrategyComparisonKind.ALL}
+            else {}
+        ),
     )
 
 
@@ -3346,9 +3196,7 @@ def _comparison_runs(
         PositionManagementPreset.FIXED_STOP_ATR_TRAILING,
         PositionManagementPreset.FIXED_STOP_PARTIAL_ATR,
     )
-    position_runs = tuple(
-        (StrategyVariant.FULL, preset) for preset in production_position_presets
-    )
+    position_runs = tuple((StrategyVariant.FULL, preset) for preset in production_position_presets)
     if comparison_kind is StrategyComparisonKind.SCORE_VARIANTS:
         return score_runs
     if comparison_kind is StrategyComparisonKind.POSITION_MANAGEMENT:
@@ -3356,6 +3204,86 @@ def _comparison_runs(
     if comparison_kind in RESEARCH_FAMILY_RUNS:
         return research_family_runs(comparison_kind)
     return (*score_runs, *position_runs)
+
+
+def _screen_selection_diagnostics(
+    cache: dict[date, ScreenReport], config: StrategyConfig, *, sample_limit: int = 25
+) -> dict:
+    """Bounded overlap evidence for the C/D/E/F selection hypotheses."""
+
+    variants = (
+        StrategyVariant.FULL,
+        StrategyVariant.LOSS_AWARE_RECOVERY,
+        StrategyVariant.TREND_PULLBACK,
+        StrategyVariant.QUALITY_VALUE_MOMENTUM,
+    )
+    observations: Counter[str] = Counter()
+    patterns: Counter[str] = Counter()
+    group_counts: Counter[str] = Counter()
+    samples: dict[str, list[dict]] = {
+        "C_only": [],
+        "D_only": [],
+        "E_only": [],
+        "F_only": [],
+        "multiple": [],
+    }
+    c_rejected_by_d: list[dict] = []
+    for session, report in sorted(cache.items()):
+        for record in report.records:
+            evaluations = {
+                variant: evaluate_variant_entry(record, variant, config) for variant in variants
+            }
+            selected = tuple(variant.value for variant in variants if evaluations[variant].eligible)
+            for value in selected:
+                observations[value] += 1
+            if selected:
+                pattern = "+".join(selected)
+                patterns[pattern] += 1
+                group = f"{selected[0]}_only" if len(selected) == 1 else "multiple"
+                group_counts[group] += 1
+                bucket = samples[group]
+                if len(bucket) < sample_limit:
+                    bucket.append(
+                        {
+                            "symbol": record.symbol,
+                            "signal_date": session.isoformat(),
+                            "selected_by": list(selected),
+                        }
+                    )
+            c_evaluation = evaluations[StrategyVariant.FULL]
+            d_evaluation = evaluations[StrategyVariant.LOSS_AWARE_RECOVERY]
+            if (
+                c_evaluation.eligible
+                and not d_evaluation.eligible
+                and len(c_rejected_by_d) < sample_limit
+            ):
+                technical = record.technical
+                c_rejected_by_d.append(
+                    {
+                        "symbol": record.symbol,
+                        "signal_date": session.isoformat(),
+                        "c_score": c_evaluation.weighted_score,
+                        "d_rejection_reason": (
+                            d_evaluation.failure_detail or d_evaluation.first_failure
+                        ),
+                        "drawdown_52w": technical.drawdown_52w,
+                        "max_drawdown_126d": technical.max_drawdown_126d,
+                        "recovery_from_63d_low": technical.recovery_from_63d_low,
+                        "momentum126": technical.momentum126,
+                        "sma200_distance": technical.sma200_distance,
+                    }
+                )
+    return {
+        "candidate_observations_by_variant": dict(sorted(observations.items())),
+        "selection_groups": {
+            group: group_counts[group]
+            for group in ("C_only", "D_only", "E_only", "F_only", "multiple")
+        },
+        "selection_patterns": dict(sorted(patterns.items())),
+        "bounded_selection_samples": samples,
+        "c_candidates_rejected_by_d_sample": c_rejected_by_d,
+        "sample_limit_per_group": sample_limit,
+    }
 
 
 def _comparison_label(
@@ -3372,9 +3300,7 @@ def _comparison_label(
     return f"{variant.value}/{preset.value}"
 
 
-def research_strategy_label(
-    variant: StrategyVariant, preset: PositionManagementPreset
-) -> str:
+def research_strategy_label(variant: StrategyVariant, preset: PositionManagementPreset) -> str:
     """Historical public label helper retained for validation/report compatibility."""
 
     if preset is PositionManagementPreset.CONFIGURED:
@@ -3394,27 +3320,8 @@ def evaluate_variant_entry(
     opportunity = record.scores.opportunity.score
     timing = record.scores.timing.score
     rules = config.backtest
-    technical = record.technical
-    price_above_sma20 = (
-        None
-        if technical.price is None or technical.sma20 is None
-        else technical.price > technical.sma20
-    )
-    rsi_recovery = technical.rsi_recovery
-    momentum_recovery = (
-        None if technical.momentum5 is None else technical.momentum5 > 0
-    )
-    relative_volume_recovery = (
-        None
-        if technical.relative_volume is None
-        else technical.relative_volume > rules.min_relative_volume
-    )
-    recovery_values = (rsi_recovery, momentum_recovery, relative_volume_recovery)
-    recovery_pass = (
-        None
-        if all(value is None for value in recovery_values)
-        else any(value is True for value in recovery_values)
-    )
+    definition = screen_strategy_definition(variant)
+    gate = evaluate_strategy_gate(record.technical, variant, config)
     blocking = tuple(
         reason for reason in record.exclusion_reasons if reason not in SCORE_FILTER_EXCLUSIONS
     )
@@ -3430,16 +3337,17 @@ def evaluate_variant_entry(
             first_failure=first_failure,
             failure_detail=failure_detail,
             blocking_reasons=blocking,
+            variant_blocking_reasons=gate.blocking_reasons,
             quality_score=quality,
             valuation_score=valuation,
             opportunity_score=opportunity,
             timing_score=timing,
             weighted_score=weighted_score,
-            price_above_sma20=price_above_sma20,
-            rsi_recovery=rsi_recovery,
-            momentum5_above_zero=momentum_recovery,
-            relative_volume_above_threshold=relative_volume_recovery,
-            recovery_gate_pass=recovery_pass,
+            price_above_sma20=gate.price_above_sma20,
+            rsi_recovery=gate.rsi_recovery,
+            momentum5_above_zero=gate.momentum5_above_zero,
+            relative_volume_above_threshold=gate.relative_volume_above_threshold,
+            recovery_gate_pass=gate.recovery_gate_pass,
         )
 
     if blocking:
@@ -3452,39 +3360,22 @@ def evaluate_variant_entry(
         return result("valuation_threshold", "valuation_score_unavailable")
     if valuation < rules.min_valuation_score:
         return result("valuation_threshold", "valuation_threshold")
-    components: list[tuple[float, float]] = [
-        (quality, config.scores.total.quality),
-        (valuation, config.scores.total.valuation),
-    ]
-    if variant in {StrategyVariant.QUALITY_VALUE_OPPORTUNITY, StrategyVariant.FULL}:
+    if "opportunity" in definition.score_components:
         if opportunity is None:
             return result("opportunity_threshold", "opportunity_score_unavailable")
         if opportunity < rules.min_opportunity_score:
             return result("opportunity_threshold", "opportunity_threshold")
-        components.append((opportunity, config.scores.total.opportunity))
-    if variant is StrategyVariant.FULL:
+    if "timing" in definition.score_components:
         if timing is None:
             return result("timing_threshold", "timing_score_unavailable")
         if timing < rules.min_timing_score:
             return result("timing_threshold", "timing_threshold")
-        components.append((timing, config.scores.total.timing))
-    denominator = sum(weight for _, weight in components)
-    score = sum(value * weight for value, weight in components) / denominator
-    if score < rules.min_total_score:
+    score = defined_variant_score_value(record, variant, config)
+    assert score is not None
+    if definition.apply_total_threshold and score < rules.min_total_score:
         return result("total_threshold", "total_threshold", weighted_score=score)
-    if price_above_sma20 is None:
-        return result(
-            "price_not_above_sma20", "sma20_or_price_unavailable", weighted_score=score
-        )
-    if not price_above_sma20:
-        return result("price_not_above_sma20", "price_not_above_sma20", weighted_score=score)
-    if recovery_pass is not True:
-        detail = (
-            "recovery_inputs_unavailable"
-            if recovery_pass is None
-            else "recovery_signal_required"
-        )
-        return result("recovery_signal_required", detail, weighted_score=score)
+    if gate.first_failure is not None:
+        return result(gate.first_failure, gate.failure_detail, weighted_score=score)
     return result(None, weighted_score=score)
 
 
@@ -3500,26 +3391,7 @@ def _variant_score_value(
 ) -> float | None:
     """Comparable 0..100 score without applying entry gates to an open position."""
 
-    components: list[tuple[float, float]] = []
-    values = (
-        (record.scores.quality.score, config.scores.total.quality),
-        (record.scores.valuation.score, config.scores.total.valuation),
-    )
-    if any(value is None for value, _ in values):
-        return None
-    components.extend((float(value), weight) for value, weight in values if value is not None)
-    if variant in {StrategyVariant.QUALITY_VALUE_OPPORTUNITY, StrategyVariant.FULL}:
-        opportunity = record.scores.opportunity.score
-        if opportunity is None:
-            return None
-        components.append((opportunity, config.scores.total.opportunity))
-    if variant is StrategyVariant.FULL:
-        timing = record.scores.timing.score
-        if timing is None:
-            return None
-        components.append((timing, config.scores.total.timing))
-    denominator = sum(weight for _, weight in components)
-    return sum(value * weight for value, weight in components) / denominator
+    return defined_variant_score_value(record, variant, config)
 
 
 def _entry_triggers(record: ScreenRecord, config: StrategyConfig) -> EntryTriggerInfo:
@@ -3531,9 +3403,7 @@ def _entry_triggers(record: ScreenRecord, config: StrategyConfig) -> EntryTrigge
             and technical.price > technical.sma20
         ),
         rsi_recovery=technical.rsi_recovery is True,
-        momentum5_above_zero=(
-            technical.momentum5 is not None and technical.momentum5 > 0
-        ),
+        momentum5_above_zero=(technical.momentum5 is not None and technical.momentum5 > 0),
         relative_volume_above_threshold=(
             technical.relative_volume is not None
             and technical.relative_volume > config.backtest.min_relative_volume

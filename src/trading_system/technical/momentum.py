@@ -69,4 +69,8 @@ def technical_snapshot(
         atr14=_finite(latest["atr14"]),
         relative_volume=_finite(latest["relative_volume20"]),
         drawdown_52w=_finite(latest["drawdown_52w"]),
+        drawdown_63d=_finite(latest["drawdown_63d"]),
+        recovery_from_63d_low=_finite(latest["recovery_from_63d_low"]),
+        max_drawdown_126d=_finite(latest["max_drawdown_126d"]),
+        sma200_distance=_finite(latest["sma200_distance"]),
     )

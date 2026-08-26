@@ -126,3 +126,55 @@ python -m trading_system.cli backtest `
 Die Fundamental- und Universe-Selektion bleibt unverändert point-in-time. Forward-Daten werden nicht
 geladen oder in Strategieentscheidungen eingespeist. Ergebnisse hängen damit ausschließlich vom vor
 dem Lauf persistierten Datenbestand ab.
+
+## Kandidatenpfad-Qualifikation und gezielte Remediation
+
+`compare-preflight --include research-intraday-hybrid` erzeugt lokal und ohne Backtest oder Netzwerk
+ein PIT-Kandidatenmanifest. Neben den Candidate-Entry-Sessions qualifiziert es ab dem ersten
+Kandidatensignal jedes Symbols alle Sessions, die ohne vorweggenommene Trade-Simulation noch für eine
+potenziell offene F0-/F3-/F5-Position relevant sein können. Nur lückenhafte Anforderungen werden in
+das Sync-Manifest geschrieben; Universe-Symbole und frühere Sessions außerhalb dieses Pfads werden
+nicht angefragt.
+
+Mit `sync-intraday --candidates-report ... --candidate-gaps-only` werden nur unvollständige native
+Symbol-/Session-/Timeframe-Anforderungen synchronisiert. TraWalp klassifiziert sie als:
+
+* `REQUIRED_PRESENT`: alle erwarteten nativen Bar-Timestamps sind lokal vorhanden;
+* `LOCAL_MISSING_FETCHABLE`: lokal fehlt etwas und es existiert noch keine passende Provider-Prüfung;
+* `PROVIDER_CONFIRMED_ABSENT`: der konfigurierte Feed wurde erfolgreich abgefragt, lieferte die
+  fehlenden nativen Timestamps aber nicht;
+* `PROVIDER_CHECK_FAILED`: die Verfügbarkeit blieb wegen eines Provider-/Validierungsfehlers offen;
+* `NOT_REQUIRED`: kein Bestandteil des PIT-Kandidaten- oder potenziellen Positionspfads.
+
+Provider-Beobachtungen werden mit Feed, Adjustment, Extended-Hours-Modus und nativen fehlenden
+Timestamps in `sync_state` gespeichert. Dadurch fragt ein wiederholter Lauf bekannte Abwesenheit nicht
+erneut ab. Ein Fehler wird dagegen beim nächsten Lauf erneut versucht. Erfolgreich nachgeladene Bars
+entfernen eine veraltete Abwesenheitsbeobachtung. Es werden keine Bars interpoliert, aufgefüllt oder
+synthetisiert.
+
+Der JSON-/CSV-Report meldet Counts, Fetch-Erfolg und einzelne unresolved gaps. `READY` bedeutet lokal
+vollständig; `READY_WITH_PROVIDER_ABSENCE` bedeutet, dass nur explizit provider-bestätigte native
+Abwesenheiten verbleiben. `NOT_READY_LOCAL_GAPS` bzw.
+`NOT_READY_PROVIDER_VERIFICATION_FAILURE` bleiben blockierend.
+
+```powershell
+python -m trading_system.cli compare-preflight `
+  --start 2024-01-02 `
+  --end 2026-08-12 `
+  --include research-intraday-hybrid `
+  --output-stem intraday_hybrid_preflight_provider_qualified_2024-01-02_2026-08-12
+
+python -m trading_system.cli sync-intraday `
+  --start 2024-01-02 `
+  --end 2026-08-12 `
+  --timeframes 15m `
+  --candidates-report reports/intraday_hybrid_preflight_provider_qualified_2024-01-02_2026-08-12_intraday_candidates.json `
+  --candidate-gaps-only `
+  --output-stem intraday_hybrid_remediation_2024-01-02_2026-08-12
+
+python -m trading_system.cli compare-preflight `
+  --start 2024-01-02 `
+  --end 2026-08-12 `
+  --include research-intraday-hybrid `
+  --output-stem intraday_hybrid_preflight_post_remediation_2024-01-02_2026-08-12
+```

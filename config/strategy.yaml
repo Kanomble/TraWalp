@@ -126,6 +126,26 @@ technical:
   rsi_recovery_max: 60
   rsi_recovery_lookback: 10
   sma_slope_lookback: 5
+screen_strategies:
+  loss_aware_recovery:
+    min_recovery_from_63d_low: 0.05
+    max_drawdown_126d_floor: -0.40
+    structural_momentum126_threshold: -0.25
+    structural_sma200_distance_threshold: -0.15
+  trend_pullback:
+    min_drawdown_63d: -0.20
+    max_drawdown_63d: -0.05
+    min_momentum126: 0.0
+    require_price_above_sma200: true
+    require_price_above_sma20: true
+    min_momentum5: 0.0
+    require_sma20_rising: true
+  quality_value_momentum:
+    min_drawdown_52w: -0.10
+    min_momentum126: 0.0
+    require_price_above_sma50: true
+    require_price_above_sma200: true
+    require_sma20_rising: true
 portfolio:
   max_positions: 1
   max_position_pct: 1.0

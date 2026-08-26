@@ -69,12 +69,20 @@ def _record(
             market_session=date(2024, 1, 5),
             price=price,
             sma20=sma20,
+            sma50=100,
+            sma200=100,
             sma20_rising=True,
             rsi14=45,
             rsi_recovery=rsi_recovery,
             momentum5=momentum5,
+            momentum126=0.10,
             atr14=5,
             relative_volume=relative_volume,
+            drawdown_52w=-0.05,
+            drawdown_63d=-0.10,
+            recovery_from_63d_low=0.10,
+            max_drawdown_126d=-0.20,
+            sma200_distance=0.10,
         ),
         scores=StockScores(
             quality=_score("quality", quality),
@@ -115,9 +123,7 @@ def _config():
 def test_entry_evaluation_distinguishes_missing_data_from_threshold_failure() -> None:
     config = _config()
 
-    missing = evaluate_variant_entry(
-        _record("MISS", quality=None), StrategyVariant.FULL, config
-    )
+    missing = evaluate_variant_entry(_record("MISS", quality=None), StrategyVariant.FULL, config)
     rejected = evaluate_variant_entry(
         _record("LOW", quality=config.backtest.min_quality_score - 1),
         StrategyVariant.FULL,
@@ -139,9 +145,7 @@ def test_entry_evaluation_distinguishes_missing_data_from_threshold_failure() ->
     ],
 )
 def test_recovery_gate_audit_uses_canonical_entry_logic(updates, expected) -> None:
-    evaluation = evaluate_variant_entry(
-        _record("REC", **updates), StrategyVariant.FULL, _config()
-    )
+    evaluation = evaluate_variant_entry(_record("REC", **updates), StrategyVariant.FULL, _config())
 
     assert evaluation.recovery_gate_pass is expected
     assert evaluation.eligible is expected
@@ -309,9 +313,7 @@ def test_future_sessions_change_only_later_audit_records() -> None:
     first = date(2024, 1, 5)
     later = date(2024, 1, 8)
     collector = HistoricalCandidateAuditCollector(config, StrategyVariant.FULL)
-    collector.observe_screen(
-        _report(first, (_record("AAA"),)), StrategyVariant.FULL, config
-    )
+    collector.observe_screen(_report(first, (_record("AAA"),)), StrategyVariant.FULL, config)
     before = collector._session_model(collector._states[first])  # noqa: SLF001
     collector.observe_screen(
         _report(later, (_record("AAA", quality=1),)), StrategyVariant.FULL, config
@@ -319,6 +321,63 @@ def test_future_sessions_change_only_later_audit_records() -> None:
     after = collector._session_model(collector._states[first])  # noqa: SLF001
 
     assert before == after
+
+
+def test_d_audit_exposes_c_score_rejection_reason_and_loss_path_evidence() -> None:
+    config = _config()
+    session = date(2024, 1, 5)
+    record = _record("DAMAGED").model_copy(
+        update={
+            "technical": _record("DAMAGED").technical.model_copy(
+                update={"max_drawdown_126d": -0.47}
+            )
+        }
+    )
+    assert evaluate_variant_entry(record, StrategyVariant.FULL, config).eligible
+    collector = HistoricalCandidateAuditCollector(config, StrategyVariant.LOSS_AWARE_RECOVERY)
+
+    collector.observe_screen(
+        _report(session, (record,)), StrategyVariant.LOSS_AWARE_RECOVERY, config
+    )
+
+    near_miss = collector._near_misses[0]  # noqa: SLF001
+    assert near_miss.failed_at == "loss_aware_max_drawdown_exceeded"
+    assert near_miss.variant_score == pytest.approx(
+        evaluate_variant_entry(record, StrategyVariant.FULL, config).score
+    )
+    assert near_miss.technical_evidence["max_drawdown_126d"] == -0.47
+    assert near_miss.technical_evidence["recovery_from_63d_low"] == 0.10
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        StrategyVariant.TREND_PULLBACK,
+        StrategyVariant.QUALITY_VALUE_MOMENTUM,
+    ],
+)
+def test_e_and_f_candidate_audit_retains_entry_evidence(variant: StrategyVariant) -> None:
+    config = _config()
+    session = date(2024, 1, 5)
+    collector = HistoricalCandidateAuditCollector(config, variant)
+
+    collector.observe_screen(_report(session, (_record("AAA"),)), variant, config)
+
+    state = collector._candidates[(session, "AAA")]  # noqa: SLF001
+    assert state.technical_evidence == {
+        "price": 110,
+        "sma20": 100,
+        "sma50": 100,
+        "sma200": 100,
+        "sma20_rising": True,
+        "momentum5": 0.01,
+        "momentum126": 0.10,
+        "drawdown_52w": -0.05,
+        "drawdown_63d": -0.10,
+        "recovery_from_63d_low": 0.10,
+        "max_drawdown_126d": -0.20,
+        "sma200_distance": 0.10,
+    }
 
 
 def test_future_pit_provenance_is_reported_as_pipeline_inconsistency() -> None:
@@ -334,9 +393,7 @@ def test_future_pit_provenance_is_reported_as_pipeline_inconsistency() -> None:
     )
     collector = HistoricalCandidateAuditCollector(config, StrategyVariant.FULL)
 
-    collector.observe_screen(
-        _report(session, (record,)), StrategyVariant.FULL, config
-    )
+    collector.observe_screen(_report(session, (record,)), StrategyVariant.FULL, config)
 
     assert collector._pipeline_inconsistencies == {  # noqa: SLF001
         "future_filing_used": 1,
