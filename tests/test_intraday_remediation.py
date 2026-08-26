@@ -156,6 +156,24 @@ class _FailingProvider:
         }
 
 
+class _MalformedProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def sync_intraday(self, *args, **kwargs):
+        self.calls += 1
+        return None
+
+
+class _TimeoutProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def sync_intraday(self, *args, **kwargs):
+        self.calls += 1
+        raise TimeoutError("fixture provider timeout")
+
+
 def test_required_present_is_ready_without_provider_factory(tmp_path) -> None:
     database = _database(tmp_path)
     database.upsert_bars([_bar("AAA", timestamp) for timestamp in _timestamps()])
@@ -280,6 +298,40 @@ def test_provider_failure_is_blocking_and_not_recorded_as_absence(tmp_path) -> N
     assert report["provider_check_failed_count"] == 1
     assert report["provider_confirmed_absent_count"] == 0
     assert report["fetch_failed_count"] == 1
+    assert retried["provider_check_failed_count"] == 1
+    assert provider.calls == 2
+
+
+def test_malformed_provider_response_is_retryable_failure_not_absence(tmp_path) -> None:
+    database = _database(tmp_path)
+    provider = _MalformedProvider()
+
+    report = _remediate(database, lambda: provider)
+    retried = _remediate(database, lambda: provider)
+
+    assert report["qualification_status"] == (
+        IntradayQualificationStatus.NOT_READY_PROVIDER_VERIFICATION_FAILURE.value
+    )
+    assert report["provider_check_failed_count"] == 1
+    assert report["provider_confirmed_absent_count"] == 0
+    assert "non-mapping result" in report["details"][0]["reason"]
+    assert retried["provider_check_failed_count"] == 1
+    assert provider.calls == 2
+
+
+def test_provider_exception_is_retryable_failure_not_absence(tmp_path) -> None:
+    database = _database(tmp_path)
+    provider = _TimeoutProvider()
+
+    report = _remediate(database, lambda: provider)
+    retried = _remediate(database, lambda: provider)
+
+    assert report["qualification_status"] == (
+        IntradayQualificationStatus.NOT_READY_PROVIDER_VERIFICATION_FAILURE.value
+    )
+    assert report["provider_check_failed_count"] == 1
+    assert report["provider_confirmed_absent_count"] == 0
+    assert "fixture provider timeout" in report["details"][0]["reason"]
     assert retried["provider_check_failed_count"] == 1
     assert provider.calls == 2
 

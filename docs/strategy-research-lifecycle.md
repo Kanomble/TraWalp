@@ -26,7 +26,9 @@ comparisons.
   same-symbol re-entry requires a strictly higher point-in-time C score than at the failed entry.
 - F5/C-intraday-first-hour-pullback-f0-management — `ACTIVE_RESEARCH`; it reuses F4's causal
   EMA20/first-hour/confirmed-pullback entry planner and then delegates all management to F0.
-- The opt-in `research-intraday-hybrid` family contains exactly F0, F3 and F5.
+- F-intraday/F-intraday-dynamic — `ACTIVE_RESEARCH`; exact PIT screen F candidates with the
+  unchanged F0 intraday-dynamic management preset. F0 remains C plus intraday-dynamic.
+- The opt-in `research-intraday-hybrid` family contains exactly F0, F3, F5 and F-intraday.
 
 ## Archived and compatibility strategies
 

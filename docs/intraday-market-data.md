@@ -132,7 +132,8 @@ dem Lauf persistierten Datenbestand ab.
 `compare-preflight --include research-intraday-hybrid` erzeugt lokal und ohne Backtest oder Netzwerk
 ein PIT-Kandidatenmanifest. Neben den Candidate-Entry-Sessions qualifiziert es ab dem ersten
 Kandidatensignal jedes Symbols alle Sessions, die ohne vorweggenommene Trade-Simulation noch für eine
-potenziell offene F0-/F3-/F5-Position relevant sein können. Nur lückenhafte Anforderungen werden in
+potenziell offene F0-/F3-/F5- oder F-intraday-Position relevant sein können. F-intraday verwendet
+den PIT-Kandidatenpfad von Screen F und unverändert das F0-Management. Nur lückenhafte Anforderungen werden in
 das Sync-Manifest geschrieben; Universe-Symbole und frühere Sessions außerhalb dieses Pfads werden
 nicht angefragt.
 

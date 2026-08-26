@@ -378,6 +378,7 @@ def test_candidate_report_and_intraday_recommendation_are_candidate_driven(
                     "F0/C-intraday-dynamic",
                     "F3/C-intraday-thesis-recovery",
                     "F5/C-intraday-first-hour-pullback-f0-management",
+                    "F-intraday/F-intraday-dynamic",
                 ],
                 "requirement_type": "candidate_session",
             }
@@ -419,6 +420,7 @@ def test_candidate_report_and_intraday_recommendation_are_candidate_driven(
         "F0/C-intraday-dynamic",
         "F3/C-intraday-thesis-recovery",
         "F5/C-intraday-first-hour-pullback-f0-management",
+        "F-intraday/F-intraday-dynamic",
     ]
     assert exported_candidates["potential_position_ranges"] == [
         {
@@ -430,6 +432,7 @@ def test_candidate_report_and_intraday_recommendation_are_candidate_driven(
                 "F0/C-intraday-dynamic",
                 "F3/C-intraday-thesis-recovery",
                 "F5/C-intraday-first-hour-pullback-f0-management",
+                "F-intraday/F-intraday-dynamic",
             ],
         }
     ]
@@ -489,6 +492,7 @@ def test_preflight_family_is_exact_and_build_path_does_not_run_backtest(monkeypa
         "F0/C-intraday-dynamic",
         "F3/C-intraday-thesis-recovery",
         "F5/C-intraday-first-hour-pullback-f0-management",
+        "F-intraday/F-intraday-dynamic",
     ]
     monkeypatch.setattr(
         BacktestEngine,

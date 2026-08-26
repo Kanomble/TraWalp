@@ -204,7 +204,8 @@ def build_compare_preflight(
             ).get("candidate_symbol_sessions_required", 0),
             "note": (
                 "Candidate entry sessions and every conservative potential open-position session "
-                "after a symbol's first candidate are qualified without simulating entries or "
+                "after each candidate path's first symbol candidate are qualified without "
+                "simulating entries or "
                 "exits. Provider-confirmed absence remains explicit and uses the research family's "
                 "deterministic missing-data skips."
             ),
@@ -350,35 +351,45 @@ def _intraday_preflight(
 ) -> dict[str, Any]:
     assessments = assess_comparison_intraday_coverage(database, preparation.intraday_requirements)
     coverage_requirements: list[CandidateIntradayRequirement] = []
-    candidate_pairs: set[tuple[str, date, BarTimeframe]] = set()
+    preparation_runs = getattr(preparation, "runs", ())
+    run_labels = (
+        dict(zip(preparation_runs, strategy_labels, strict=True))
+        if len(preparation_runs) == len(strategy_labels)
+        else {}
+    )
     for assessment in assessments:
         requirement = assessment.requirement
-        for symbol, session in requirement.candidate_execution_sessions:
-            candidate_pairs.add((symbol, session, requirement.timeframe))
-            coverage_requirements.append(
-                CandidateIntradayRequirement(
-                    symbol=symbol,
-                    session=session,
-                    timeframe=requirement.timeframe,
-                    candidate_paths=tuple(strategy_labels),
-                )
-            )
-        comparison_index = {
-            session: index for index, session in enumerate(requirement.comparison_sessions)
-        }
-        for symbol, first_execution in requirement.first_execution_sessions:
-            for session in requirement.comparison_sessions[comparison_index[first_execution] :]:
-                if (symbol, session, requirement.timeframe) in candidate_pairs:
-                    continue
+        for candidate_paths, first_executions, candidate_executions in _candidate_path_views(
+            requirement,
+            run_labels,
+            tuple(strategy_labels),
+        ):
+            path_candidate_pairs = set(candidate_executions)
+            for symbol, session in candidate_executions:
                 coverage_requirements.append(
                     CandidateIntradayRequirement(
                         symbol=symbol,
                         session=session,
                         timeframe=requirement.timeframe,
-                        candidate_paths=tuple(strategy_labels),
-                        requirement_type="potential_open_position_session",
+                        candidate_paths=candidate_paths,
                     )
                 )
+            comparison_index = {
+                session: index for index, session in enumerate(requirement.comparison_sessions)
+            }
+            for symbol, first_execution in first_executions:
+                for session in requirement.comparison_sessions[comparison_index[first_execution] :]:
+                    if (symbol, session) in path_candidate_pairs:
+                        continue
+                    coverage_requirements.append(
+                        CandidateIntradayRequirement(
+                            symbol=symbol,
+                            session=session,
+                            timeframe=requirement.timeframe,
+                            candidate_paths=candidate_paths,
+                            requirement_type="potential_open_position_session",
+                        )
+                    )
     coverage = qualify_candidate_intraday_coverage(
         database,
         coverage_requirements,
@@ -568,10 +579,12 @@ def _candidate_report(
     intraday: dict[str, Any],
     discovery_error: str | None,
 ) -> dict[str, Any]:
+    runs = research_family_runs(comparison_kind)
     strategies = [
         comparison_strategy_label(comparison_kind, variant, preset)
-        for variant, preset in research_family_runs(comparison_kind)
+        for variant, preset in runs
     ]
+    run_labels = dict(zip(runs, strategies, strict=True))
     sessions = (
         sorted(
             {
@@ -616,11 +629,45 @@ def _candidate_report(
                 "first_execution_session": first_execution.isoformat(),
                 "last_potential_session": requirement.comparison_sessions[-1].isoformat(),
                 "timeframe": requirement.timeframe.value,
-                "candidate_paths": strategies,
+                "candidate_paths": list(candidate_paths),
             }
             for requirement in (
                 preparation.intraday_requirements if preparation is not None else ()
             )
-            for symbol, first_execution in requirement.first_execution_sessions
+            for candidate_paths, first_executions, _candidate_executions in _candidate_path_views(
+                requirement,
+                run_labels,
+                tuple(strategies),
+            )
+            for symbol, first_execution in first_executions
         ],
     }
+
+
+def _candidate_path_views(
+    requirement: Any,
+    run_labels: dict[tuple[Any, Any], str],
+    fallback_paths: tuple[str, ...],
+) -> tuple[
+    tuple[tuple[str, ...], tuple[tuple[str, date], ...], tuple[tuple[str, date], ...]],
+    ...,
+]:
+    """Expose path-specific candidates while retaining old fixture/report compatibility."""
+
+    path_requirements = getattr(requirement, "candidate_path_requirements", ())
+    if not path_requirements:
+        return (
+            (
+                fallback_paths,
+                requirement.first_execution_sessions,
+                requirement.candidate_execution_sessions,
+            ),
+        )
+    return tuple(
+        (
+            tuple(run_labels[run] for run in path.runs),
+            path.first_execution_sessions,
+            path.candidate_execution_sessions,
+        )
+        for path in path_requirements
+    )

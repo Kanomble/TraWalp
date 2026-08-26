@@ -136,12 +136,21 @@ RESEARCH_CANDIDATE_EVENT_PRESETS = {
     *FIRST_HOUR_PULLBACK_PRESETS,
 }
 # Backward-compatible public collection, derived from the central registry.
+_RESEARCH_FAMILIES = {
+    "d1-d5-archive",
+    "intraday-isolation",
+    "intraday-next",
+    "intraday-hybrid",
+}
+_CONTROL_PRESETS = {
+    metadata.preset for metadata in STRATEGY_RESEARCH_REGISTRY if metadata.control
+}
 RESEARCH_PRESETS = {
     metadata.preset
     for metadata in STRATEGY_RESEARCH_REGISTRY
-    if metadata.family
-    in {"d1-d5-archive", "intraday-isolation", "intraday-next", "intraday-hybrid"}
+    if metadata.family in _RESEARCH_FAMILIES
     and not metadata.control
+    and metadata.preset not in _CONTROL_PRESETS
 }
 
 
@@ -252,6 +261,16 @@ class CachedScreenSource:
 
 
 @dataclass(frozen=True, slots=True)
+class IntradayCandidatePathRequirement:
+    """One PIT candidate stream and the intraday runs that consume it."""
+
+    variant: StrategyVariant
+    runs: tuple[tuple[StrategyVariant, PositionManagementPreset], ...]
+    first_execution_sessions: tuple[tuple[str, date], ...]
+    candidate_execution_sessions: tuple[tuple[str, date], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class IntradayPrefetchRequirement:
     """Candidate-bounded local data requirement for one position timeframe."""
 
@@ -265,6 +284,7 @@ class IntradayPrefetchRequirement:
     requested_end: datetime
     warmup_bars: int
     extended_hours: bool
+    candidate_path_requirements: tuple[IntradayCandidatePathRequirement, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2753,7 +2773,10 @@ def determine_intraday_comparison_requirements(
 ) -> tuple[IntradayPrefetchRequirement, ...]:
     """Resolve run timeframes and discover eligible PIT candidates without lookahead."""
 
-    timeframes_by_variant: dict[StrategyVariant, set[BarTimeframe]] = {}
+    runs_by_candidate_path: dict[
+        tuple[BarTimeframe, StrategyVariant],
+        list[tuple[StrategyVariant, PositionManagementPreset]],
+    ] = {}
     for variant, preset in runs:
         resolved = position_management_preset(
             config.position_management,
@@ -2762,15 +2785,22 @@ def determine_intraday_comparison_requirements(
         )
         timeframe = _comparison_execution_timeframe(resolved, preset)
         if timeframe.intraday:
-            timeframes_by_variant.setdefault(variant, set()).add(timeframe)
-    if not timeframes_by_variant:
+            runs_by_candidate_path.setdefault((timeframe, variant), []).append((variant, preset))
+    if not runs_by_candidate_path:
         return ()
 
-    earliest_execution: dict[BarTimeframe, dict[str, date]] = {
-        timeframe: {} for timeframes in timeframes_by_variant.values() for timeframe in timeframes
+    timeframes_by_variant: dict[StrategyVariant, set[BarTimeframe]] = {}
+    for timeframe, variant in runs_by_candidate_path:
+        timeframes_by_variant.setdefault(variant, set()).add(timeframe)
+    earliest_execution_by_path: dict[
+        tuple[BarTimeframe, StrategyVariant], dict[str, date]
+    ] = {
+        candidate_path: {} for candidate_path in runs_by_candidate_path
     }
-    candidate_execution: dict[BarTimeframe, set[tuple[str, date]]] = {
-        timeframe: set() for timeframe in earliest_execution
+    candidate_execution_by_path: dict[
+        tuple[BarTimeframe, StrategyVariant], set[tuple[str, date]]
+    ] = {
+        candidate_path: set() for candidate_path in runs_by_candidate_path
     }
     for index, signal_session in enumerate(sessions[:-1]):
         report = screen_source.screen(signal_session)
@@ -2782,14 +2812,46 @@ def determine_intraday_comparison_requirements(
                 if evaluate_variant_entry(record, variant, config).eligible
             }
             for timeframe in timeframes:
-                candidates = earliest_execution[timeframe]
+                candidate_path = (timeframe, variant)
+                candidates = earliest_execution_by_path[candidate_path]
                 for symbol in eligible_symbols:
                     candidates.setdefault(symbol, execution_session)
-                    candidate_execution[timeframe].add((symbol, execution_session))
+                    candidate_execution_by_path[candidate_path].add((symbol, execution_session))
 
     requirements: list[IntradayPrefetchRequirement] = []
-    for timeframe in sorted(earliest_execution, key=lambda item: item.value):
-        candidates = earliest_execution[timeframe]
+    for timeframe in sorted(
+        {timeframe for timeframe, _variant in runs_by_candidate_path},
+        key=lambda item: item.value,
+    ):
+        path_requirements = tuple(
+            IntradayCandidatePathRequirement(
+                variant=variant,
+                runs=tuple(runs_by_candidate_path[(timeframe, variant)]),
+                first_execution_sessions=tuple(
+                    sorted(earliest_execution_by_path[(timeframe, variant)].items())
+                ),
+                candidate_execution_sessions=tuple(
+                    sorted(candidate_execution_by_path[(timeframe, variant)])
+                ),
+            )
+            for variant in sorted(
+                (
+                    variant
+                    for path_timeframe, variant in runs_by_candidate_path
+                    if path_timeframe is timeframe
+                ),
+                key=lambda item: item.value,
+            )
+        )
+        candidates: dict[str, date] = {}
+        candidate_execution: set[tuple[str, date]] = set()
+        for path in path_requirements:
+            for symbol, execution_session in path.first_execution_sessions:
+                candidates[symbol] = min(
+                    execution_session,
+                    candidates.get(symbol, execution_session),
+                )
+            candidate_execution.update(path.candidate_execution_sessions)
         first_execution = min(candidates.values(), default=sessions[0])
         requirements.append(
             IntradayPrefetchRequirement(
@@ -2797,16 +2859,14 @@ def determine_intraday_comparison_requirements(
                 variants=tuple(
                     sorted(
                         (
-                            variant
-                            for variant, timeframes in timeframes_by_variant.items()
-                            if timeframe in timeframes
+                            path.variant for path in path_requirements
                         ),
                         key=lambda item: item.value,
                     )
                 ),
                 symbols=tuple(sorted(candidates)),
                 first_execution_sessions=tuple(sorted(candidates.items())),
-                candidate_execution_sessions=tuple(sorted(candidate_execution[timeframe])),
+                candidate_execution_sessions=tuple(sorted(candidate_execution)),
                 comparison_sessions=sessions,
                 requested_start=intraday_warmup_start(
                     first_execution,
@@ -2819,6 +2879,7 @@ def determine_intraday_comparison_requirements(
                 )[1],
                 warmup_bars=config.intraday.warmup_bars,
                 extended_hours=config.intraday.extended_hours,
+                candidate_path_requirements=path_requirements,
             )
         )
     return tuple(requirements)

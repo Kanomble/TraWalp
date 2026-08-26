@@ -266,6 +266,10 @@ def test_phase_h_registry_and_hybrid_family_are_exact() -> None:
             StrategyVariant.FULL,
             PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT,
         ),
+        (
+            StrategyVariant.QUALITY_VALUE_MOMENTUM,
+            PositionManagementPreset.INTRADAY_DYNAMIC,
+        ),
     )
 
 
@@ -613,14 +617,20 @@ def test_compare_preflight_cli_never_invokes_network_or_backtest(
     assert _symbols_in_json(candidate_payload) == {"AAA"}
 
 
-def _empty_result(preset: PositionManagementPreset, positions=(), diagnostics=None):
+def _empty_result(
+    preset: PositionManagementPreset,
+    positions=(),
+    diagnostics=None,
+    *,
+    variant: StrategyVariant = StrategyVariant.FULL,
+):
     return BacktestResult.model_construct(
         requested_start=date(2024, 1, 2),
         requested_end=date(2024, 1, 3),
         actual_start=date(2024, 1, 2),
         actual_end=date(2024, 1, 3),
         generated_at="2024-01-04T00:00:00+00:00",
-        strategy_variant=StrategyVariant.FULL,
+        strategy_variant=variant,
         position_management_preset=preset,
         initial_capital=10_000.0,
         configuration={"backtest": {"slippage_bps": 5, "commission_bps": 0}},
@@ -715,6 +725,10 @@ def test_hybrid_export_records_opt_in_cost_state_and_never_overwrites(
             _empty_result(
                 PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT
             ),
+            _empty_result(
+                PositionManagementPreset.INTRADAY_DYNAMIC,
+                variant=StrategyVariant.QUALITY_VALUE_MOMENTUM,
+            ),
         ),
         shared_screen_sessions=2,
         comparison_kind=StrategyComparisonKind.RESEARCH_INTRADAY_HYBRID,
@@ -730,6 +744,12 @@ def test_hybrid_export_records_opt_in_cost_state_and_never_overwrites(
     )
     payload = json.loads(paths["summary_json"].read_text(encoding="utf-8"))
     assert payload["cost_stress_requested"] is False
+    assert {row["strategy"] for row in payload["strategies"]} == {
+        "F0/C-intraday-dynamic",
+        "F3/C-intraday-thesis-recovery",
+        "F5/C-intraday-first-hour-pullback-f0-management",
+        "F-intraday/F-intraday-dynamic",
+    }
     assert payload["cost_stress_executed"] is False
     assert paths["cost_stress"].read_text(encoding="utf-8").strip() == "strategy"
     with pytest.raises(FileExistsError):

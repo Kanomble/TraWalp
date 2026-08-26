@@ -493,7 +493,9 @@ werden nicht automatisch in aktive Vergleiche aufgenommen. Archived bedeutet aus
 gelöscht. Die genaue Zuordnung steht in
 [`docs/strategy-research-lifecycle.md`](docs/strategy-research-lifecycle.md).
 
-Die explizite Familie `research-intraday-hybrid` enthält ausschließlich F0, F3 und F5. F5 ist die
+Die explizite Familie `research-intraday-hybrid` enthält ausschließlich F0, F3, F5 und
+F-intraday. F-intraday kombiniert die unveränderte PIT-Kandidatenauswahl von Screen F mit exakt
+dem unveränderten F0-Preset `intraday-dynamic`; F0 selbst bleibt C plus `intraday-dynamic`. F5 ist die
 kausale F4-Entry-Auswahl (EMA20, vollständige erste Stunde, erster bestätigter Pullback, Entry erst
 am folgenden kanonischen 15-Minuten-Open) mit anschließend unverändertem F0-Management: 3-Prozent-
 Katastrophenstop, sofortige ATR14-x1-Trail-Semantik, einmalig 50 Prozent bei +1,5 Prozent, Runner

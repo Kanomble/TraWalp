@@ -63,6 +63,16 @@ STRATEGY_RESEARCH_REGISTRY: tuple[StrategyResearchMetadata, ...] = (
         expensive=True,
     ),
     _metadata(
+        PositionManagementPreset.INTRADAY_DYNAMIC,
+        "F-INTRADAY-F",
+        "F-intraday/F-intraday-dynamic",
+        ResearchLifecycle.ACTIVE_RESEARCH,
+        "intraday-hybrid",
+        "PIT F candidate selection with the unchanged F0 intraday-dynamic management preset.",
+        variant=StrategyVariant.QUALITY_VALUE_MOMENTUM,
+        expensive=True,
+    ),
+    _metadata(
         PositionManagementPreset.F1_INTRADAY_LOSS_COOLDOWN,
         "F1-C",
         "F1/C-intraday-loss-cooldown",
@@ -242,6 +252,10 @@ RESEARCH_FAMILY_RUNS: dict[
             StrategyVariant.FULL,
             PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT,
         ),
+        (
+            StrategyVariant.QUALITY_VALUE_MOMENTUM,
+            PositionManagementPreset.INTRADAY_DYNAMIC,
+        ),
     ),
 }
 
@@ -290,15 +304,13 @@ def comparison_strategy_label(
     return research_strategy_label(variant, preset)
 
 
-def lifecycle_for_preset(preset: PositionManagementPreset) -> ResearchLifecycle:
-    matches = [
-        metadata.lifecycle for metadata in STRATEGY_RESEARCH_REGISTRY if metadata.preset is preset
-    ]
-    if not matches:
-        raise ValueError(f"Unregistered strategy preset: {preset}")
-    if len(set(matches)) != 1:
-        raise ValueError(f"Preset has conflicting lifecycle metadata: {preset}")
-    return matches[0]
+def lifecycle_for_preset(
+    preset: PositionManagementPreset,
+    variant: StrategyVariant = StrategyVariant.FULL,
+) -> ResearchLifecycle:
+    """Return lifecycle metadata for the exact selection/management composition."""
+
+    return research_metadata(variant, preset).lifecycle
 
 
 def validate_research_registry() -> None:

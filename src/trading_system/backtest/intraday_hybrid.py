@@ -1,4 +1,4 @@
-"""Phase-H F0/F3/F5 diagnostics and non-overwriting research exports."""
+"""Phase-H F0/F3/F5/F-intraday diagnostics and research exports."""
 
 from __future__ import annotations
 
@@ -19,7 +19,10 @@ from trading_system.backtest.report import (
     _position_fields,
     _trade_fields,
 )
-from trading_system.backtest.research_registry import research_strategy_label
+from trading_system.backtest.research_registry import (
+    comparison_strategy_label,
+    research_family_runs,
+)
 from trading_system.backtest.validation import annotate_trade_path_coverage
 from trading_system.data.database import Database
 from trading_system.models.backtest import (
@@ -27,26 +30,31 @@ from trading_system.models.backtest import (
     BacktestResult,
     PositionManagementPreset,
     StrategyComparison,
+    StrategyComparisonKind,
     StrategyVariant,
 )
 
 DEVELOPMENT_RESEARCH_NOTICE = (
     "2025-05-01 through 2026-08-12 has already informed hypothesis construction. "
-    "F3/F5 results on that segment are development research evidence, not automatically "
+    "F3/F5/F-intraday results on that segment are development research evidence, not automatically "
     "out-of-sample evidence. Earlier data is labeled historical_extension."
 )
 
-_HYBRID_PRESETS = {
-    PositionManagementPreset.INTRADAY_DYNAMIC,
-    PositionManagementPreset.F3_INTRADAY_THESIS_RECOVERY,
-    PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT,
-}
+_HYBRID_KIND = StrategyComparisonKind.RESEARCH_INTRADAY_HYBRID
+_HYBRID_RUNS = frozenset(research_family_runs(_HYBRID_KIND))
 
 
-def intraday_hybrid_label(preset: PositionManagementPreset) -> str:
-    if preset not in _HYBRID_PRESETS:
-        raise ValueError(f"Not an intraday-hybrid preset: {preset}")
-    return research_strategy_label(StrategyVariant.FULL, preset)
+def intraday_hybrid_label(
+    variant: StrategyVariant,
+    preset: PositionManagementPreset,
+) -> str:
+    if (variant, preset) not in _HYBRID_RUNS:
+        raise ValueError(f"Not an intraday-hybrid run: {variant.value}/{preset.value}")
+    return comparison_strategy_label(_HYBRID_KIND, variant, preset)
+
+
+def _result_label(result: BacktestResult) -> str:
+    return intraday_hybrid_label(result.strategy_variant, result.position_management_preset)
 
 
 def annotate_intraday_hybrid_coverage(
@@ -65,7 +73,7 @@ def annotate_intraday_hybrid_coverage(
         )
     )
     for result in comparison.variants:
-        label = intraday_hybrid_label(result.position_management_preset)
+        label = _result_label(result)
         annotated, _ = annotate_trade_path_coverage(
             database, result, strategy_label=label
         )
@@ -121,7 +129,7 @@ def annotate_intraday_hybrid_coverage(
 
 def paired_intraday_hybrid_effects(comparison: StrategyComparison) -> dict[str, Any]:
     results = {
-        intraday_hybrid_label(result.position_management_preset): result
+        _result_label(result): result
         for result in comparison.variants
     }
     f0 = results["F0/C-intraday-dynamic"]
@@ -230,7 +238,7 @@ def intraday_hybrid_summary_rows(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for result in comparison.variants:
-        label = intraday_hybrid_label(result.position_management_preset)
+        label = _result_label(result)
         holdings = [_holding_minutes(position) for position in result.positions]
         mfes = [position.maximum_favorable_excursion for position in result.positions]
         maes = [position.maximum_adverse_excursion for position in result.positions]
@@ -338,7 +346,7 @@ def export_intraday_hybrid_comparison(
     summary_rows = intraday_hybrid_summary_rows(comparison, paired)
     exit_rows = [
         {
-            "strategy": intraday_hybrid_label(result.position_management_preset),
+            "strategy": _result_label(result),
             **diagnostic.model_dump(mode="json"),
         }
         for result in comparison.variants
@@ -346,7 +354,7 @@ def export_intraday_hybrid_comparison(
     ]
     cost_rows = (
         _cost_rows(cost_comparisons)
-        + _path_preserving_cost_rows(comparison, intraday_hybrid_label)
+        + _path_preserving_cost_rows(comparison, _result_label)
         if cost_stress_requested
         else []
     )
@@ -379,7 +387,7 @@ def export_intraday_hybrid_comparison(
         paths["positions"],
         [
             {
-                "strategy": intraday_hybrid_label(result.position_management_preset),
+                "strategy": _result_label(result),
                 **position.model_dump(mode="json"),
             }
             for result in comparison.variants
@@ -391,7 +399,7 @@ def export_intraday_hybrid_comparison(
         paths["execution_legs"],
         [
             {
-                "strategy": intraday_hybrid_label(result.position_management_preset),
+                "strategy": _result_label(result),
                 **trade.model_dump(mode="json"),
             }
             for result in comparison.variants
@@ -412,7 +420,7 @@ def _cost_rows(comparisons: dict[str, StrategyComparison]) -> list[dict[str, Any
     return [
         {
             "cost_case": case,
-            "strategy": intraday_hybrid_label(result.position_management_preset),
+            "strategy": _result_label(result),
             "slippage_bps": result.configuration["backtest"]["slippage_bps"],
             "commission_bps": result.configuration["backtest"]["commission_bps"],
             "total_return": result.metrics.total_return,
@@ -431,7 +439,7 @@ def _cost_rows(comparisons: dict[str, StrategyComparison]) -> list[dict[str, Any
 
 def _path_preserving_cost_rows(
     comparison: StrategyComparison,
-    labeler: Callable[[PositionManagementPreset], str],
+    labeler: Callable[[BacktestResult], str],
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for result in comparison.variants:
@@ -481,7 +489,7 @@ def _path_preserving_cost_rows(
             rows.append(
                 {
                     "cost_case": case,
-                    "strategy": labeler(result.position_management_preset),
+                    "strategy": labeler(result),
                     "slippage_bps": slippage_bps,
                     "commission_bps": commission_bps,
                     "total_return": sum(pnls) / result.initial_capital,

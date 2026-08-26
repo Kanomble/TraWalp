@@ -749,13 +749,22 @@ def _sync_window(
             incremental=False,
             extended_hours=extended_hours,
         )
+        if not isinstance(result, Mapping):
+            raise TypeError(
+                "provider check returned a non-mapping result "
+                f"({type(result).__name__})"
+            )
+        normalized_result = dict(result)
+        errors = int(normalized_result.get("errors", 0))
+        invalid = int(normalized_result.get("invalid_bars", 0))
     except Exception as exc:
         return {}, f"{type(exc).__name__}: {exc}"
-    errors = int(result.get("errors", 0))
-    invalid = int(result.get("invalid_bars", 0))
     if errors or invalid:
-        return result, f"provider check returned errors={errors}, invalid_bars={invalid}"
-    return result, None
+        return (
+            normalized_result,
+            f"provider check returned errors={errors}, invalid_bars={invalid}",
+        )
+    return normalized_result, None
 
 
 def _classify_missing(
