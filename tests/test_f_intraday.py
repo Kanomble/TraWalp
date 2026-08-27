@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
+
+import pytest
 
 from trading_system.backtest import engine as engine_module
 from trading_system.backtest import preflight as preflight_module
@@ -22,6 +24,7 @@ from trading_system.models.backtest import (
     StrategyComparisonKind,
     StrategyVariant,
 )
+from trading_system.models.market_data import BarTimeframe
 
 KIND = StrategyComparisonKind.RESEARCH_INTRADAY_HYBRID
 F0_PATHS = {
@@ -30,6 +33,14 @@ F0_PATHS = {
     "F5/C-intraday-first-hour-pullback-f0-management",
 }
 F_INTRADAY_PATH = "F-intraday/F-intraday-dynamic"
+F5_RUN = (
+    StrategyVariant.FULL,
+    PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT,
+)
+F_INTRADAY_RUN = (
+    StrategyVariant.QUALITY_VALUE_MOMENTUM,
+    PositionManagementPreset.INTRADAY_DYNAMIC,
+)
 
 
 def _config():
@@ -196,3 +207,79 @@ def test_f_intraday_candidate_paths_are_provenanced_and_physically_deduplicated(
     assert by_key[("B", sessions[2])].requirement_type == (
         "potential_open_position_session"
     )
+
+
+@pytest.mark.parametrize(
+    ("runs", "f5_applicable"),
+    (
+        pytest.param((F_INTRADAY_RUN,), False, id="f-intraday-only"),
+        pytest.param((F5_RUN,), True, id="f5-only"),
+        pytest.param((F5_RUN, F_INTRADAY_RUN), True, id="shared-f5-and-f-intraday"),
+    ),
+)
+def test_f5_preflight_diagnostics_follow_candidate_path_provenance(
+    tmp_path,
+    monkeypatch,
+    runs,
+    f5_applicable: bool,
+) -> None:
+    session = date(2025, 5, 2)
+    opening = datetime.combine(session, datetime.min.time(), tzinfo=UTC)
+    candidate_session = (("AAA", session),)
+    path_requirements = tuple(
+        engine_module.IntradayCandidatePathRequirement(
+            variant=variant,
+            runs=((variant, preset),),
+            first_execution_sessions=candidate_session,
+            candidate_execution_sessions=candidate_session,
+        )
+        for variant, preset in runs
+    )
+    requirement = engine_module.IntradayPrefetchRequirement(
+        timeframe=BarTimeframe.MINUTES_15,
+        variants=tuple(variant for variant, _preset in runs),
+        symbols=("AAA",),
+        first_execution_sessions=candidate_session,
+        candidate_execution_sessions=candidate_session,
+        comparison_sessions=(session,),
+        requested_start=opening - timedelta(days=1),
+        requested_end=opening + timedelta(days=1),
+        warmup_bars=0,
+        extended_hours=False,
+        candidate_path_requirements=path_requirements,
+    )
+    labels = [comparison_strategy_label(KIND, *run) for run in runs]
+    preparation = SimpleNamespace(runs=runs, intraday_requirements=(requirement,))
+    database = Database(tmp_path / "f5-path-scope.sqlite3")
+    database.initialize()
+    planner_calls: list[date] = []
+
+    def fixture_plan(plan_session, session_bars, prior_bars):
+        planner_calls.append(plan_session)
+        return SimpleNamespace(
+            failure_reason="missing_pullback_execution_bar",
+            entry_timestamp=None,
+        )
+
+    monkeypatch.setattr(preflight_module, "plan_first_hour_pullback", fixture_plan)
+    report = preflight_module._intraday_preflight(
+        database,
+        _config(),
+        preparation,
+        labels,
+        session,
+        session,
+    )
+
+    assert len(report["candidate_session_details"]) == 1
+    detail = report["candidate_session_details"][0]
+    assert detail["f5_diagnostics_applicable"] is f5_applicable
+    assert len(planner_calls) == int(f5_applicable)
+    assert report["missing_required_first_hour_f5_sessions"] == int(f5_applicable)
+    assert report["missing_f5_pullback_execution_bars"] == int(f5_applicable)
+    if f5_applicable:
+        assert len(detail["missing_required_first_hour_timestamps"]) == 4
+        assert detail["f5_entry_plan_status"] == "missing_pullback_execution_bar"
+    else:
+        assert detail["missing_required_first_hour_timestamps"] is None
+        assert detail["f5_entry_plan_status"] is None

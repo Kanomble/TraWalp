@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -41,8 +41,18 @@ from trading_system.data.qualification import (
     provider_range_verified,
     qualify_daily_history,
 )
-from trading_system.models.backtest import StrategyComparisonKind, StrategyVariant
+from trading_system.models.backtest import (
+    PositionManagementPreset,
+    StrategyComparisonKind,
+    StrategyVariant,
+)
 from trading_system.models.market_data import BarTimeframe, DailyBar
+
+_F5_CANDIDATE_PATH = comparison_strategy_label(
+    StrategyComparisonKind.RESEARCH_INTRADAY_HYBRID,
+    StrategyVariant.FULL,
+    PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT,
+)
 
 
 def build_compare_preflight(
@@ -435,6 +445,15 @@ def _intraday_preflight(
         for bar in bars:
             by_symbol[bar.symbol].append(bar)
         for symbol, session in requirement.candidate_execution_sessions:
+            candidate_path_coverage = coverage_by_key.get(
+                (symbol, session.isoformat(), requirement.timeframe.value)
+            )
+            candidate_paths = set(
+                candidate_path_coverage.get("candidate_paths", ())
+                if candidate_path_coverage is not None
+                else ()
+            )
+            f5_diagnostics_applicable = _F5_CANDIDATE_PATH in candidate_paths
             opening, closing = regular_session_bounds(session)
             symbol_bars = sorted(by_symbol[symbol], key=lambda item: item.timestamp)
             session_bars = [bar for bar in symbol_bars if opening <= bar.timestamp < closing]
@@ -442,11 +461,16 @@ def _intraday_preflight(
             entry_present = bool(session_bars)
             warmup_count = len(prior)
             warmup_sufficient = warmup_count >= requirement.warmup_bars
-            expected_first_hour = set(expected_native_15m_timestamps(session)[:4])
-            present = {bar.timestamp for bar in session_bars}
-            missing_first_hour = sorted(expected_first_hour - present)
-            plan = plan_first_hour_pullback(session, session_bars, prior)
-            execution_missing = plan.failure_reason == "missing_pullback_execution_bar"
+            missing_first_hour: list[datetime] = []
+            plan = None
+            if f5_diagnostics_applicable:
+                expected_first_hour = set(expected_native_15m_timestamps(session)[:4])
+                present = {bar.timestamp for bar in session_bars}
+                missing_first_hour = sorted(expected_first_hour - present)
+                plan = plan_first_hour_pullback(session, session_bars, prior)
+            execution_missing = bool(
+                plan is not None and plan.failure_reason == "missing_pullback_execution_bar"
+            )
             missing_entries += int(not entry_present)
             missing_first_hours += int(bool(missing_first_hour))
             missing_f5_execution += int(execution_missing)
@@ -461,19 +485,22 @@ def _intraday_preflight(
                     ),
                     "missing_required_first_hour_timestamps": [
                         timestamp.isoformat() for timestamp in missing_first_hour
-                    ],
-                    "f5_entry_plan_status": plan.failure_reason or "EXECUTABLE",
+                    ]
+                    if f5_diagnostics_applicable
+                    else None,
+                    "f5_diagnostics_applicable": f5_diagnostics_applicable,
+                    "f5_entry_plan_status": (
+                        plan.failure_reason or "EXECUTABLE" if plan is not None else None
+                    ),
                     "f5_intended_entry_timestamp": (
                         plan.entry_timestamp.isoformat()
-                        if plan.entry_timestamp is not None
+                        if plan is not None and plan.entry_timestamp is not None
                         else None
                     ),
                     "warmup_required_native_bars": requirement.warmup_bars,
                     "warmup_available_native_bars": warmup_count,
                     "warmup_sufficient": warmup_sufficient,
-                    "candidate_path_coverage": coverage_by_key.get(
-                        (symbol, session.isoformat(), requirement.timeframe.value)
-                    ),
+                    "candidate_path_coverage": candidate_path_coverage,
                 }
             )
     ready_statuses = {
