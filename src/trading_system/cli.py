@@ -50,11 +50,17 @@ from trading_system.backtest.report import (
     format_comparison_table,
     format_data_qualification_header,
 )
+from trading_system.backtest.universe_provenance import (
+    audit_universe_provenance,
+    export_universe_provenance_audit,
+)
 from trading_system.backtest.validation import (
+    export_champion_f_exact_loso,
     export_champion_f_validation,
     export_extended_validation,
     format_champion_f_validation_summary,
     format_extended_validation_summary,
+    run_champion_f_exact_loso,
     run_champion_f_validation,
     run_extended_validation,
 )
@@ -328,7 +334,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     validation.add_argument(
         "--target",
-        choices=("legacy-c-intraday", "champion-f"),
+        choices=("legacy-c-intraday", "champion-f", "champion-f-forward"),
         default="legacy-c-intraday",
         help="Validation target (default preserves the historical C/D/intraday workflow)",
     )
@@ -340,6 +346,24 @@ def _parser() -> argparse.ArgumentParser:
         "--output-stem",
         help="Required fresh non-existing report stem for champion-f",
     )
+    exact_loso = commands.add_parser(
+        "validate-champion-f-loso",
+        help="Run explicit, expensive exact portfolio-rerun LOSO for frozen F/configured",
+    )
+    exact_loso.add_argument("--start", type=date.fromisoformat, required=True)
+    exact_loso.add_argument("--end", type=date.fromisoformat, required=True)
+    exact_loso.add_argument(
+        "--symbols",
+        help="Optional comma-separated subset of baseline-executed symbols",
+    )
+    exact_loso.add_argument("--output-stem", required=True)
+    universe_audit = commands.add_parser(
+        "audit-universe-provenance",
+        help="Report local historical-universe evidence without fetching data",
+    )
+    universe_audit.add_argument("--start", type=date.fromisoformat, required=True)
+    universe_audit.add_argument("--end", type=date.fromisoformat, required=True)
+    universe_audit.add_argument("--output-stem", required=True)
     position_comparison = commands.add_parser(
         "backtest-compare", help="Compare the daily position-management presets"
     )
@@ -664,6 +688,24 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(report, indent=2))
         return 0
+    if args.command == "audit-universe-provenance":
+        try:
+            report = audit_universe_provenance(database, args.start, args.end)
+            path = export_universe_provenance_audit(
+                report,
+                settings.strategy.storage.reports_path,
+                stem=args.output_stem,
+            )
+        except (FileExistsError, ValueError) as exc:
+            print(f"Universe provenance audit refused: {exc}", file=sys.stderr)
+            return 1
+        print(
+            "Universe provenance audit complete"
+            f"\n  Provenance: {report['universe_provenance']}"
+            f"\n  Survivorship: {report['survivorship_status']}"
+            f"\n  Report: {path}"
+        )
+        return 0
     if args.command == "screen":
         _warn_data_freshness(database.dataset_states())
         report = Screener(database, settings.strategy).run(args.as_of)
@@ -728,15 +770,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "validate-extended":
         try:
-            if args.target == "champion-f":
+            if args.target in {"champion-f", "champion-f-forward"}:
                 if not args.output_stem:
-                    raise ValueError("champion-f requires --output-stem")
+                    raise ValueError(f"{args.target} requires --output-stem")
                 print("Running frozen F/configured robustness validation...", flush=True)
                 bundle = run_champion_f_validation(
                     database,
                     settings.strategy,
                     args.start,
                     args.end,
+                    forward_only=args.target == "champion-f-forward",
                 )
                 paths = export_champion_f_validation(
                     bundle,
@@ -762,6 +805,39 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Extended validation refused: {exc}", file=sys.stderr)
             return 1
         print(summary)
+        print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
+        return 0
+    if args.command == "validate-champion-f-loso":
+        try:
+            symbols = (
+                [symbol.strip() for symbol in args.symbols.split(",") if symbol.strip()]
+                if args.symbols
+                else None
+            )
+            print(
+                "Running exact F/configured counterfactual LOSO portfolio reruns...",
+                flush=True,
+            )
+            bundle = run_champion_f_exact_loso(
+                database,
+                settings.strategy,
+                args.start,
+                args.end,
+                symbols=symbols,
+            )
+            paths = export_champion_f_exact_loso(
+                bundle,
+                settings.strategy.storage.reports_path,
+                stem=args.output_stem,
+            )
+        except (FileExistsError, ValueError) as exc:
+            print(f"Exact champion F LOSO refused: {exc}", file=sys.stderr)
+            return 1
+        print(
+            "Exact counterfactual LOSO complete"
+            f"\n  Portfolio reruns: {len(bundle.rows)}"
+            "\n  Methodology: COUNTERFACTUAL_RERUN_LOSO"
+        )
         print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
         return 0
     if args.command == "compare-strategies":

@@ -33,6 +33,8 @@ from trading_system.backtest.report import (
     _trade_fields,
     export_comparison,
 )
+from trading_system.backtest.research_registry import FROZEN_CHAMPION_F
+from trading_system.backtest.universe_provenance import audit_universe_provenance
 from trading_system.config import StrategyConfig
 from trading_system.data.database import Database
 from trading_system.data.market_sessions import regular_session_bounds, trading_sessions_between
@@ -127,6 +129,55 @@ class ChampionFValidationBundle:
     path_cost_rows: list[dict[str, Any]]
     full_cost_rows: list[dict[str, Any]]
     drawdown: dict[str, Any]
+    validation_target: str
+    universe_provenance: dict[str, Any]
+    temporal_validation: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ChampionFExactLosoBundle:
+    """One baseline plus exact portfolio reruns with pre-ranking symbol exclusions."""
+
+    requested_start: date
+    requested_end: date
+    baseline: BacktestResult
+    removed_symbols: tuple[str, ...]
+    rows: list[dict[str, Any]]
+    universe_provenance: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SymbolExcludingScreenSource:
+    """Reuse cached PIT screens while removing symbols before portfolio ranking."""
+
+    source: Any
+    excluded_symbols: frozenset[str]
+
+    def screen(self, session: date):
+        report = self.source.screen(session)
+        excluded = {symbol.upper() for symbol in self.excluded_symbols}
+        records = tuple(
+            record for record in report.records if record.symbol.upper() not in excluded
+        )
+        return report.model_copy(
+            update={
+                "records": records,
+                "analyzed_count": len(records),
+                "eligible_count": sum(record.eligible for record in records),
+            }
+        )
+
+
+def validate_champion_f_forward_period(requested_start: date, requested_end: date) -> None:
+    """Reject overlap before any historical preparation or portfolio work starts."""
+
+    if requested_start > requested_end:
+        raise ValueError("Forward validation start must not be after end")
+    if requested_start <= FROZEN_CHAMPION_F.development_cutoff:
+        raise ValueError(
+            "champion-f-forward requires --start after the frozen development cutoff "
+            f"{FROZEN_CHAMPION_F.development_cutoff.isoformat()}"
+        )
 
 
 def qualify_validation_start(
@@ -519,6 +570,15 @@ def strategy_summary(label: str, result: BacktestResult) -> dict[str, Any]:
         for trade in result.trades
         if trade.position_id in runner_positions and not trade.is_partial_exit
     ]
+    measured_r_positions = [
+        item
+        for item in positions
+        if item.initial_risk_per_share_R is not None and item.maximum_mfe_in_R is not None
+    ]
+    r_metrics_available = bool(measured_r_positions)
+    capture_positions = [
+        item for item in positions if item.profit_capture_ratio is not None
+    ]
     return {
         "strategy": label,
         "total_return": metrics.total_return,
@@ -569,17 +629,65 @@ def strategy_summary(label: str, result: BacktestResult) -> dict[str, Any]:
         else None,
         "profit_capture": position_metrics.average_profit_capture,
         "giveback": position_metrics.average_profit_giveback,
-        "positions_reaching_1r": research.get("reached_1r_mfe", 0),
-        "positions_reaching_2r": research.get("reached_2r_mfe", 0),
-        "break_even_lock_activations": research.get(
-            "break_even_lock_activations", 0
+        "profit_capture_available": bool(capture_positions),
+        "profit_capture_positions_measured": len(capture_positions),
+        "profit_capture_definition": (
+            "arithmetic mean of position net return divided by positive MFE greater than "
+            "0.1%; losing positions with positive MFE can contribute negative values"
         ),
-        "one_r_lock_activations": research.get("one_r_lock_activations", 0),
+        "giveback_available": bool(positions),
+        "giveback_positions_measured": len(positions),
+        "giveback_definition": "arithmetic mean of position MFE minus net position return",
+        "r_metrics_available": r_metrics_available,
+        "r_metrics_positions_measured": len(measured_r_positions),
+        "r_metrics_positions_total": len(positions),
+        "r_metrics_reason": (
+            None
+            if r_metrics_available
+            else (
+                "initial R is not populated when the selected management preset does not "
+                "enable R-based profit-lock management"
+            )
+        ),
+        "positions_reaching_1r": (
+            sum(item.maximum_mfe_in_R >= 1 for item in measured_r_positions)
+            if r_metrics_available
+            else None
+        ),
+        "positions_reaching_2r": (
+            sum(item.maximum_mfe_in_R >= 2 for item in measured_r_positions)
+            if r_metrics_available
+            else None
+        ),
+        "break_even_lock_activations": (
+            sum(item.break_even_lock_timestamp is not None for item in measured_r_positions)
+            if r_metrics_available
+            else None
+        ),
+        "one_r_lock_activations": (
+            sum(item.one_r_lock_timestamp is not None for item in measured_r_positions)
+            if r_metrics_available
+            else None
+        ),
         "profit_lock_exits": sum(
             item.exit_reason == "profit_lock" for item in positions
         ),
-        "losses_after_1r": research.get("losses_after_1r_mfe", 0),
-        "losses_after_2r": research.get("losses_after_2r_mfe", 0),
+        "losses_after_1r": (
+            sum(
+                item.maximum_mfe_in_R >= 1 and item.net_pnl < 0
+                for item in measured_r_positions
+            )
+            if r_metrics_available
+            else None
+        ),
+        "losses_after_2r": (
+            sum(
+                item.maximum_mfe_in_R >= 2 and item.net_pnl < 0
+                for item in measured_r_positions
+            )
+            if r_metrics_available
+            else None
+        ),
         "partials": research.get("partial_target_count", 0),
         "runners": len(runner_positions),
         "runner_return": research.get("runner_final_return"),
@@ -863,6 +971,7 @@ def path_preserving_cost_stress(
                     "strategy": label,
                     "slippage_bps": slippage_bps,
                     "commission_bps": commission_bps,
+                    "stress_methodology": "PATH_PRESERVING_REPRICE",
                     "path_preserving_cost_stress": True,
                     "execution_path_unchanged": True,
                     "execution_path_hash": path_hash,
@@ -1140,9 +1249,13 @@ def run_champion_f_validation(
     config: StrategyConfig,
     requested_start: date,
     requested_end: date,
+    *,
+    forward_only: bool = False,
 ) -> ChampionFValidationBundle:
     """Run diagnostics for the unchanged F/configured composition."""
 
+    if forward_only:
+        validate_champion_f_forward_period(requested_start, requested_end)
     if config.backtest.slippage_bps != 5 or config.backtest.commission_bps != 0:
         raise ValueError("champion-f validation requires the frozen 5 bps / 0 bps baseline")
     comparison_kind = StrategyComparisonKind.RESEARCH_CHAMPION_F
@@ -1197,6 +1310,11 @@ def run_champion_f_validation(
     monthly_rows, monthly_stability = calendar_stability(comparison, "month")
     yearly_rows, yearly_stability = calendar_stability(comparison, "year")
     symbol_rows, concentration, leave_rows = symbol_and_leave_one_out(comparison)
+    validation_target = (
+        FROZEN_CHAMPION_F.forward_validation_target
+        if forward_only
+        else FROZEN_CHAMPION_F.validation_target
+    )
     return ChampionFValidationBundle(
         requested_start=requested_start,
         requested_end=requested_end,
@@ -1213,7 +1331,177 @@ def run_champion_f_validation(
         path_cost_rows=path_preserving_cost_stress(comparison),
         full_cost_rows=cost_stress_rows(cost_comparisons),
         drawdown=drawdown_diagnostics(baseline),
+        validation_target=validation_target,
+        universe_provenance=audit_universe_provenance(
+            database, requested_start, requested_end
+        ),
+        temporal_validation=_champion_temporal_validation(
+            baseline,
+            requested_start,
+            requested_end,
+            forward_only=forward_only,
+        ),
     )
+
+
+def run_champion_f_exact_loso(
+    database: Database,
+    config: StrategyConfig,
+    requested_start: date,
+    requested_end: date,
+    *,
+    symbols: list[str] | None = None,
+) -> ChampionFExactLosoBundle:
+    """Rerun F/configured after excluding each symbol before ranking/allocation."""
+
+    if config.backtest.slippage_bps != 5 or config.backtest.commission_bps != 0:
+        raise ValueError("exact champion-f LOSO requires the frozen 5 bps / 0 bps baseline")
+    preparation = prepare_strategy_comparison(
+        database,
+        config,
+        requested_start,
+        requested_end,
+        comparison_kind=StrategyComparisonKind.RESEARCH_CHAMPION_F,
+    )
+    baseline = BacktestEngine(
+        database,
+        config,
+        screen_source=preparation.screen_source,
+    ).run(
+        requested_start,
+        requested_end,
+        variant=FROZEN_CHAMPION_F.variant,
+        preset=FROZEN_CHAMPION_F.preset,
+    )
+    executed = {position.symbol.upper() for position in baseline.positions}
+    selected = (
+        tuple(sorted(executed))
+        if symbols is None
+        else tuple(dict.fromkeys(symbol.strip().upper() for symbol in symbols if symbol.strip()))
+    )
+    if not selected:
+        raise ValueError("Exact LOSO has no executed symbols to remove")
+    untraded = sorted(set(selected) - executed)
+    if untraded:
+        raise ValueError(
+            "Exact LOSO defaults to historically executed symbols; not executed: "
+            + ",".join(untraded)
+        )
+    rows: list[dict[str, Any]] = []
+    for symbol in selected:
+        rerun = BacktestEngine(
+            database,
+            config,
+            screen_source=SymbolExcludingScreenSource(
+                preparation.screen_source, frozenset({symbol})
+            ),
+        ).run(
+            requested_start,
+            requested_end,
+            variant=FROZEN_CHAMPION_F.variant,
+            preset=FROZEN_CHAMPION_F.preset,
+        )
+        rows.append(_exact_loso_row(symbol, baseline, rerun))
+    return ChampionFExactLosoBundle(
+        requested_start=requested_start,
+        requested_end=requested_end,
+        baseline=baseline,
+        removed_symbols=selected,
+        rows=rows,
+        universe_provenance=audit_universe_provenance(
+            database, requested_start, requested_end
+        ),
+    )
+
+
+def _champion_temporal_validation(
+    result: BacktestResult,
+    requested_start: date,
+    requested_end: date,
+    *,
+    forward_only: bool,
+) -> dict[str, Any]:
+    overlap = requested_start <= FROZEN_CHAMPION_F.development_cutoff
+    status = (
+        "DEVELOPMENT_OVERLAP"
+        if overlap
+        else "CLEAN_FORWARD_OOS"
+        if forward_only
+        else "POST_CUTOFF_RESEARCH_PERIOD"
+    )
+    return {
+        "research_strategy": FROZEN_CHAMPION_F.label,
+        "frozen_development_cutoff": FROZEN_CHAMPION_F.development_cutoff.isoformat(),
+        "requested_start": requested_start.isoformat(),
+        "requested_end": requested_end.isoformat(),
+        "development_overlap": overlap,
+        "oos_status": status,
+        "sample_size": {
+            "trading_sessions": len(result.equity_curve),
+            "positions": len(result.positions),
+            "calendar_days": (result.actual_end - result.actual_start).days + 1,
+        },
+        "sample_size_assessment": "NOT_ASSESSED",
+        "methodology_note": (
+            "CLEAN_FORWARD_OOS describes temporal non-overlap only; it does not assert "
+            "statistical sufficiency or survivorship-clean universe construction."
+            if forward_only
+            else "The frozen development period is historical research data, not clean OOS."
+        ),
+    }
+
+
+def _exact_loso_row(
+    removed_symbol: str,
+    baseline: BacktestResult,
+    rerun: BacktestResult,
+) -> dict[str, Any]:
+    baseline_symbols = {position.symbol for position in baseline.positions}
+    rerun_symbols = {position.symbol for position in rerun.positions}
+    baseline_return = baseline.metrics.total_return
+    rerun_return = rerun.metrics.total_return
+    baseline_cost = sum(item.slippage + item.transaction_cost for item in baseline.trades)
+    rerun_cost = sum(item.slippage + item.transaction_cost for item in rerun.trades)
+    return {
+        "methodology": "COUNTERFACTUAL_RERUN_LOSO",
+        "post_hoc_only": False,
+        "excluded_before_candidate_ranking": True,
+        "removed_symbol": removed_symbol,
+        "baseline_return": baseline_return,
+        "rerun_return": rerun_return,
+        "return_delta": (
+            rerun_return - baseline_return
+            if rerun_return is not None and baseline_return is not None
+            else None
+        ),
+        "baseline_cagr": baseline.metrics.cagr,
+        "rerun_cagr": rerun.metrics.cagr,
+        "baseline_sharpe": baseline.metrics.sharpe_ratio,
+        "rerun_sharpe": rerun.metrics.sharpe_ratio,
+        "baseline_sortino": baseline.metrics.sortino_ratio,
+        "rerun_sortino": rerun.metrics.sortino_ratio,
+        "baseline_max_drawdown": baseline.metrics.maximum_drawdown,
+        "rerun_max_drawdown": rerun.metrics.maximum_drawdown,
+        "baseline_profit_factor": baseline.position_metrics.position_profit_factor,
+        "rerun_profit_factor": rerun.position_metrics.position_profit_factor,
+        "baseline_positions": len(baseline.positions),
+        "rerun_positions": len(rerun.positions),
+        "changed_position_count": len(rerun.positions) - len(baseline.positions),
+        "baseline_turnover": baseline.metrics.portfolio_turnover,
+        "rerun_turnover": rerun.metrics.portfolio_turnover,
+        "baseline_exposure": baseline.metrics.exposure,
+        "rerun_exposure": rerun.metrics.exposure,
+        "baseline_modeled_cost": baseline_cost,
+        "rerun_modeled_cost": rerun_cost,
+        "new_symbols_traded": sorted(rerun_symbols - baseline_symbols),
+        "symbols_no_longer_traded": sorted(baseline_symbols - rerun_symbols),
+        "slippage_bps": rerun.configuration["backtest"]["slippage_bps"],
+        "commission_bps": rerun.configuration["backtest"]["commission_bps"],
+        "methodology_note": (
+            "symbol excluded from cached PIT screen records before ranking/allocation; the full "
+            "F/configured portfolio path was rerun"
+        ),
+    }
 
 
 def calendar_stability(
@@ -1737,7 +2025,12 @@ def export_champion_f_validation(
         ],
     )
     summary_payload = {
-        "report_type": "f_configured_historical_robustness_validation",
+        "report_type": (
+            "f_configured_forward_oos_validation"
+            if bundle.validation_target == FROZEN_CHAMPION_F.forward_validation_target
+            else "f_configured_historical_robustness_validation"
+        ),
+        "validation_target": bundle.validation_target,
         "research_status": "current historical research champion",
         "live_trading_designation": False,
         "strategy": {
@@ -1753,7 +2046,14 @@ def export_champion_f_validation(
             bundle.comparison.actual_start.isoformat(),
             bundle.comparison.actual_end.isoformat(),
         ],
-        "period_classification": "development-used historical robustness period; not clean OOS",
+        "frozen_development_cutoff": FROZEN_CHAMPION_F.development_cutoff.isoformat(),
+        "period_classification": bundle.temporal_validation["oos_status"],
+        "temporal_validation": bundle.temporal_validation,
+        "survivorship_status": bundle.universe_provenance["survivorship_status"],
+        "universe_provenance_status": bundle.universe_provenance[
+            "universe_provenance"
+        ],
+        "universe_provenance": bundle.universe_provenance,
         "baseline": bundle.strategy_summary,
         "drawdown": bundle.drawdown,
         "benchmark": baseline.benchmark.model_dump(mode="json"),
@@ -1767,6 +2067,20 @@ def export_champion_f_validation(
             }
             for row in bundle.full_cost_rows
         ],
+        "cost_stress": {
+            "methodology": "FULL_PORTFOLIO_RERUN",
+            "results": bundle.full_cost_rows,
+            "methodology_note": (
+                "Full rerun may alter sizing and the subsequent portfolio path."
+            ),
+        },
+        "path_preserving_cost_stress": {
+            "methodology": "PATH_PRESERVING_REPRICE",
+            "results": bundle.path_cost_rows,
+            "methodology_note": (
+                "Reprices the frozen execution path and changes only modeled execution economics."
+            ),
+        },
         "warnings": list(dict.fromkeys((*bundle.comparison.warnings, *baseline.warnings))),
         "methodology_notes": [
             "Full cost stress reruns the portfolio and may change sizing or subsequent positions.",
@@ -1808,6 +2122,48 @@ def export_champion_f_validation(
     return {**base_paths, **paths}
 
 
+def export_champion_f_exact_loso(
+    bundle: ChampionFExactLosoBundle,
+    output_directory: Path,
+    *,
+    stem: str,
+) -> dict[str, Path]:
+    """Export exact LOSO evidence under a fresh, non-overwriting stem."""
+
+    output_directory.mkdir(parents=True, exist_ok=True)
+    paths = {
+        "json": output_directory / f"{stem}_exact_counterfactual_loso.json",
+        "csv": output_directory / f"{stem}_exact_counterfactual_loso.csv",
+    }
+    existing = [path for path in paths.values() if path.exists()]
+    if existing:
+        raise FileExistsError(f"Exact champion F LOSO export already exists: {existing[0]}")
+    payload = {
+        "report_type": "f_configured_exact_counterfactual_loso",
+        "methodology": "COUNTERFACTUAL_RERUN_LOSO",
+        "post_hoc_only": False,
+        "research_strategy": FROZEN_CHAMPION_F.label,
+        "frozen_development_cutoff": FROZEN_CHAMPION_F.development_cutoff.isoformat(),
+        "requested_start": bundle.requested_start.isoformat(),
+        "requested_end": bundle.requested_end.isoformat(),
+        "removed_symbols": list(bundle.removed_symbols),
+        "baseline": strategy_summary(FROZEN_CHAMPION_F.label, bundle.baseline),
+        "survivorship_status": bundle.universe_provenance["survivorship_status"],
+        "universe_provenance_status": bundle.universe_provenance[
+            "universe_provenance"
+        ],
+        "universe_provenance": bundle.universe_provenance,
+        "results": bundle.rows,
+        "methodology_note": (
+            "Each removed symbol is excluded from PIT screen records before candidate ranking "
+            "and allocation, then the complete F/configured portfolio path is rerun."
+        ),
+    }
+    _atomic_text(paths["json"], json.dumps(payload, indent=2))
+    _atomic_csv(paths["csv"], bundle.rows, _field_union(bundle.rows))
+    return paths
+
+
 def format_champion_f_validation_summary(bundle: ChampionFValidationBundle) -> str:
     summary = bundle.strategy_summary
     return "\n".join(
@@ -1818,7 +2174,9 @@ def format_champion_f_validation_summary(bundle: ChampionFValidationBundle) -> s
             f"Sharpe={_format_number(summary['sharpe'])} "
             f"PF={_format_number(summary['position_profit_factor'])} "
             f"positions={summary['positions']}",
-            "Methodology: historical development-used period; not clean OOS.",
+            f"Temporal classification: {bundle.temporal_validation['oos_status']}.",
+            "Universe classification: "
+            f"{bundle.universe_provenance['survivorship_status']}.",
         ]
     )
 
@@ -2192,6 +2550,8 @@ def _percentile(values: list[float], probability: float) -> float:
 
 
 def _cost_row(case: str, label: str, result: BacktestResult) -> dict[str, Any]:
+    slippage_cost = sum(item.slippage for item in result.trades)
+    commission_cost = sum(item.transaction_cost for item in result.trades)
     return {
         "cost_case": case,
         "strategy": label,
@@ -2205,12 +2565,14 @@ def _cost_row(case: str, label: str, result: BacktestResult) -> dict[str, Any]:
         "expectancy": result.metrics.expectancy_per_trade,
         "max_drawdown": result.metrics.maximum_drawdown,
         "positions": result.position_metrics.positions_closed,
-        "modeled_costs": sum(
-            item.slippage + item.transaction_cost for item in result.trades
-        ),
+        "slippage_cost": slippage_cost,
+        "commission_cost": commission_cost,
+        "total_modeled_execution_cost": slippage_cost + commission_cost,
+        "modeled_costs": slippage_cost + commission_cost,
         "turnover": result.metrics.portfolio_turnover,
         "exposure": result.metrics.exposure,
         "end_of_day_exposure": result.metrics.end_of_day_exposure,
+        "stress_methodology": "FULL_PORTFOLIO_RERUN",
         "path_preserving_cost_stress": False,
     }
 

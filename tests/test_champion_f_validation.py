@@ -1,24 +1,35 @@
 import json
+from collections import Counter
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
 
 import pytest
 
+from trading_system.backtest import engine as engine_module
+from trading_system.backtest.engine import BacktestEngine
 from trading_system.backtest.report import export_backtest
 from trading_system.backtest.research_registry import (
+    FROZEN_CHAMPION_F,
     comparison_strategy_label,
     research_family_runs,
 )
+from trading_system.backtest.universe_provenance import audit_universe_provenance
 from trading_system.backtest.validation import (
     CANONICAL_COST_STRESS_CASES,
     ChampionFValidationBundle,
+    SymbolExcludingScreenSource,
     calendar_stability,
     chronological_subperiod_analysis,
     cost_stress_rows,
     drawdown_diagnostics,
     export_champion_f_validation,
+    strategy_summary,
     symbol_and_leave_one_out,
+    validate_champion_f_forward_period,
 )
 from trading_system.cli import _parser
+from trading_system.config import load_settings
+from trading_system.data.database import Database
 from trading_system.models.backtest import (
     BacktestPosition,
     BacktestResult,
@@ -32,6 +43,9 @@ from trading_system.models.backtest import (
     StrategyComparisonKind,
     StrategyVariant,
 )
+from trading_system.models.fundamentals import CompanyIdentity
+from trading_system.models.market_data import TradableAsset
+from trading_system.models.screening import ScreenReport
 
 
 def _position(position_id: str, symbol: str, pnl: float) -> BacktestPosition:
@@ -255,6 +269,8 @@ def test_champion_cost_stress_rows_keep_canonical_assumptions_and_identity() -> 
         (5.0, 5.0),
     }
     assert all(row["strategy"] == "F/configured" for row in rows)
+    assert all(row["stress_methodology"] == "FULL_PORTFOLIO_RERUN" for row in rows)
+    assert all("total_modeled_execution_cost" in row for row in rows)
 
 
 def test_champion_loso_and_symbol_concentration_are_explicitly_post_hoc() -> None:
@@ -310,9 +326,158 @@ def test_champion_calendar_subperiod_and_drawdown_views_use_equity_path() -> Non
     assert drawdown["recovery_date"] == "2026-08-12"
 
 
+def test_frozen_champion_cutoff_and_forward_selector_are_explicit() -> None:
+    assert FROZEN_CHAMPION_F.label == "F/configured"
+    assert FROZEN_CHAMPION_F.development_cutoff == date(2026, 8, 12)
+    args = _parser().parse_args(
+        [
+            "validate-extended",
+            "--target",
+            "champion-f-forward",
+            "--start",
+            "2026-08-13",
+            "--end",
+            "2026-08-31",
+            "--output-stem",
+            "forward_snapshot",
+        ]
+    )
+    assert args.target == "champion-f-forward"
+    loso = _parser().parse_args(
+        [
+            "validate-champion-f-loso",
+            "--start",
+            "2024-01-02",
+            "--end",
+            "2026-08-12",
+            "--symbols",
+            "NVDA,FTI,MU",
+            "--output-stem",
+            "exact_loso_smoke",
+        ]
+    )
+    assert loso.symbols == "NVDA,FTI,MU"
+
+
+def test_forward_guard_rejects_overlap_before_historical_work() -> None:
+    with pytest.raises(ValueError, match="after the frozen development cutoff"):
+        validate_champion_f_forward_period(date(2026, 8, 12), date(2026, 8, 31))
+    validate_champion_f_forward_period(date(2026, 8, 13), date(2026, 8, 31))
+
+
+def test_exact_loso_filter_removes_symbol_before_portfolio_ranking(monkeypatch, tmp_path) -> None:
+    records = (
+        SimpleNamespace(symbol="AAA", eligible=True, sic="10"),
+        SimpleNamespace(symbol="BBB", eligible=True, sic="20"),
+    )
+    report = ScreenReport.model_construct(
+        as_of=date(2026, 8, 13),
+        requested_as_of=date(2026, 8, 13),
+        effective_market_session=date(2026, 8, 13),
+        generated_at="2026-08-13T00:00:00+00:00",
+        analyzed_count=2,
+        eligible_count=2,
+        records=records,
+    )
+
+    class StaticSource:
+        def screen(self, session):
+            return report
+
+    filtered = SymbolExcludingScreenSource(
+        StaticSource(), frozenset({"AAA"})
+    ).screen(date(2026, 8, 13))
+    monkeypatch.setattr(
+        engine_module,
+        "evaluate_variant_entry",
+        lambda record, variant, config: SimpleNamespace(
+            eligible=True,
+            first_failure=None,
+            score={"AAA": 100.0, "BBB": 90.0}[record.symbol],
+        ),
+    )
+    monkeypatch.setattr(
+        engine_module,
+        "_entry_triggers",
+        lambda record, config: SimpleNamespace(),
+    )
+    load_settings.cache_clear()
+    engine = BacktestEngine(Database(tmp_path / "unused.sqlite3"), load_settings().strategy)
+    orders = engine._entry_orders(
+        filtered,
+        StrategyVariant.QUALITY_VALUE_MOMENTUM,
+        {},
+        Counter(),
+    )
+
+    assert [record.symbol for record in filtered.records] == ["BBB"]
+    assert [order.record.symbol for order in orders] == ["BBB"]
+
+
+def test_r_diagnostics_are_unavailable_when_initial_r_is_absent() -> None:
+    summary = strategy_summary(
+        "F/configured",
+        _result(positions=(_position("P1", "AAA", 10),)),
+    )
+
+    assert summary["r_metrics_available"] is False
+    assert summary["positions_reaching_1r"] is None
+    assert summary["positions_reaching_2r"] is None
+    assert summary["break_even_lock_activations"] is None
+
+
+def test_r_diagnostics_preserve_a_genuinely_measured_zero() -> None:
+    measured = _position("P1", "AAA", 10).model_copy(
+        update={"initial_risk_per_share_R": 5.0, "maximum_mfe_in_R": 0.5}
+    )
+    summary = strategy_summary("measured", _result(positions=(measured,)))
+
+    assert summary["r_metrics_available"] is True
+    assert summary["r_metrics_positions_measured"] == 1
+    assert summary["positions_reaching_1r"] == 0
+    assert summary["positions_reaching_2r"] == 0
+
+
+def test_current_universe_fixture_is_never_labeled_survivorship_clean(tmp_path) -> None:
+    database = Database(tmp_path / "universe.sqlite3")
+    database.initialize()
+    database.upsert_assets(
+        [
+            TradableAsset(
+                symbol="AAA",
+                name="Current",
+                exchange="NYSE",
+                tradable=True,
+                fractionable=True,
+            ),
+            TradableAsset(
+                symbol="OLD",
+                name="Inactive",
+                exchange="NYSE",
+                tradable=False,
+                fractionable=False,
+            ),
+        ]
+    )
+    database.upsert_company(
+        CompanyIdentity(cik="0000000001", symbol="AAA", name="Current", sic="3571")
+    )
+    report = audit_universe_provenance(
+        database, date(2024, 1, 2), date(2026, 8, 12)
+    )
+
+    assert report["universe_provenance"] == "CURRENT_UNIVERSE_ONLY"
+    assert report["survivorship_clean"] is False
+    assert report["historical_membership_authoritative"] is False
+    assert report["counts"]["current_tradable_companies_used_by_backtests"] == 1
+    assert report["counts"]["inactive_assets_known_locally"] == 1
+    assert report["counts"]["delisted_assets_known_locally"] is None
+
+
 def test_champion_export_uses_fresh_stem_and_explicit_research_identity(tmp_path) -> None:
     result = _result()
     comparison = _comparison(result)
+    full_cost_rows = cost_stress_rows({"BASELINE": comparison})
     bundle = ChampionFValidationBundle(
         requested_start=result.requested_start,
         requested_end=result.requested_end,
@@ -326,15 +491,23 @@ def test_champion_export_uses_fresh_stem_and_explicit_research_identity(tmp_path
         symbol_rows=[],
         concentration={},
         leave_one_out_rows=[],
-        path_cost_rows=[],
-        full_cost_rows=[
+        path_cost_rows=[
             {
-                "cost_case": "BASELINE",
-                "slippage_bps": 5,
-                "commission_bps": 0,
+                "cost_case": "2X_SLIPPAGE",
+                "stress_methodology": "PATH_PRESERVING_REPRICE",
+                "total_return": 0.09,
             }
         ],
+        full_cost_rows=full_cost_rows,
         drawdown={},
+        validation_target="champion-f",
+        universe_provenance={
+            "universe_provenance": "CURRENT_UNIVERSE_ONLY",
+            "survivorship_status": "NOT_SURVIVORSHIP_CLEAN",
+        },
+        temporal_validation={
+            "oos_status": "DEVELOPMENT_OVERLAP",
+        },
     )
 
     paths = export_champion_f_validation(bundle, tmp_path, stem="fresh_f_validation")
@@ -348,5 +521,16 @@ def test_champion_export_uses_fresh_stem_and_explicit_research_identity(tmp_path
     }
     assert payload["research_status"] == "current historical research champion"
     assert payload["live_trading_designation"] is False
+    assert payload["cost_stress"]["methodology"] == "FULL_PORTFOLIO_RERUN"
+    assert payload["cost_stress"]["results"][0]["total_return"] == 0.10
+    assert (
+        payload["path_preserving_cost_stress"]["methodology"]
+        == "PATH_PRESERVING_REPRICE"
+    )
+    assert (
+        payload["universe_provenance"]["survivorship_status"]
+        == "NOT_SURVIVORSHIP_CLEAN"
+    )
+    assert payload["universe_provenance_status"] == "CURRENT_UNIVERSE_ONLY"
     with pytest.raises(FileExistsError):
         export_champion_f_validation(bundle, tmp_path, stem="fresh_f_validation")

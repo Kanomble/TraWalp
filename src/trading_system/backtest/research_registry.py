@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 from trading_system.backtest.screen_strategies import SCREEN_STRATEGY_DEFINITIONS
 from trading_system.models.backtest import (
@@ -24,6 +25,28 @@ class StrategyResearchMetadata:
     control: bool
     description: str
     expensive_comparison_default: bool
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenResearchChampion:
+    """Research identity and temporal boundary; never strategy configuration."""
+
+    validation_target: str
+    forward_validation_target: str
+    label: str
+    variant: StrategyVariant
+    preset: PositionManagementPreset
+    development_cutoff: date
+
+
+FROZEN_CHAMPION_F = FrozenResearchChampion(
+    validation_target="champion-f",
+    forward_validation_target="champion-f-forward",
+    label="F/configured",
+    variant=StrategyVariant.QUALITY_VALUE_MOMENTUM,
+    preset=PositionManagementPreset.CONFIGURED,
+    development_cutoff=date(2026, 8, 12),
+)
 
 
 def _metadata(
@@ -282,8 +305,8 @@ RESEARCH_FAMILY_RUNS: dict[
     ),
     StrategyComparisonKind.RESEARCH_CHAMPION_F: (
         (
-            StrategyVariant.QUALITY_VALUE_MOMENTUM,
-            PositionManagementPreset.CONFIGURED,
+            FROZEN_CHAMPION_F.variant,
+            FROZEN_CHAMPION_F.preset,
         ),
     ),
 }
