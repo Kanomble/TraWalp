@@ -34,9 +34,15 @@ from trading_system.models.candidate_audit import (
 )
 
 
-def export_backtest(result: BacktestResult, output_directory: Path) -> dict[str, Path]:
+def export_backtest(
+    result: BacktestResult,
+    output_directory: Path,
+    *,
+    stem: str | None = None,
+    overwrite: bool = True,
+) -> dict[str, Path]:
     output_directory.mkdir(parents=True, exist_ok=True)
-    stem = (
+    stem = stem or (
         f"backtest_{result.requested_start.isoformat()}_{result.requested_end.isoformat()}_"
         f"{result.strategy_variant.value}_{result.position_management_preset.value}"
     )
@@ -48,6 +54,10 @@ def export_backtest(result: BacktestResult, output_directory: Path) -> dict[str,
         "post_exit": output_directory / f"{stem}_post_exit_analysis.csv",
         "equity": output_directory / f"{stem}_equity.csv",
     }
+    if not overwrite:
+        existing = [path for path in paths.values() if path.exists()]
+        if existing:
+            raise FileExistsError(f"Backtest export already exists: {existing[0]}")
     _atomic_text(paths["json"], json.dumps(result.model_dump(mode="json"), indent=2))
     trade_rows = [trade.model_dump(mode="json") for trade in result.trades]
     position_rows = [position.model_dump(mode="json") for position in result.positions]

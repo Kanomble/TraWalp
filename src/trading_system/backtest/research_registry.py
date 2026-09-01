@@ -115,6 +115,19 @@ STRATEGY_RESEARCH_REGISTRY: tuple[StrategyResearchMetadata, ...] = (
         "F4 first-hour pullback entry with frozen F0 intraday management.",
         expensive=True,
     ),
+    _metadata(
+        PositionManagementPreset.F_FIRST_HOUR_PULLBACK_CONFIGURED,
+        "F-ENTRY-FIRST-HOUR-CONFIGURED",
+        "F-entry/F-first-hour-pullback-configured",
+        ResearchLifecycle.ACTIVE_RESEARCH,
+        "f-entry",
+        (
+            "PIT F candidate selection with the shared first-hour pullback entry and "
+            "configured Daily position management."
+        ),
+        variant=StrategyVariant.QUALITY_VALUE_MOMENTUM,
+        expensive=True,
+    ),
     *(
         _metadata(
             preset,
@@ -255,6 +268,22 @@ RESEARCH_FAMILY_RUNS: dict[
         (
             StrategyVariant.QUALITY_VALUE_MOMENTUM,
             PositionManagementPreset.INTRADAY_DYNAMIC,
+        ),
+    ),
+    StrategyComparisonKind.RESEARCH_F_ENTRY: (
+        (
+            StrategyVariant.QUALITY_VALUE_MOMENTUM,
+            PositionManagementPreset.CONFIGURED,
+        ),
+        (
+            StrategyVariant.QUALITY_VALUE_MOMENTUM,
+            PositionManagementPreset.F_FIRST_HOUR_PULLBACK_CONFIGURED,
+        ),
+    ),
+    StrategyComparisonKind.RESEARCH_CHAMPION_F: (
+        (
+            StrategyVariant.QUALITY_VALUE_MOMENTUM,
+            PositionManagementPreset.CONFIGURED,
         ),
     ),
 }

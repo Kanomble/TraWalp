@@ -25,7 +25,10 @@ def position_management_preset(
 ) -> PositionManagementConfig:
     """Resolve a preset and legacy fallbacks into one validated central config model."""
 
-    if preset is PositionManagementPreset.CONFIGURED:
+    if preset in {
+        PositionManagementPreset.CONFIGURED,
+        PositionManagementPreset.F_FIRST_HOUR_PULLBACK_CONFIGURED,
+    }:
         return _resolved_legacy_fallbacks(base, legacy_max_holding_days)
     if preset is PositionManagementPreset.LEGACY:
         return PositionManagementConfig(

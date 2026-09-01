@@ -51,8 +51,11 @@ from trading_system.backtest.report import (
     format_data_qualification_header,
 )
 from trading_system.backtest.validation import (
+    export_champion_f_validation,
     export_extended_validation,
+    format_champion_f_validation_summary,
     format_extended_validation_summary,
+    run_champion_f_validation,
     run_extended_validation,
 )
 from trading_system.config import StrategyConfig, load_settings
@@ -249,6 +252,10 @@ def _parser() -> argparse.ArgumentParser:
         default=PositionManagementPreset.CONFIGURED.value,
         help="Position-management preset (configured uses position_management from YAML)",
     )
+    backtest.add_argument(
+        "--output-stem",
+        help="Write the backtest under a fresh non-existing report stem",
+    )
     comparison = commands.add_parser(
         "compare-strategies",
         help="Compare score variants and position-management strategies on shared screens",
@@ -265,6 +272,7 @@ def _parser() -> argparse.ArgumentParser:
             "research-intraday-isolation",
             "research-intraday-next",
             "research-intraday-hybrid",
+            "research-f-entry",
         ),
         default="all",
         help="Select all strategies or one comparison family (default: all)",
@@ -304,6 +312,7 @@ def _parser() -> argparse.ArgumentParser:
             "research-intraday-isolation",
             "research-intraday-next",
             "research-intraday-hybrid",
+            "research-f-entry",
         ),
         required=True,
         help="Explicit registered research family to qualify",
@@ -315,12 +324,22 @@ def _parser() -> argparse.ArgumentParser:
     )
     validation = commands.add_parser(
         "validate-extended",
-        help="Run the frozen local-only D1/C and C/intraday extended OOS validation",
+        help="Run a frozen local-only extended validation target",
+    )
+    validation.add_argument(
+        "--target",
+        choices=("legacy-c-intraday", "champion-f"),
+        default="legacy-c-intraday",
+        help="Validation target (default preserves the historical C/D/intraday workflow)",
     )
     validation.add_argument("--start", type=date.fromisoformat, default=date(2025, 5, 1))
     validation.add_argument("--end", type=date.fromisoformat, default=date(2026, 4, 30))
     validation.add_argument("--reference-start", type=date.fromisoformat, default=date(2026, 5, 1))
     validation.add_argument("--reference-end", type=date.fromisoformat, default=date(2026, 8, 12))
+    validation.add_argument(
+        "--output-stem",
+        help="Required fresh non-existing report stem for champion-f",
+    )
     position_comparison = commands.add_parser(
         "backtest-compare", help="Compare the daily position-management presets"
     )
@@ -666,10 +685,15 @@ def main(argv: list[str] | None = None) -> int:
                 variant=StrategyVariant(args.variant),
                 preset=PositionManagementPreset(args.strategy),
             )
-        except ValueError as exc:
+            paths = export_backtest(
+                result,
+                settings.strategy.storage.reports_path,
+                stem=args.output_stem,
+                overwrite=args.output_stem is None,
+            )
+        except (FileExistsError, ValueError) as exc:
             print(f"Backtest refused: {exc}", file=sys.stderr)
             return 1
-        paths = export_backtest(result, settings.strategy.storage.reports_path)
         print(format_backtest_summary(result))
         print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
         return 0
@@ -704,20 +728,40 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "validate-extended":
         try:
-            print("Qualifying frozen OOS data and discovering PIT candidates...", flush=True)
-            bundle = run_extended_validation(
-                database,
-                settings.strategy,
-                args.start,
-                args.end,
-                args.reference_start,
-                args.reference_end,
-            )
-            paths = export_extended_validation(bundle, settings.strategy.storage.reports_path)
+            if args.target == "champion-f":
+                if not args.output_stem:
+                    raise ValueError("champion-f requires --output-stem")
+                print("Running frozen F/configured robustness validation...", flush=True)
+                bundle = run_champion_f_validation(
+                    database,
+                    settings.strategy,
+                    args.start,
+                    args.end,
+                )
+                paths = export_champion_f_validation(
+                    bundle,
+                    settings.strategy.storage.reports_path,
+                    stem=args.output_stem,
+                )
+                summary = format_champion_f_validation_summary(bundle)
+            else:
+                print("Qualifying frozen OOS data and discovering PIT candidates...", flush=True)
+                bundle = run_extended_validation(
+                    database,
+                    settings.strategy,
+                    args.start,
+                    args.end,
+                    args.reference_start,
+                    args.reference_end,
+                )
+                paths = export_extended_validation(
+                    bundle, settings.strategy.storage.reports_path
+                )
+                summary = format_extended_validation_summary(bundle)
         except (FileExistsError, ValueError) as exc:
             print(f"Extended validation refused: {exc}", file=sys.stderr)
             return 1
-        print(format_extended_validation_summary(bundle))
+        print(summary)
         print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
         return 0
     if args.command == "compare-strategies":
@@ -725,9 +769,16 @@ def main(argv: list[str] | None = None) -> int:
             comparison_kind = StrategyComparisonKind(args.include.replace("-", "_"))
             if (
                 args.strict_intraday_coverage
-                and comparison_kind is not StrategyComparisonKind.RESEARCH_D1_D5
+                and comparison_kind
+                not in {
+                    StrategyComparisonKind.RESEARCH_D1_D5,
+                    StrategyComparisonKind.RESEARCH_F_ENTRY,
+                }
             ):
-                raise ValueError("--strict-intraday-coverage is available only with research-d1-d5")
+                raise ValueError(
+                    "--strict-intraday-coverage is available only with research-d1-d5 "
+                    "or research-f-entry"
+                )
             print("Preparing strategy comparison...", flush=True)
             preparation = prepare_strategy_comparison(
                 database,
@@ -824,6 +875,7 @@ def main(argv: list[str] | None = None) -> int:
                         StrategyComparisonKind.RESEARCH_INTRADAY_ISOLATION,
                         StrategyComparisonKind.RESEARCH_INTRADAY_NEXT,
                         StrategyComparisonKind.RESEARCH_INTRADAY_HYBRID,
+                        StrategyComparisonKind.RESEARCH_F_ENTRY,
                     }
                 ),
             )
@@ -1335,14 +1387,14 @@ def _comparison_data_qualification(
             database,
             requirement.symbols,
             requirement.requested_start.date(),
-            preparation.requested_end,
+            requirement.requested_end.date(),
             requirement.timeframe,
             detail_limit=max(
                 1_000,
                 len(requirement.symbols)
                 * len(
                     trading_sessions_between(
-                        requirement.requested_start.date(), preparation.requested_end
+                        requirement.requested_start.date(), requirement.requested_end.date()
                     )
                 ),
             ),

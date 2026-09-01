@@ -134,8 +134,6 @@ def candidate_requirements_from_report(
                             ),
                         )
                     )
-        return _merge_requirements(requirements)
-
     raw_sessions = payload.get("required_sessions", payload.get("candidate_sessions"))
     if not isinstance(raw_sessions, list):
         raise ValueError("candidate report candidate_sessions must be a list")

@@ -124,6 +124,10 @@ THESIS_RECOVERY_PRESETS = {
 FIRST_HOUR_PULLBACK_ENTRY_PRESETS = {
     PositionManagementPreset.F4_INTRADAY_FIRST_HOUR_PULLBACK,
     PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT,
+    PositionManagementPreset.F_FIRST_HOUR_PULLBACK_CONFIGURED,
+}
+ENTRY_ONLY_INTRADAY_PRESETS = {
+    PositionManagementPreset.F_FIRST_HOUR_PULLBACK_CONFIGURED,
 }
 F4_SWING_MANAGEMENT_PRESETS = {
     PositionManagementPreset.F4_INTRADAY_FIRST_HOUR_PULLBACK,
@@ -141,6 +145,7 @@ _RESEARCH_FAMILIES = {
     "intraday-isolation",
     "intraday-next",
     "intraday-hybrid",
+    "f-entry",
 }
 _CONTROL_PRESETS = {
     metadata.preset for metadata in STRATEGY_RESEARCH_REGISTRY if metadata.control
@@ -268,6 +273,7 @@ class IntradayCandidatePathRequirement:
     runs: tuple[tuple[StrategyVariant, PositionManagementPreset], ...]
     first_execution_sessions: tuple[tuple[str, date], ...]
     candidate_execution_sessions: tuple[tuple[str, date], ...]
+    requires_holding_sessions: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -412,8 +418,13 @@ class BacktestEngine:
         opening_survivor_gate = preset in OPENING_SURVIVOR_GATE_PRESETS
         first_hour_pullback_entry = preset in FIRST_HOUR_PULLBACK_ENTRY_PRESETS
         f4_swing_management = preset in F4_SWING_MANAGEMENT_PRESETS
-        native_intraday_loop = intraday_monitoring or confirmed_entry
-        execution_timeframe = BarTimeframe.MINUTES_15 if confirmed_entry else position_timeframe
+        daily_managed_first_hour_entry = first_hour_pullback_entry and not intraday_monitoring
+        native_intraday_loop = intraday_monitoring or confirmed_entry or first_hour_pullback_entry
+        execution_timeframe = (
+            BarTimeframe.MINUTES_15
+            if confirmed_entry or first_hour_pullback_entry
+            else position_timeframe
+        )
         self.position_manager = PositionManager(
             self.position_management,
             slippage_bps=self.config.backtest.slippage_bps,
@@ -482,23 +493,28 @@ class BacktestEngine:
         for index, session in enumerate(sessions):
             final_session = index == len(sessions) - 1
             active_symbols = set(positions) | {order.record.symbol for order in pending}
+            intraday_symbols = (
+                {order.record.symbol for order in pending}
+                if daily_managed_first_hour_entry
+                else active_symbols
+            )
             bars = self.database.bars_on_session(active_symbols, session)
             intraday_by_symbol: dict[str, list[DailyBar]] = {}
             last_intraday_bars: dict[str, DailyBar] = {}
             regular_open, regular_close = regular_session_bounds(session)
-            if native_intraday_loop and active_symbols:
+            if native_intraday_loop and intraday_symbols:
                 window_start, window_end = intraday_session_bounds(
                     session, extended_hours=self.config.intraday.extended_hours
                 )
                 intraday_bars = self.database.bars_between(
-                    active_symbols,
+                    intraday_symbols,
                     window_start,
                     window_end,
                     timeframe=execution_timeframe,
                 )
                 strict_excluded_symbols = {
                     symbol
-                    for symbol in active_symbols
+                    for symbol in intraday_symbols
                     if self.strict_coverage_sensitivity
                     and self.intraday_session_statuses.get((symbol, session)) != "COMPLETE"
                 }
@@ -515,7 +531,7 @@ class BacktestEngine:
                         continue
                     intraday_by_symbol.setdefault(intraday_bar.symbol, []).append(intraday_bar)
                     last_intraday_bars[intraday_bar.symbol] = intraday_bar
-                missing = sorted(active_symbols - set(intraday_by_symbol))
+                missing = sorted(intraday_symbols - set(intraday_by_symbol))
                 if (
                     missing
                     and not confirmed_entry
@@ -525,7 +541,7 @@ class BacktestEngine:
                 ):
                     raise self._missing_intraday_data(missing, start, end, execution_timeframe)
 
-                for symbol in sorted(active_symbols):
+                for symbol in sorted(intraday_symbols):
                     history = intraday_histories.get(symbol)
                     if history is None:
                         history = self.database.bars_available_as_of(
@@ -560,7 +576,7 @@ class BacktestEngine:
 
             opening_bars = (
                 {symbol: symbol_bars[0] for symbol, symbol_bars in intraday_by_symbol.items()}
-                if native_intraday_loop
+                if native_intraday_loop and not daily_managed_first_hour_entry
                 else bars
             )
             session_peak_market_value = sum(
@@ -654,6 +670,9 @@ class BacktestEngine:
                             intraday_bar.symbol
                         ] = intraday_bar
                 awaiting_open = set(positions)
+                daily_positions_at_session_open = (
+                    set(positions) if daily_managed_first_hour_entry else set()
+                )
                 if hybrid_entry:
                     # Overnight D5 positions retain the existing Daily swing semantics.
                     for symbol in list(positions):
@@ -686,6 +705,22 @@ class BacktestEngine:
                             self.position_manager.update_after_bar(
                                 position, daily_bar, next_atr=next_atr
                             )
+                    awaiting_open.clear()
+                elif daily_managed_first_hour_entry:
+                    # Match configured Daily ordering: overnight gaps are resolved before new
+                    # entries, while the completed Daily range is evaluated only after entries.
+                    for symbol in list(positions):
+                        daily_bar = bars.get(symbol)
+                        if daily_bar is None:
+                            continue
+                        while symbol in positions:
+                            decision = self.position_manager.evaluate_open(
+                                positions[symbol], daily_bar
+                            )
+                            if decision.action is PositionAction.HOLD:
+                                break
+                            if execute_position_decision(symbol, session, decision, daily_bar):
+                                break
                     awaiting_open.clear()
                 for timestamp in sorted(bars_by_timestamp):
                     timestamp_bars = bars_by_timestamp[timestamp]
@@ -754,7 +789,14 @@ class BacktestEngine:
                         position, cash, reason = self._open_position(
                             order,
                             timestamp_bars[symbol],
-                            {key: value[0] for key, value in intraday_by_symbol.items()},
+                            (
+                                bars
+                                if daily_managed_first_hour_entry
+                                else {
+                                    key: value[0]
+                                    for key, value in intraday_by_symbol.items()
+                                }
+                            ),
                             positions,
                             cash,
                             entry_atr=entry_atr,
@@ -813,6 +855,8 @@ class BacktestEngine:
                         bar = timestamp_bars[symbol]
                         if symbol in positions:
                             position = positions[symbol]
+                            if daily_managed_first_hour_entry:
+                                continue
                             if hybrid_entry and position.entry_date != session:
                                 continue
                             if f4_swing_management:
@@ -931,6 +975,36 @@ class BacktestEngine:
                             ),
                             bar,
                         )
+                if daily_managed_first_hour_entry:
+                    for symbol in sorted(daily_positions_at_session_open & set(positions)):
+                        daily_bar = bars.get(symbol)
+                        if daily_bar is None:
+                            continue
+                        position = positions[symbol]
+                        while True:
+                            decision = self.position_manager.evaluate_intrabar(
+                                position, daily_bar
+                            )
+                            if decision.action is PositionAction.HOLD:
+                                break
+                            if execute_position_decision(symbol, session, decision, daily_bar):
+                                break
+                        if symbol in positions:
+                            next_atr = self._atr_as_of(
+                                symbol,
+                                session,
+                                self.position_management.atr_trailing_stop.atr_period,
+                            )
+                            self.position_manager.update_after_bar(
+                                position, daily_bar, next_atr=next_atr
+                            )
+                    # Entry-day Daily OHLC contains prices from before a delayed entry, so it
+                    # cannot safely drive that new position's stops/targets. Its Daily close is
+                    # observable; full configured Daily range management begins next session.
+                    for symbol in set(positions) - daily_positions_at_session_open:
+                        daily_bar = bars.get(symbol)
+                        if daily_bar is not None:
+                            positions[symbol].last_price = float(daily_bar.close)
                 pending = []
             else:
                 # 1. Existing positions can gap through levels fixed before this session.
@@ -1422,7 +1496,12 @@ class BacktestEngine:
             "f5"
             if self.current_preset
             is PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT
-            else "f4"
+            else (
+                "f_entry"
+                if self.current_preset
+                is PositionManagementPreset.F_FIRST_HOUR_PULLBACK_CONFIGURED
+                else "f4"
+            )
         )
         for order in pending:
             symbol = order.record.symbol
@@ -2491,6 +2570,12 @@ class BacktestEngine:
             is PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT
             else []
         )
+        f_entry_positions = (
+            list(positions)
+            if self.current_preset
+            is PositionManagementPreset.F_FIRST_HOUR_PULLBACK_CONFIGURED
+            else []
+        )
         return {
             **dict(sorted(self._research_counters.items())),
             "confirmation_events": self._confirmation_events,
@@ -2612,6 +2697,12 @@ class BacktestEngine:
                 for position in f5_positions
                 if position.entry_timestamp is not None
             ),
+            "f_entry_executed_trades": len(f_entry_positions),
+            "f_entry_average_entry_minutes_after_midnight_utc": average(
+                position.entry_timestamp.hour * 60 + position.entry_timestamp.minute
+                for position in f_entry_positions
+                if position.entry_timestamp is not None
+            ),
         }
 
     @staticmethod
@@ -2685,7 +2776,11 @@ class BacktestEngine:
             "score_weights": self.config.scores.total.model_dump(mode="json"),
             "market_data_adjustment": self.config.universe.market_data_adjustment,
             "execution": {
-                "entry": "next available portfolio session open",
+                "entry": (
+                    "existing first-hour pullback planner on the next eligible session"
+                    if preset is PositionManagementPreset.F_FIRST_HOUR_PULLBACK_CONFIGURED
+                    else "next available portfolio session open"
+                ),
                 "screening_timeframe": BarTimeframe.DAY_1.value,
                 "position_management_timeframe": BarTimeframe(
                     self.position_management.bar_timeframe
@@ -2833,6 +2928,10 @@ def determine_intraday_comparison_requirements(
                 candidate_execution_sessions=tuple(
                     sorted(candidate_execution_by_path[(timeframe, variant)])
                 ),
+                requires_holding_sessions=any(
+                    preset not in ENTRY_ONLY_INTRADAY_PRESETS
+                    for _run_variant, preset in runs_by_candidate_path[(timeframe, variant)]
+                ),
             )
             for variant in sorted(
                 (
@@ -2853,6 +2952,18 @@ def determine_intraday_comparison_requirements(
                 )
             candidate_execution.update(path.candidate_execution_sessions)
         first_execution = min(candidates.values(), default=sessions[0])
+        required_end_session = max(
+            (
+                sessions[-1]
+                if path.requires_holding_sessions and path.first_execution_sessions
+                else max(
+                    (session for _symbol, session in path.candidate_execution_sessions),
+                    default=first_execution,
+                )
+                for path in path_requirements
+            ),
+            default=first_execution,
+        )
         requirements.append(
             IntradayPrefetchRequirement(
                 timeframe=timeframe,
@@ -2875,7 +2986,8 @@ def determine_intraday_comparison_requirements(
                     extended_hours=config.intraday.extended_hours,
                 ),
                 requested_end=intraday_session_bounds(
-                    sessions[-1], extended_hours=config.intraday.extended_hours
+                    required_end_session,
+                    extended_hours=config.intraday.extended_hours,
                 )[1],
                 warmup_bars=config.intraday.warmup_bars,
                 extended_hours=config.intraday.extended_hours,
@@ -2889,7 +3001,7 @@ def _comparison_execution_timeframe(
     resolved: PositionManagementConfig,
     preset: PositionManagementPreset,
 ) -> BarTimeframe:
-    if preset in CONFIRMED_ENTRY_PRESETS:
+    if preset in {*CONFIRMED_ENTRY_PRESETS, *FIRST_HOUR_PULLBACK_ENTRY_PRESETS}:
         return BarTimeframe.MINUTES_15
     return BarTimeframe(resolved.bar_timeframe)
 
@@ -2935,9 +3047,7 @@ def assess_comparison_intraday_coverage(
                 bars_by_symbol[bar.symbol].append((bar.timestamp, session))
 
         incomplete: dict[str, tuple[str, ...]] = {}
-        comparison_index = {
-            session: index for index, session in enumerate(requirement.comparison_sessions)
-        }
+        required_sessions_by_symbol = _intraday_required_sessions(requirement)
         for symbol in requirement.symbols:
             symbol_bars = bars_by_symbol[symbol]
             execution_session = first_execution[symbol]
@@ -2950,9 +3060,7 @@ def assess_comparison_intraday_coverage(
             if warmup_count < requirement.warmup_bars:
                 reasons.append("warmup")
             present_sessions = {bar_session for _, bar_session in symbol_bars}
-            required_sessions = requirement.comparison_sessions[
-                comparison_index[execution_session] :
-            ]
+            required_sessions = required_sessions_by_symbol.get(symbol, ())
             missing_sessions = [
                 session for session in required_sessions if session not in present_sessions
             ]
@@ -2974,6 +3082,37 @@ def assess_comparison_intraday_coverage(
             )
         )
     return tuple(assessments)
+
+
+def _intraday_required_sessions(
+    requirement: IntradayPrefetchRequirement,
+) -> dict[str, tuple[date, ...]]:
+    """Resolve candidate-only entry paths separately from intraday-managed holdings."""
+
+    comparison_index = {
+        session: index for index, session in enumerate(requirement.comparison_sessions)
+    }
+    required: dict[str, set[date]] = {
+        symbol: set() for symbol in requirement.symbols
+    }
+    paths = requirement.candidate_path_requirements
+    if not paths:
+        for symbol, first_execution in requirement.first_execution_sessions:
+            required[symbol].update(
+                requirement.comparison_sessions[comparison_index[first_execution] :]
+            )
+        return {symbol: tuple(sorted(sessions)) for symbol, sessions in required.items()}
+
+    for path in paths:
+        for symbol, session in path.candidate_execution_sessions:
+            required[symbol].add(session)
+        if not path.requires_holding_sessions:
+            continue
+        for symbol, first_execution in path.first_execution_sessions:
+            required[symbol].update(
+                requirement.comparison_sessions[comparison_index[first_execution] :]
+            )
+    return {symbol: tuple(sorted(sessions)) for symbol, sessions in required.items()}
 
 
 def comparison_intraday_prefetch_metadata(

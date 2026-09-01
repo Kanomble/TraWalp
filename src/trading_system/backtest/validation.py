@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import random
 from collections import defaultdict
 from dataclasses import dataclass
@@ -23,12 +24,14 @@ from trading_system.backtest.engine import (
     prepare_strategy_comparison,
     research_strategy_label,
 )
+from trading_system.backtest.metrics import maximum_drawdown
 from trading_system.backtest.qualification import qualify_historical_screen_start
 from trading_system.backtest.report import (
     _atomic_csv,
     _atomic_text,
     _position_fields,
     _trade_fields,
+    export_comparison,
 )
 from trading_system.config import StrategyConfig
 from trading_system.data.database import Database
@@ -65,6 +68,11 @@ REFERENCE_EXPECTATIONS = {
 REFERENCE_TOLERANCE = 1e-10
 BOOTSTRAP_SEED = 20260820
 BOOTSTRAP_RESAMPLES = 10_000
+CANONICAL_COST_STRESS_CASES = (
+    ("2X_SLIPPAGE", 10.0, 0.0),
+    ("3X_SLIPPAGE", 15.0, 0.0),
+    ("COMMISSION_SENSITIVITY", 5.0, 5.0),
+)
 
 
 @dataclass(frozen=True)
@@ -98,6 +106,27 @@ class ExtendedValidationBundle:
     trade_path_rows: list[dict[str, Any]]
     intraday_sensitivity: list[dict[str, Any]]
     decisions: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ChampionFValidationBundle:
+    """Diagnostics for the frozen F/configured historical research champion."""
+
+    requested_start: date
+    requested_end: date
+    comparison: StrategyComparison
+    cost_comparisons: dict[str, StrategyComparison]
+    strategy_summary: dict[str, Any]
+    monthly_rows: list[dict[str, Any]]
+    yearly_rows: list[dict[str, Any]]
+    chronological_subperiod_rows: list[dict[str, Any]]
+    time_stability: dict[str, Any]
+    symbol_rows: list[dict[str, Any]]
+    concentration: dict[str, Any]
+    leave_one_out_rows: list[dict[str, Any]]
+    path_cost_rows: list[dict[str, Any]]
+    full_cost_rows: list[dict[str, Any]]
+    drawdown: dict[str, Any]
 
 
 def qualify_validation_start(
@@ -518,6 +547,14 @@ def strategy_summary(label: str, result: BacktestResult) -> dict[str, Any]:
         "total_modeled_execution_cost": sum(
             item.slippage + item.transaction_cost for item in result.trades
         ),
+        "slippage_bps": result.configuration["backtest"]["slippage_bps"],
+        "commission_bps": result.configuration["backtest"]["commission_bps"],
+        "annualized_metrics_reliable": result.annualized_metrics_reliable,
+        "benchmark_symbol": result.benchmark.symbol,
+        "benchmark_available": result.benchmark.available,
+        "benchmark_return": result.benchmark.total_return,
+        "benchmark_cagr": result.benchmark.cagr,
+        "benchmark_max_drawdown": result.benchmark.maximum_drawdown,
         "mean_mfe": position_metrics.average_mfe,
         "median_mfe": median(
             [item.maximum_favorable_excursion for item in positions]
@@ -673,6 +710,9 @@ def symbol_and_leave_one_out(
                     "net_pnl_contribution": contributions[symbol],
                     "return_contribution": contributions[symbol]
                     / result.initial_capital,
+                    "share_of_total_net_pnl": (
+                        contributions[symbol] / total if total else None
+                    ),
                     "sum_position_returns": sum(
                         item.position_return for item in positions
                     ),
@@ -688,6 +728,8 @@ def symbol_and_leave_one_out(
                     retained,
                     result.initial_capital,
                     removed_symbols=[symbol],
+                    baseline=result,
+                    removed_pnl_contribution=contributions[symbol],
                 )
             )
         best = ranked[0][0] if ranked else None
@@ -704,6 +746,8 @@ def symbol_and_leave_one_out(
             without_best,
             result.initial_capital,
             removed_symbols=[best] if best else [],
+            baseline=result,
+            removed_pnl_contribution=contributions.get(best, 0.0) if best else 0.0,
         )
         worst_row = _posthoc_position_row(
             label,
@@ -711,6 +755,10 @@ def symbol_and_leave_one_out(
             without_worst,
             result.initial_capital,
             removed_symbols=[worst] if worst else [],
+            baseline=result,
+            removed_pnl_contribution=(
+                contributions.get(worst, 0.0) if worst else 0.0
+            ),
         )
         top_two_row = _posthoc_position_row(
             label,
@@ -718,6 +766,8 @@ def symbol_and_leave_one_out(
             without_top_two,
             result.initial_capital,
             removed_symbols=top_two,
+            baseline=result,
+            removed_pnl_contribution=sum(contributions[symbol] for symbol in top_two),
         )
         leave_rows.extend((best_row, worst_row, top_two_row))
         summaries[label] = {
@@ -728,6 +778,9 @@ def symbol_and_leave_one_out(
             ),
             "top_3_pnl_concentration": (
                 sum(value for _, value in ranked[:3]) / total if total else None
+            ),
+            "top_5_pnl_concentration": (
+                sum(value for _, value in ranked[:5]) / total if total else None
             ),
             "without_best_contributor": best_row,
             "without_worst_contributor": worst_row,
@@ -815,10 +868,15 @@ def path_preserving_cost_stress(
                     "execution_path_hash": path_hash,
                     "positions": len(pnls),
                     "total_return": sum(pnls) / result.initial_capital,
+                    "sharpe": None,
                     "profit_factor": _profit_factor(pnls),
                     "expectancy": mean(pnls) if pnls else None,
                     "modeled_costs": total_costs,
                     "turnover": result.metrics.portfolio_turnover,
+                    "risk_adjusted_metrics_available": False,
+                    "methodology_note": (
+                        "execution fills repriced on the unchanged position and execution-leg path"
+                    ),
                 }
             )
     return rows
@@ -1077,6 +1135,334 @@ def classify_validation(
     }
 
 
+def run_champion_f_validation(
+    database: Database,
+    config: StrategyConfig,
+    requested_start: date,
+    requested_end: date,
+) -> ChampionFValidationBundle:
+    """Run diagnostics for the unchanged F/configured composition."""
+
+    if config.backtest.slippage_bps != 5 or config.backtest.commission_bps != 0:
+        raise ValueError("champion-f validation requires the frozen 5 bps / 0 bps baseline")
+    comparison_kind = StrategyComparisonKind.RESEARCH_CHAMPION_F
+    preparation = prepare_strategy_comparison(
+        database,
+        config,
+        requested_start,
+        requested_end,
+        comparison_kind=comparison_kind,
+    )
+    prefetch = comparison_intraday_prefetch_metadata(preparation, enabled=False)
+    comparison = compare_strategies(
+        database,
+        config,
+        requested_start,
+        requested_end,
+        comparison_kind=comparison_kind,
+        preparation=preparation,
+        intraday_prefetch=prefetch,
+    )
+    if len(comparison.variants) != 1:
+        raise ValueError("champion-f validation must resolve to exactly one strategy")
+    baseline = comparison.variants[0]
+    if (
+        baseline.strategy_variant is not StrategyVariant.QUALITY_VALUE_MOMENTUM
+        or baseline.position_management_preset is not PositionManagementPreset.CONFIGURED
+    ):
+        raise ValueError("champion-f validation did not resolve to F/configured")
+
+    cost_comparisons = {"BASELINE": comparison}
+    for case, slippage_bps, commission_bps in CANONICAL_COST_STRESS_CASES:
+        cost_config = config.model_copy(
+            update={
+                "backtest": config.backtest.model_copy(
+                    update={
+                        "slippage_bps": slippage_bps,
+                        "commission_bps": commission_bps,
+                    }
+                )
+            }
+        )
+        cost_comparisons[case] = compare_strategies(
+            database,
+            cost_config,
+            requested_start,
+            requested_end,
+            comparison_kind=comparison_kind,
+            preparation=preparation,
+            intraday_prefetch=prefetch,
+        )
+
+    monthly_rows, monthly_stability = calendar_stability(comparison, "month")
+    yearly_rows, yearly_stability = calendar_stability(comparison, "year")
+    symbol_rows, concentration, leave_rows = symbol_and_leave_one_out(comparison)
+    return ChampionFValidationBundle(
+        requested_start=requested_start,
+        requested_end=requested_end,
+        comparison=comparison,
+        cost_comparisons=cost_comparisons,
+        strategy_summary=strategy_summary(_label(baseline), baseline),
+        monthly_rows=monthly_rows,
+        yearly_rows=yearly_rows,
+        chronological_subperiod_rows=chronological_subperiod_analysis(comparison),
+        time_stability={"monthly": monthly_stability, "yearly": yearly_stability},
+        symbol_rows=symbol_rows,
+        concentration=concentration,
+        leave_one_out_rows=leave_rows,
+        path_cost_rows=path_preserving_cost_stress(comparison),
+        full_cost_rows=cost_stress_rows(cost_comparisons),
+        drawdown=drawdown_diagnostics(baseline),
+    )
+
+
+def calendar_stability(
+    comparison: StrategyComparison, period: str
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Return calendar performance from the equity path plus exit-period trade diagnostics."""
+
+    if period not in {"month", "year"}:
+        raise ValueError("period must be month or year")
+    rows: list[dict[str, Any]] = []
+    summaries: dict[str, Any] = {}
+    for result in comparison.variants:
+        label = _label(result)
+        previous_equity = result.initial_capital
+        result_rows: list[dict[str, Any]] = []
+        for key in _period_keys(comparison.actual_start, comparison.actual_end, period):
+            points = [
+                point
+                for point in result.equity_curve
+                if _calendar_period_key(point.date, period) == key
+            ]
+            positions = [
+                position
+                for position in result.positions
+                if _calendar_period_key(position.exit_date, period) == key
+            ]
+            trades = [
+                trade
+                for trade in result.trades
+                if _calendar_period_key(trade.exit_date, period) == key
+            ]
+            row = _stability_row(
+                label,
+                key,
+                points,
+                positions,
+                trades,
+                opening_equity=previous_equity,
+            )
+            result_rows.append(row)
+            if points:
+                previous_equity = points[-1].portfolio_equity
+        active = [row for row in result_rows if row["return"] is not None]
+        positive = [row for row in active if row["return"] > 0]
+        negative = [row for row in active if row["return"] < 0]
+        ranked = sorted(active, key=lambda row: row["return"])
+        summaries[label] = {
+            f"positive_{period}s": len(positive),
+            f"negative_{period}s": len(negative),
+            f"active_{period}s": len(active),
+            f"calendar_{period}s": len(result_rows),
+            f"median_{period}_return": (
+                median([row["return"] for row in active]) if active else None
+            ),
+            f"worst_{period}": ranked[0]["period"] if ranked else None,
+            f"worst_{period}_return": ranked[0]["return"] if ranked else None,
+            f"best_{period}": ranked[-1]["period"] if ranked else None,
+            f"best_{period}_return": ranked[-1]["return"] if ranked else None,
+        }
+        rows.extend(result_rows)
+    return rows, summaries
+
+
+def chronological_subperiod_analysis(
+    comparison: StrategyComparison,
+) -> list[dict[str, Any]]:
+    """Split each equity path into three fixed, equal-session chronological segments."""
+
+    rows: list[dict[str, Any]] = []
+    for result in comparison.variants:
+        points = list(result.equity_curve)
+        if not points:
+            continue
+        boundaries = [round(len(points) * index / 3) for index in range(4)]
+        opening_equity = result.initial_capital
+        for index in range(3):
+            selected = points[boundaries[index] : boundaries[index + 1]]
+            if not selected:
+                continue
+            start, end = selected[0].date, selected[-1].date
+            positions = [
+                position
+                for position in result.positions
+                if start <= position.exit_date <= end
+            ]
+            trades = [trade for trade in result.trades if start <= trade.exit_date <= end]
+            row = _stability_row(
+                _label(result),
+                f"THIRD_{index + 1}",
+                selected,
+                positions,
+                trades,
+                opening_equity=opening_equity,
+            )
+            row.update(
+                {
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "boundary_method": "equal_trading_session_thirds",
+                }
+            )
+            rows.append(row)
+            opening_equity = selected[-1].portfolio_equity
+    return rows
+
+
+def drawdown_diagnostics(result: BacktestResult) -> dict[str, Any]:
+    """Locate the peak, trough, and recovery for the existing equity path."""
+
+    if not result.equity_curve:
+        return {
+            "maximum_drawdown": None,
+            "drawdown_start": None,
+            "drawdown_trough": None,
+            "recovery_date": None,
+            "duration_calendar_days": None,
+            "duration_trading_sessions": None,
+        }
+    values = [result.initial_capital, *[point.portfolio_equity for point in result.equity_curve]]
+    dates = [result.actual_start, *[point.date for point in result.equity_curve]]
+    peak_index = trough_peak_index = trough_index = 0
+    peak_value = values[0]
+    minimum_drawdown = 0.0
+    for index, value in enumerate(values):
+        if value > peak_value:
+            peak_value = value
+            peak_index = index
+        drawdown = value / peak_value - 1
+        if drawdown < minimum_drawdown:
+            minimum_drawdown = drawdown
+            trough_index = index
+            trough_peak_index = peak_index
+    if minimum_drawdown == 0:
+        return {
+            "maximum_drawdown": 0.0,
+            "drawdown_start": None,
+            "drawdown_trough": None,
+            "recovery_date": None,
+            "duration_calendar_days": 0,
+            "duration_trading_sessions": 0,
+            "unrecovered_at_end": False,
+        }
+    recovery_index = next(
+        (
+            index
+            for index in range(trough_index + 1, len(values))
+            if values[index] >= values[trough_peak_index]
+        ),
+        None,
+    )
+    end_index = recovery_index if recovery_index is not None else len(values) - 1
+    return {
+        "maximum_drawdown": minimum_drawdown,
+        "drawdown_start": dates[trough_peak_index].isoformat(),
+        "drawdown_trough": dates[trough_index].isoformat(),
+        "recovery_date": dates[recovery_index].isoformat() if recovery_index is not None else None,
+        "duration_calendar_days": (dates[end_index] - dates[trough_peak_index]).days,
+        "duration_trading_sessions": end_index - trough_peak_index,
+        "unrecovered_at_end": recovery_index is None and minimum_drawdown < 0,
+    }
+
+
+def cost_stress_rows(
+    comparisons: dict[str, StrategyComparison],
+) -> list[dict[str, Any]]:
+    return [
+        _cost_row(case, _label(result), result)
+        for case, comparison in comparisons.items()
+        for result in comparison.variants
+    ]
+
+
+def _stability_row(
+    strategy: str,
+    period: str,
+    points: list,
+    positions: list[BacktestPosition],
+    trades: list,
+    *,
+    opening_equity: float,
+) -> dict[str, Any]:
+    equities = [opening_equity, *[point.portfolio_equity for point in points]]
+    returns = [
+        current / previous - 1
+        for previous, current in zip(equities[:-1], equities[1:], strict=True)
+    ]
+    ending_equity = equities[-1] if points else None
+    wins = [position for position in positions if position.net_pnl > 0]
+    average_equity = mean([point.portfolio_equity for point in points]) if points else None
+    traded_notional = sum(
+        trade.position_value + trade.exit_price * trade.quantity for trade in trades
+    )
+    elapsed_days = (points[-1].date - points[0].date).days if len(points) > 1 else 0
+    return {
+        "strategy": strategy,
+        "period": period,
+        "sessions": len(points),
+        "opening_equity": opening_equity if points else None,
+        "ending_equity": ending_equity,
+        "return": ending_equity / opening_equity - 1 if ending_equity is not None else None,
+        "cagr": (
+            (ending_equity / opening_equity) ** (365.25 / elapsed_days) - 1
+            if ending_equity is not None and elapsed_days > 0 and ending_equity > 0
+            else None
+        ),
+        "equity_pnl": ending_equity - opening_equity if ending_equity is not None else None,
+        "closed_position_pnl": sum(position.net_pnl for position in positions),
+        "positions": len(positions),
+        "execution_legs": len(trades),
+        "win_rate": len(wins) / len(positions) if positions else None,
+        "average_holding_period": (
+            mean([position.holding_days for position in positions]) if positions else None
+        ),
+        "max_drawdown": maximum_drawdown(equities) if points else None,
+        "sharpe": _annualized_ratio(returns),
+        "sortino": _annualized_sortino(returns),
+        "annualized_metrics_reliable": len(points) >= 63,
+        "exposure": mean([point.exposure for point in points]) if points else None,
+        "end_of_day_exposure": (
+            mean([point.end_of_day_exposure for point in points]) if points else None
+        ),
+        "turnover": (
+            traded_notional / average_equity if average_equity and average_equity > 0 else None
+        ),
+        "slippage_cost": sum(trade.slippage for trade in trades),
+        "commission_cost": sum(trade.transaction_cost for trade in trades),
+    }
+
+
+def _annualized_ratio(returns: list[float]) -> float | None:
+    if len(returns) < 2:
+        return None
+    average = mean(returns)
+    variance = sum((item - average) ** 2 for item in returns) / (len(returns) - 1)
+    deviation = math.sqrt(variance)
+    return average / deviation * math.sqrt(252) if deviation else None
+
+
+def _annualized_sortino(returns: list[float]) -> float | None:
+    if not returns:
+        return None
+    downside = math.sqrt(mean([min(item, 0) ** 2 for item in returns]))
+    return mean(returns) / downside * math.sqrt(252) if downside else None
+
+
+def _calendar_period_key(value: date, period: str) -> str:
+    return value.strftime("%Y-%m") if period == "month" else f"{value.year:04d}"
+
+
 def run_extended_validation(
     database: Database,
     config: StrategyConfig,
@@ -1181,11 +1567,7 @@ def run_extended_validation(
     strict_result, _ = annotate_trade_path_coverage(database, strict_result)
 
     cost_comparisons = {"BASE": oos}
-    for case, slippage_bps, commission_bps in (
-        ("2X_SLIPPAGE", 10, 0),
-        ("3X_SLIPPAGE", 15, 0),
-        ("COMMISSION_SENSITIVITY", 5, 5),
-    ):
+    for case, slippage_bps, commission_bps in CANONICAL_COST_STRESS_CASES:
         cost_config = config.model_copy(
             update={
                 "backtest": config.backtest.model_copy(
@@ -1294,6 +1676,150 @@ def run_extended_validation(
         trade_path_rows=trade_path_rows,
         intraday_sensitivity=intraday_sensitivity,
         decisions=decisions,
+    )
+
+
+def export_champion_f_validation(
+    bundle: ChampionFValidationBundle,
+    output_directory: Path,
+    *,
+    stem: str,
+) -> dict[str, Path]:
+    """Export a fresh, non-overwriting F/configured robustness evidence bundle."""
+
+    output_directory.mkdir(parents=True, exist_ok=True)
+    paths = {
+        "json": output_directory / f"{stem}.json",
+        "csv": output_directory / f"{stem}.csv",
+        "positions": output_directory / f"{stem}_positions.csv",
+        "execution_legs": output_directory / f"{stem}_execution_legs.csv",
+        "post_exit": output_directory / f"{stem}_post_exit_analysis.csv",
+        "equity": output_directory / f"{stem}_equity.csv",
+        "robustness_summary": output_directory / f"{stem}_robustness_summary.json",
+        "monthly": output_directory / f"{stem}_monthly.csv",
+        "yearly": output_directory / f"{stem}_yearly.csv",
+        "chronological_subperiods": output_directory
+        / f"{stem}_chronological_subperiods.csv",
+        "symbol_concentration": output_directory / f"{stem}_symbol_concentration.csv",
+        "leave_one_symbol_out": output_directory / f"{stem}_leave_one_symbol_out.csv",
+        "cost_stress": output_directory / f"{stem}_cost_stress.csv",
+        "path_preserving_cost_stress": output_directory
+        / f"{stem}_path_preserving_cost_stress.csv",
+    }
+    existing = [path for path in paths.values() if path.exists()]
+    if existing:
+        raise FileExistsError(f"Champion F validation export already exists: {existing[0]}")
+
+    base_paths = export_comparison(
+        bundle.comparison,
+        output_directory,
+        stem=stem,
+        overwrite=True,
+    )
+    baseline = bundle.comparison.variants[0]
+    equity_rows = [point.model_dump(mode="json") for point in baseline.equity_curve]
+    _atomic_csv(
+        paths["equity"],
+        equity_rows,
+        list(equity_rows[0])
+        if equity_rows
+        else [
+            "date",
+            "cash",
+            "market_value",
+            "portfolio_equity",
+            "active_positions",
+            "exposure",
+            "session_exposure",
+            "end_of_day_exposure",
+            "realized_pnl",
+            "unrealized_pnl",
+        ],
+    )
+    summary_payload = {
+        "report_type": "f_configured_historical_robustness_validation",
+        "research_status": "current historical research champion",
+        "live_trading_designation": False,
+        "strategy": {
+            "label": "F/configured",
+            "variant": StrategyVariant.QUALITY_VALUE_MOMENTUM.value,
+            "position_management": PositionManagementPreset.CONFIGURED.value,
+        },
+        "requested_period": [
+            bundle.requested_start.isoformat(),
+            bundle.requested_end.isoformat(),
+        ],
+        "actual_period": [
+            bundle.comparison.actual_start.isoformat(),
+            bundle.comparison.actual_end.isoformat(),
+        ],
+        "period_classification": "development-used historical robustness period; not clean OOS",
+        "baseline": bundle.strategy_summary,
+        "drawdown": bundle.drawdown,
+        "benchmark": baseline.benchmark.model_dump(mode="json"),
+        "time_stability": bundle.time_stability,
+        "symbol_concentration": bundle.concentration,
+        "cost_scenarios": [
+            {
+                "cost_case": row["cost_case"],
+                "slippage_bps": row["slippage_bps"],
+                "commission_bps": row["commission_bps"],
+            }
+            for row in bundle.full_cost_rows
+        ],
+        "warnings": list(dict.fromkeys((*bundle.comparison.warnings, *baseline.warnings))),
+        "methodology_notes": [
+            "Full cost stress reruns the portfolio and may change sizing or subsequent positions.",
+            "Path-preserving cost stress reprices the frozen execution path without rerunning it.",
+            (
+                "Leave-one-symbol-out is a post-hoc closed-position aggregation; it does "
+                "not rerun the portfolio path."
+            ),
+            (
+                "Historical universe membership may reflect the current tradable universe "
+                "and therefore has survivorship bias."
+            ),
+        ],
+    }
+    _atomic_text(paths["robustness_summary"], json.dumps(summary_payload, indent=2))
+    _atomic_csv(paths["monthly"], bundle.monthly_rows, _field_union(bundle.monthly_rows))
+    _atomic_csv(paths["yearly"], bundle.yearly_rows, _field_union(bundle.yearly_rows))
+    _atomic_csv(
+        paths["chronological_subperiods"],
+        bundle.chronological_subperiod_rows,
+        _field_union(bundle.chronological_subperiod_rows),
+    )
+    _atomic_csv(
+        paths["symbol_concentration"],
+        bundle.symbol_rows,
+        _field_union(bundle.symbol_rows),
+    )
+    _atomic_csv(
+        paths["leave_one_symbol_out"],
+        bundle.leave_one_out_rows,
+        _field_union(bundle.leave_one_out_rows),
+    )
+    _atomic_csv(paths["cost_stress"], bundle.full_cost_rows, _field_union(bundle.full_cost_rows))
+    _atomic_csv(
+        paths["path_preserving_cost_stress"],
+        bundle.path_cost_rows,
+        _field_union(bundle.path_cost_rows),
+    )
+    return {**base_paths, **paths}
+
+
+def format_champion_f_validation_summary(bundle: ChampionFValidationBundle) -> str:
+    summary = bundle.strategy_summary
+    return "\n".join(
+        [
+            "F/configured robustness validation complete.",
+            f"Period: {bundle.comparison.actual_start} -> {bundle.comparison.actual_end}",
+            f"Return={_format_percent(summary['total_return'])} "
+            f"Sharpe={_format_number(summary['sharpe'])} "
+            f"PF={_format_number(summary['position_profit_factor'])} "
+            f"positions={summary['positions']}",
+            "Methodology: historical development-used period; not clean OOS.",
+        ]
     )
 
 
@@ -1583,6 +2109,8 @@ def _position_key_json(item: tuple[str, date, datetime | None]) -> list[str | No
 
 
 def _period_keys(start: date, end: date, period: str) -> list[str]:
+    if period == "year":
+        return [f"{year:04d}" for year in range(start.year, end.year + 1)]
     keys: list[str] = []
     year, month = start.year, start.month
     while (year, month) <= (end.year, end.month):
@@ -1607,15 +2135,33 @@ def _posthoc_position_row(
     initial_capital: float,
     *,
     removed_symbols: list[str],
+    baseline: BacktestResult | None = None,
+    removed_pnl_contribution: float | None = None,
 ) -> dict[str, Any]:
     pnls = [item.net_pnl for item in positions]
+    return_estimate = sum(pnls) / initial_capital
     return {
         "strategy": strategy,
         "scenario": scenario,
         "removed_symbols": removed_symbols,
         "remaining_positions": len(positions),
         "sum_net_pnl": sum(pnls),
-        "approximate_return_contribution": sum(pnls) / initial_capital,
+        "approximate_return_contribution": return_estimate,
+        "baseline_total_return": baseline.metrics.total_return if baseline else None,
+        "loso_return_estimate": return_estimate,
+        "return_delta_estimate": (
+            return_estimate - baseline.metrics.total_return
+            if baseline and baseline.metrics.total_return is not None
+            else None
+        ),
+        "baseline_sharpe": baseline.metrics.sharpe_ratio if baseline else None,
+        "loso_sharpe": None,
+        "baseline_max_drawdown": baseline.metrics.maximum_drawdown if baseline else None,
+        "loso_max_drawdown": None,
+        "removed_symbol_pnl_contribution": removed_pnl_contribution,
+        "position_count_difference": (
+            len(positions) - len(baseline.positions) if baseline else None
+        ),
         "profit_factor": _profit_factor(pnls),
         "average_position_return": mean(
             [item.position_return for item in positions]
@@ -1623,6 +2169,9 @@ def _posthoc_position_row(
         if positions
         else None,
         "post_hoc_only": True,
+        "methodology_note": (
+            "closed-position aggregation only; execution, sizing, and portfolio path were not rerun"
+        ),
     }
 
 
@@ -1649,13 +2198,19 @@ def _cost_row(case: str, label: str, result: BacktestResult) -> dict[str, Any]:
         "slippage_bps": result.configuration["backtest"]["slippage_bps"],
         "commission_bps": result.configuration["backtest"]["commission_bps"],
         "total_return": result.metrics.total_return,
+        "cagr": result.metrics.cagr,
+        "sharpe": result.metrics.sharpe_ratio,
+        "sortino": result.metrics.sortino_ratio,
         "profit_factor": result.position_metrics.position_profit_factor,
         "expectancy": result.metrics.expectancy_per_trade,
         "max_drawdown": result.metrics.maximum_drawdown,
+        "positions": result.position_metrics.positions_closed,
         "modeled_costs": sum(
             item.slippage + item.transaction_cost for item in result.trades
         ),
         "turnover": result.metrics.portfolio_turnover,
+        "exposure": result.metrics.exposure,
+        "end_of_day_exposure": result.metrics.end_of_day_exposure,
         "path_preserving_cost_stress": False,
     }
 

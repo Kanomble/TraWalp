@@ -53,6 +53,15 @@ _F5_CANDIDATE_PATH = comparison_strategy_label(
     StrategyVariant.FULL,
     PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT,
 )
+_F_ENTRY_CANDIDATE_PATH = comparison_strategy_label(
+    StrategyComparisonKind.RESEARCH_F_ENTRY,
+    StrategyVariant.QUALITY_VALUE_MOMENTUM,
+    PositionManagementPreset.F_FIRST_HOUR_PULLBACK_CONFIGURED,
+)
+_FIRST_HOUR_PULLBACK_CANDIDATE_PATHS = {
+    _F5_CANDIDATE_PATH,
+    _F_ENTRY_CANDIDATE_PATH,
+}
 
 
 def build_compare_preflight(
@@ -213,10 +222,9 @@ def build_compare_preflight(
                 intraday.get("candidate_path_qualification") or {}
             ).get("candidate_symbol_sessions_required", 0),
             "note": (
-                "Candidate entry sessions and every conservative potential open-position session "
-                "after each candidate path's first symbol candidate are qualified without "
-                "simulating entries or "
-                "exits. Provider-confirmed absence remains explicit and uses the research family's "
+                "Candidate entry sessions are always qualified. Potential open-position sessions "
+                "are added only for paths whose post-entry management consumes intraday bars. "
+                "Provider-confirmed absence remains explicit and uses the research family's "
                 "deterministic missing-data skips."
             ),
         },
@@ -369,7 +377,12 @@ def _intraday_preflight(
     )
     for assessment in assessments:
         requirement = assessment.requirement
-        for candidate_paths, first_executions, candidate_executions in _candidate_path_views(
+        for (
+            candidate_paths,
+            first_executions,
+            candidate_executions,
+            requires_holding_sessions,
+        ) in _candidate_path_views(
             requirement,
             run_labels,
             tuple(strategy_labels),
@@ -384,6 +397,8 @@ def _intraday_preflight(
                         candidate_paths=candidate_paths,
                     )
                 )
+            if not requires_holding_sessions:
+                continue
             comparison_index = {
                 session: index for index, session in enumerate(requirement.comparison_sessions)
             }
@@ -429,6 +444,8 @@ def _intraday_preflight(
     candidate_sessions: set[tuple[str, date]] = set()
     missing_entries = 0
     missing_first_hours = 0
+    missing_f5_first_hours = 0
+    missing_pullback_execution = 0
     missing_f5_execution = 0
     insufficient_warmup = 0
     for assessment in assessments:
@@ -454,6 +471,9 @@ def _intraday_preflight(
                 else ()
             )
             f5_diagnostics_applicable = _F5_CANDIDATE_PATH in candidate_paths
+            first_hour_diagnostics_applicable = bool(
+                _FIRST_HOUR_PULLBACK_CANDIDATE_PATHS & candidate_paths
+            )
             opening, closing = regular_session_bounds(session)
             symbol_bars = sorted(by_symbol[symbol], key=lambda item: item.timestamp)
             session_bars = [bar for bar in symbol_bars if opening <= bar.timestamp < closing]
@@ -463,7 +483,7 @@ def _intraday_preflight(
             warmup_sufficient = warmup_count >= requirement.warmup_bars
             missing_first_hour: list[datetime] = []
             plan = None
-            if f5_diagnostics_applicable:
+            if first_hour_diagnostics_applicable:
                 expected_first_hour = set(expected_native_15m_timestamps(session)[:4])
                 present = {bar.timestamp for bar in session_bars}
                 missing_first_hour = sorted(expected_first_hour - present)
@@ -473,7 +493,11 @@ def _intraday_preflight(
             )
             missing_entries += int(not entry_present)
             missing_first_hours += int(bool(missing_first_hour))
-            missing_f5_execution += int(execution_missing)
+            missing_f5_first_hours += int(
+                f5_diagnostics_applicable and bool(missing_first_hour)
+            )
+            missing_pullback_execution += int(execution_missing)
+            missing_f5_execution += int(f5_diagnostics_applicable and execution_missing)
             insufficient_warmup += int(not warmup_sufficient)
             details.append(
                 {
@@ -486,13 +510,27 @@ def _intraday_preflight(
                     "missing_required_first_hour_timestamps": [
                         timestamp.isoformat() for timestamp in missing_first_hour
                     ]
-                    if f5_diagnostics_applicable
+                    if first_hour_diagnostics_applicable
                     else None,
                     "f5_diagnostics_applicable": f5_diagnostics_applicable,
+                    "first_hour_pullback_diagnostics_applicable": (
+                        first_hour_diagnostics_applicable
+                    ),
                     "f5_entry_plan_status": (
-                        plan.failure_reason or "EXECUTABLE" if plan is not None else None
+                        (plan.failure_reason or "EXECUTABLE")
+                        if plan is not None and f5_diagnostics_applicable
+                        else None
                     ),
                     "f5_intended_entry_timestamp": (
+                        plan.entry_timestamp.isoformat()
+                        if plan is not None and plan.entry_timestamp is not None
+                        and f5_diagnostics_applicable
+                        else None
+                    ),
+                    "first_hour_pullback_entry_plan_status": (
+                        plan.failure_reason or "EXECUTABLE" if plan is not None else None
+                    ),
+                    "first_hour_pullback_intended_entry_timestamp": (
                         plan.entry_timestamp.isoformat()
                         if plan is not None and plan.entry_timestamp is not None
                         else None
@@ -526,7 +564,9 @@ def _intraday_preflight(
         "candidate_symbol_count": len(candidate_symbols),
         "candidate_sessions": len(candidate_sessions),
         "missing_candidate_entry_opportunities": missing_entries,
-        "missing_required_first_hour_f5_sessions": missing_first_hours,
+        "missing_required_first_hour_sessions": missing_first_hours,
+        "missing_pullback_execution_bars": missing_pullback_execution,
+        "missing_required_first_hour_f5_sessions": missing_f5_first_hours,
         "missing_f5_pullback_execution_bars": missing_f5_execution,
         "insufficient_native_warmup_sessions": insufficient_warmup,
         "candidate_path_qualification": bounded_coverage,
@@ -577,6 +617,8 @@ def _empty_intraday_preflight(config: StrategyConfig) -> dict[str, Any]:
         "candidate_symbol_count": 0,
         "candidate_sessions": 0,
         "missing_candidate_entry_opportunities": None,
+        "missing_required_first_hour_sessions": None,
+        "missing_pullback_execution_bars": None,
         "missing_required_first_hour_f5_sessions": None,
         "missing_f5_pullback_execution_bars": None,
         "insufficient_native_warmup_sessions": None,
@@ -612,6 +654,15 @@ def _candidate_report(
         for variant, preset in runs
     ]
     run_labels = dict(zip(runs, strategies, strict=True))
+    required_candidate_sessions: dict[tuple[str, date, str], set[str]] = defaultdict(set)
+    for requirement in preparation.intraday_requirements if preparation is not None else ():
+        for candidate_paths, _first_executions, candidate_executions, _requires_holding in (
+            _candidate_path_views(requirement, run_labels, tuple(strategies))
+        ):
+            for symbol, session in candidate_executions:
+                required_candidate_sessions[
+                    (symbol, session, requirement.timeframe.value)
+                ].update(candidate_paths)
     sessions = (
         sorted(
             {
@@ -642,13 +693,16 @@ def _candidate_report(
         ],
         "required_sessions": [
             {
-                "symbol": item["symbol"],
-                "execution_session": item["session"],
-                "timeframe": item["timeframe"],
-                "candidate_paths": item["candidate_paths"],
-                "requirement_type": item["requirement_type"],
+                "symbol": symbol,
+                "execution_session": session.isoformat(),
+                "timeframe": timeframe,
+                "candidate_paths": sorted(candidate_paths),
+                "requirement_type": "candidate_session",
             }
-            for item in intraday.get("required_sessions", ())
+            for (symbol, session, timeframe), candidate_paths in sorted(
+                required_candidate_sessions.items(),
+                key=lambda item: (item[0][2], item[0][1], item[0][0]),
+            )
         ],
         "potential_position_ranges": [
             {
@@ -661,11 +715,17 @@ def _candidate_report(
             for requirement in (
                 preparation.intraday_requirements if preparation is not None else ()
             )
-            for candidate_paths, first_executions, _candidate_executions in _candidate_path_views(
+            for (
+                candidate_paths,
+                first_executions,
+                _candidate_executions,
+                requires_holding_sessions,
+            ) in _candidate_path_views(
                 requirement,
                 run_labels,
                 tuple(strategies),
             )
+            if requires_holding_sessions
             for symbol, first_execution in first_executions
         ],
     }
@@ -676,7 +736,12 @@ def _candidate_path_views(
     run_labels: dict[tuple[Any, Any], str],
     fallback_paths: tuple[str, ...],
 ) -> tuple[
-    tuple[tuple[str, ...], tuple[tuple[str, date], ...], tuple[tuple[str, date], ...]],
+    tuple[
+        tuple[str, ...],
+        tuple[tuple[str, date], ...],
+        tuple[tuple[str, date], ...],
+        bool,
+    ],
     ...,
 ]:
     """Expose path-specific candidates while retaining old fixture/report compatibility."""
@@ -688,6 +753,7 @@ def _candidate_path_views(
                 fallback_paths,
                 requirement.first_execution_sessions,
                 requirement.candidate_execution_sessions,
+                True,
             ),
         )
     return tuple(
@@ -695,6 +761,7 @@ def _candidate_path_views(
             tuple(run_labels[run] for run in path.runs),
             path.first_execution_sessions,
             path.candidate_execution_sessions,
+            path.requires_holding_sessions,
         )
         for path in path_requirements
     )

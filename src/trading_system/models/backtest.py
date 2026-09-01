@@ -48,6 +48,7 @@ class PositionManagementPreset(StrEnum):
     F3_INTRADAY_THESIS_RECOVERY = "F3-intraday-thesis-recovery"
     F4_INTRADAY_FIRST_HOUR_PULLBACK = "F4-intraday-first-hour-pullback"
     F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT = "F5-intraday-first-hour-pullback-f0-management"
+    F_FIRST_HOUR_PULLBACK_CONFIGURED = "F-first-hour-pullback-configured"
 
 
 class StrategyComparisonKind(StrEnum):
@@ -59,6 +60,8 @@ class StrategyComparisonKind(StrEnum):
     RESEARCH_INTRADAY_ISOLATION = "research_intraday_isolation"
     RESEARCH_INTRADAY_NEXT = "research_intraday_next"
     RESEARCH_INTRADAY_HYBRID = "research_intraday_hybrid"
+    RESEARCH_F_ENTRY = "research_f_entry"
+    RESEARCH_CHAMPION_F = "research_champion_f"
 
 
 class StopLossClassification(StrEnum):
