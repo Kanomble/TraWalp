@@ -39,6 +39,18 @@ class FrozenResearchChampion:
     development_cutoff: date
 
 
+@dataclass(frozen=True, slots=True)
+class FCapacityResearchVariant:
+    """Research-only portfolio-capacity identity for the frozen F composition."""
+
+    research_id: str
+    label: str
+    max_positions: int
+    variant: StrategyVariant
+    preset: PositionManagementPreset
+    frozen_champion_control: bool
+
+
 FROZEN_CHAMPION_F = FrozenResearchChampion(
     validation_target="champion-f",
     forward_validation_target="champion-f-forward",
@@ -46,6 +58,19 @@ FROZEN_CHAMPION_F = FrozenResearchChampion(
     variant=StrategyVariant.QUALITY_VALUE_MOMENTUM,
     preset=PositionManagementPreset.CONFIGURED,
     development_cutoff=date(2026, 8, 12),
+)
+
+F_CAPACITY_RESEARCH_FAMILY = "research-f-capacity"
+F_CAPACITY_RESEARCH_VARIANTS: tuple[FCapacityResearchVariant, ...] = tuple(
+    FCapacityResearchVariant(
+        research_id=f"F-CAPACITY-{max_positions}",
+        label=f"F-capacity-{max_positions}",
+        max_positions=max_positions,
+        variant=FROZEN_CHAMPION_F.variant,
+        preset=FROZEN_CHAMPION_F.preset,
+        frozen_champion_control=max_positions == 1,
+    )
+    for max_positions in (1, 2, 3, 5)
 )
 
 
@@ -321,6 +346,12 @@ def research_family_runs(
         raise ValueError(f"Not a registered research comparison family: {kind}") from exc
 
 
+def f_capacity_research_variants() -> tuple[FCapacityResearchVariant, ...]:
+    """Return the pre-registered capacity levels without cloning F strategy logic."""
+
+    return F_CAPACITY_RESEARCH_VARIANTS
+
+
 def research_metadata(
     variant: StrategyVariant,
     preset: PositionManagementPreset,
@@ -372,6 +403,14 @@ def validate_research_registry() -> None:
     for runs in RESEARCH_FAMILY_RUNS.values():
         for variant, preset in runs:
             research_metadata(variant, preset)
+    capacities = [item.max_positions for item in F_CAPACITY_RESEARCH_VARIANTS]
+    if capacities != [1, 2, 3, 5]:
+        raise ValueError("F capacity research family must contain exactly 1, 2, 3, and 5")
+    if any(
+        item.variant is not FROZEN_CHAMPION_F.variant or item.preset is not FROZEN_CHAMPION_F.preset
+        for item in F_CAPACITY_RESEARCH_VARIANTS
+    ):
+        raise ValueError("F capacity research family must preserve F/configured identity")
 
 
 validate_research_registry()

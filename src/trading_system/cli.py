@@ -13,6 +13,11 @@ from alpaca.data.enums import Adjustment, DataFeed
 
 from trading_system.ai.export import NoAICandidatesError, export_ai_candidates
 from trading_system.backtest.candidate_audit import run_candidate_audit
+from trading_system.backtest.capacity_validation import (
+    export_f_capacity_research,
+    format_f_capacity_research_summary,
+    run_f_capacity_research,
+)
 from trading_system.backtest.engine import (
     BacktestEngine,
     StrategyComparisonPreparation,
@@ -357,6 +362,13 @@ def _parser() -> argparse.ArgumentParser:
         help="Optional comma-separated subset of baseline-executed symbols",
     )
     exact_loso.add_argument("--output-stem", required=True)
+    capacity_research = commands.add_parser(
+        "validate-champion-f-capacity",
+        help="Run the registered local-only F/configured capacity family (1,2,3,5)",
+    )
+    capacity_research.add_argument("--start", type=date.fromisoformat, required=True)
+    capacity_research.add_argument("--end", type=date.fromisoformat, required=True)
+    capacity_research.add_argument("--output-stem", required=True)
     universe_audit = commands.add_parser(
         "audit-universe-provenance",
         help="Report local historical-universe evidence without fetching data",
@@ -838,6 +850,29 @@ def main(argv: list[str] | None = None) -> int:
             f"\n  Portfolio reruns: {len(bundle.rows)}"
             "\n  Methodology: COUNTERFACTUAL_RERUN_LOSO"
         )
+        print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
+        return 0
+    if args.command == "validate-champion-f-capacity":
+        try:
+            print(
+                "Running registered F/configured capacity research (1,2,3,5)...",
+                flush=True,
+            )
+            bundle = run_f_capacity_research(
+                database,
+                settings.strategy,
+                args.start,
+                args.end,
+            )
+            paths = export_f_capacity_research(
+                bundle,
+                settings.strategy.storage.reports_path,
+                stem=args.output_stem,
+            )
+        except (FileExistsError, ValueError) as exc:
+            print(f"F capacity research refused: {exc}", file=sys.stderr)
+            return 1
+        print(format_f_capacity_research_summary(bundle))
         print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
         return 0
     if args.command == "compare-strategies":
