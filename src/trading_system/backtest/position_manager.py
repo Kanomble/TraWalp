@@ -36,6 +36,8 @@ class ExitReason(StrEnum):
     OPENING_BAR_FAIL = "opening_bar_fail"
     CONFIRMED_SWING_HIGH = "confirmed_swing_high"
     SESSION_CLOSE = "session_close"
+    LIFECYCLE_TREND = "lifecycle_trend_weakening"
+    LIFECYCLE_PEERS = "lifecycle_peer_weakening"
 
 
 class ProfitLockState(StrEnum):
@@ -287,9 +289,8 @@ class PositionManager:
             position.highest_price_since_trailing_activation = max(
                 position.highest_price_since_trailing_activation or high, high
             )
-            candidate = (
-                position.highest_price_since_trailing_activation
-                * (1 - trailing.trailing_distance)
+            candidate = position.highest_price_since_trailing_activation * (
+                1 - trailing.trailing_distance
             )
             position.trailing_stop_price = _raise_only(position.trailing_stop_price, candidate)
 
@@ -361,9 +362,7 @@ class PositionManager:
 
         max_hold = self.config.max_hold
         mode = max_hold.mode if max_hold.enabled else "disabled"
-        max_hold_reached = (
-            max_hold.days is not None and position.holding_days >= max_hold.days
-        )
+        max_hold_reached = max_hold.days is not None and position.holding_days >= max_hold.days
         if mode != "disabled" and max_hold_reached:
             if mode == "hard":
                 return self._decision(
@@ -386,13 +385,8 @@ class PositionManager:
             candidates.append((position.stop_price, ExitReason.STOP_LOSS))
         if self.config.trailing_stop.enabled and position.trailing_stop_price is not None:
             candidates.append((position.trailing_stop_price, ExitReason.TRAILING_STOP))
-        if (
-            self.config.atr_trailing_stop.enabled
-            and position.atr_trailing_stop_price is not None
-        ):
-            candidates.append(
-                (position.atr_trailing_stop_price, ExitReason.ATR_TRAILING_STOP)
-            )
+        if self.config.atr_trailing_stop.enabled and position.atr_trailing_stop_price is not None:
+            candidates.append((position.atr_trailing_stop_price, ExitReason.ATR_TRAILING_STOP))
         if self.config.profit_lock.enabled and position.profit_lock_stop_price is not None:
             candidates.append((position.profit_lock_stop_price, ExitReason.PROFIT_LOCK))
         return tuple(sorted(candidates, key=lambda item: item[0], reverse=True))
@@ -414,9 +408,7 @@ class PositionManager:
         target_reached = (
             position.target_price is not None and observed_high >= position.target_price
         )
-        if target_reached and (
-            partial_trigger is None or position.target_price <= partial_trigger
-        ):
+        if target_reached and (partial_trigger is None or position.target_price <= partial_trigger):
             return self._decision(
                 position,
                 PositionAction.SELL,
@@ -540,9 +532,7 @@ class PositionManager:
             if position.one_r_lock_timestamp is None:
                 position.one_r_lock_timestamp = timestamp
             one_r = position.entry_price + float(risk) * rule.locked_profit_r
-            position.profit_lock_stop_price = _raise_only(
-                position.profit_lock_stop_price, one_r
-            )
+            position.profit_lock_stop_price = _raise_only(position.profit_lock_stop_price, one_r)
             position.profit_lock_state = ProfitLockState.ONE_R_LOCK
 
 

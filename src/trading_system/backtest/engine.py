@@ -23,6 +23,13 @@ from trading_system.backtest.diagnostics import (
     calculate_position_metrics,
     finalize_position,
 )
+from trading_system.backtest.entry_quality import (
+    EntryQualityStatus,
+    entry_session_range,
+    missing_session_timestamps,
+    next_executable_bar,
+    opening_weakness_decision,
+)
 from trading_system.backtest.features import HistoricalFeatureScreenSource
 from trading_system.backtest.first_hour_pullback import (
     F4_STOP_DISTANCE_PCT,
@@ -30,6 +37,12 @@ from trading_system.backtest.first_hour_pullback import (
     plan_first_hour_pullback,
 )
 from trading_system.backtest.intraday_diagnostics import add_intraday_forward_diagnostics
+from trading_system.backtest.lifecycle import (
+    EntryCapacityProvider,
+    LifecycleContextProvider,
+    LifecyclePositionManager,
+    LifecyclePreset,
+)
 from trading_system.backtest.metrics import calculate_metrics, maximum_drawdown
 from trading_system.backtest.position_manager import (
     ExitReason,
@@ -147,9 +160,7 @@ _RESEARCH_FAMILIES = {
     "intraday-hybrid",
     "f-entry",
 }
-_CONTROL_PRESETS = {
-    metadata.preset for metadata in STRATEGY_RESEARCH_REGISTRY if metadata.control
-}
+_CONTROL_PRESETS = {metadata.preset for metadata in STRATEGY_RESEARCH_REGISTRY if metadata.control}
 RESEARCH_PRESETS = {
     metadata.preset
     for metadata in STRATEGY_RESEARCH_REGISTRY
@@ -165,6 +176,22 @@ class MissingIntradayDataError(ValueError):
 
 class ScreenSource(Protocol):
     def screen(self, session: date) -> ScreenReport: ...
+
+
+@dataclass(slots=True)
+class EntryCapacityTrace:
+    """Diagnostics for an optional close-of-session entry-capacity decision."""
+
+    signal_session: date
+    execution_session: date | None
+    target_capacity: int
+    open_positions_at_signal: int
+    available_slots: int
+    orders_created: int
+    capacity_blocked_candidates: int
+    open_positions_before_entries: int | None = None
+    open_positions_after_entries: int | None = None
+    entries_opened: int = 0
 
 
 class IntradaySynchronizer(Protocol):
@@ -373,6 +400,13 @@ class BacktestEngine:
         strict_coverage_sensitivity: bool = False,
         intraday_session_statuses: dict[tuple[str, date], str] | None = None,
         allow_missing_intraday_data: bool = False,
+        entry_capacity_provider: EntryCapacityProvider | None = None,
+        lifecycle_preset: LifecyclePreset | None = None,
+        lifecycle_context: LifecycleContextProvider | None = None,
+        opening_weakness_veto: bool = False,
+        entry_context_observer: Callable | None = None,
+        execution_context_observer: Callable | None = None,
+        require_complete_daily_position_bars: bool = False,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.database = database
@@ -382,6 +416,14 @@ class BacktestEngine:
         self.strict_coverage_sensitivity = strict_coverage_sensitivity
         self.intraday_session_statuses = intraday_session_statuses or {}
         self.allow_missing_intraday_data = allow_missing_intraday_data
+        self.entry_capacity_provider = entry_capacity_provider
+        self.lifecycle_preset = lifecycle_preset
+        self.lifecycle_context = lifecycle_context
+        self.opening_weakness_veto = opening_weakness_veto
+        self.entry_context_observer = entry_context_observer
+        self.execution_context_observer = execution_context_observer
+        self.require_complete_daily_position_bars = require_complete_daily_position_bars
+        self.entry_quality_events: list[dict] = []
         self.clock = clock
         self.position_management = config.position_management
         self.position_manager = PositionManager(
@@ -394,6 +436,9 @@ class BacktestEngine:
         self._research_counters: Counter[str] = Counter()
         self._confirmation_events: list[dict] = []
         self._candidate_events: list[dict] = []
+        self._entry_capacity_trace_by_session: dict[date, EntryCapacityTrace] = {}
+        self._entry_capacity_traces_by_execution: dict[date, list[EntryCapacityTrace]] = {}
+        self.entry_capacity_traces: tuple[EntryCapacityTrace, ...] = ()
 
     def run(
         self,
@@ -405,6 +450,19 @@ class BacktestEngine:
     ) -> BacktestResult:
         if start > end:
             raise ValueError("Backtest start must not be after end")
+        if self.lifecycle_preset is not None or self.opening_weakness_veto:
+            if variant is not StrategyVariant.QUALITY_VALUE_MOMENTUM or (
+                preset is not PositionManagementPreset.CONFIGURED
+                or BarTimeframe(self.config.position_management.bar_timeframe).intraday
+            ):
+                raise ValueError("Lifecycle/entry-quality research requires F/configured Daily")
+            if self.lifecycle_preset is not None and self.opening_weakness_veto:
+                raise ValueError("Lifecycle and intraday entry must be researched separately")
+        if (
+            self.entry_capacity_provider is not None
+            and preset is not PositionManagementPreset.CONFIGURED
+        ):
+            raise ValueError("dynamic entry capacity is supported only for configured management")
         self.position_management = position_management_preset(
             self.config.position_management,
             preset,
@@ -437,9 +495,24 @@ class BacktestEngine:
             )
         )
         self._position_sequence = 0
+        self.entry_quality_events = []
+        if self.lifecycle_preset is not None and (
+            self.lifecycle_preset.conditional_extension or self.lifecycle_preset.defer_profit_target
+        ):
+            if self.lifecycle_context is None:
+                raise ValueError("Lifecycle decisions require a PIT context provider")
+            self.position_manager = LifecyclePositionManager(
+                self.position_management,
+                preset=self.lifecycle_preset,
+                context=self.lifecycle_context,
+                slippage_bps=self.config.backtest.slippage_bps,
+                commission_bps=self.config.backtest.commission_bps,
+            )
         self._research_counters: Counter[str] = Counter()
         self._confirmation_events: list[dict] = []
         self._candidate_events: list[dict] = []
+        self._entry_capacity_trace_by_session: dict[date, EntryCapacityTrace] = {}
+        self._entry_capacity_traces_by_execution: dict[date, list[EntryCapacityTrace]] = {}
         sessions = _backtest_sessions(self.database, start, end)
 
         cash = float(self.config.backtest.initial_capital)
@@ -468,6 +541,8 @@ class BacktestEngine:
         ) -> bool:
             nonlocal cash
             position = positions[symbol]
+            if decision.reason in {ExitReason.LIFECYCLE_TREND, ExitReason.LIFECYCLE_PEERS}:
+                bar = bar.model_copy(update={"timestamp": regular_session_bounds(session)[0]})
             if f4_swing_management:
                 position.actual_exit_timestamp = bar.timestamp
             cash, trade, closed = self._execute_decision(
@@ -491,6 +566,8 @@ class BacktestEngine:
             return closed
 
         for index, session in enumerate(sessions):
+            if isinstance(self.position_manager, LifecyclePositionManager):
+                self.position_manager.start_session(session)
             final_session = index == len(sessions) - 1
             active_symbols = set(positions) | {order.record.symbol for order in pending}
             intraday_symbols = (
@@ -499,6 +576,12 @@ class BacktestEngine:
                 else active_symbols
             )
             bars = self.database.bars_on_session(active_symbols, session)
+            missing_held_daily = set(positions) - set(bars)
+            if self.require_complete_daily_position_bars and missing_held_daily:
+                raise ValueError(
+                    f"DAILY_POSITION_DATA_UNAVAILABLE on {session}: "
+                    f"{', '.join(sorted(missing_held_daily))}; cannot execute lifecycle exits"
+                )
             intraday_by_symbol: dict[str, list[DailyBar]] = {}
             last_intraday_bars: dict[str, DailyBar] = {}
             regular_open, regular_close = regular_session_bounds(session)
@@ -792,10 +875,7 @@ class BacktestEngine:
                             (
                                 bars
                                 if daily_managed_first_hour_entry
-                                else {
-                                    key: value[0]
-                                    for key, value in intraday_by_symbol.items()
-                                }
+                                else {key: value[0] for key, value in intraday_by_symbol.items()}
                             ),
                             positions,
                             cash,
@@ -982,9 +1062,7 @@ class BacktestEngine:
                             continue
                         position = positions[symbol]
                         while True:
-                            decision = self.position_manager.evaluate_intrabar(
-                                position, daily_bar
-                            )
+                            decision = self.position_manager.evaluate_intrabar(position, daily_bar)
                             if decision.action is PositionAction.HOLD:
                                 break
                             if execute_position_decision(symbol, session, decision, daily_bar):
@@ -1020,6 +1098,7 @@ class BacktestEngine:
                             break
 
                 # 2. Signals from the prior close execute only now, at this session's open.
+                self._begin_capacity_execution(session, len(positions))
                 for order in sorted(
                     pending, key=lambda item: (-item.variant_score, item.record.symbol)
                 ):
@@ -1039,8 +1118,66 @@ class BacktestEngine:
                             reason="missing_next_session_bar",
                         )
                         continue
-                    position, cash, reason = self._open_position(order, bar, bars, positions, cash)
+                    entry_bar = bar
+                    if self.opening_weakness_veto:
+                        window_start, window_end = regular_session_bounds(session)
+                        native = self.database.bars_between(
+                            [order.record.symbol],
+                            window_start,
+                            window_end,
+                            timeframe=BarTimeframe.MINUTES_15,
+                        )
+                        history = self.database.bars_available_as_of(
+                            order.record.symbol, order.signal_date, limit=1
+                        )
+                        previous_close = (
+                            float(history[-1].close)
+                            if history and history[-1].timestamp.date() == order.signal_date
+                            else None
+                        )
+                        quality = opening_weakness_decision(native, session, previous_close)
+                        entry_bar = next_executable_bar(native, quality, session)
+                        unavailable = bool(missing_session_timestamps(native, session))
+                        status = EntryQualityStatus.UNAVAILABLE if unavailable else quality.status
+                        if entry_bar is None and status is EntryQualityStatus.PASSED:
+                            status = EntryQualityStatus.UNAVAILABLE
+                        self.entry_quality_events.append(
+                            {
+                                "symbol": order.record.symbol,
+                                "signal_date": order.signal_date.isoformat(),
+                                "entry_session": session.isoformat(),
+                                "status": status.value,
+                                "decision_timestamp": quality.decision_timestamp.isoformat(),
+                                "last_15m_close": quality.last_15m_close,
+                                "session_vwap_to_date": quality.session_vwap_to_date,
+                                "previous_daily_close": previous_close,
+                                "intended_entry_timestamp": (
+                                    entry_bar.timestamp.isoformat()
+                                    if entry_bar and not unavailable
+                                    else None
+                                ),
+                                "actual_entry_timestamp": None,
+                                "reason": "incomplete_entry_session"
+                                if unavailable
+                                else quality.reason,
+                            }
+                        )
+                        if status is not EntryQualityStatus.PASSED:
+                            skipped[status.value] += 1
+                            self._observe_execution(
+                                order, session, executed=False, reason=status.value
+                            )
+                            continue
+                        assert entry_bar is not None
+                        bars[order.record.symbol] = entry_session_range(bar, native, entry_bar)
+                        order.intended_entry_timestamp = entry_bar.timestamp
+                        order.execution_bar_present = True
+                    position, cash, reason = self._open_position(
+                        order, entry_bar, bars, positions, cash
+                    )
                     if position is None:
+                        if self.opening_weakness_veto:
+                            self.entry_quality_events[-1]["execution_rejection"] = reason
                         skipped[reason or "entry_rejected"] += 1
                         self._observe_execution(
                             order,
@@ -1049,6 +1186,10 @@ class BacktestEngine:
                             reason=reason or "entry_rejected",
                         )
                         continue
+                    if self.opening_weakness_veto:
+                        self.entry_quality_events[-1]["actual_entry_timestamp"] = (
+                            entry_bar.timestamp.isoformat()
+                        )
                     positions[position.symbol] = position
                     execution_legs[position.position_id] = []
                     reentry_trackers.pop(position.symbol, None)
@@ -1057,6 +1198,7 @@ class BacktestEngine:
                         session_peak_market_value,
                         sum(item.quantity * item.last_price for item in positions.values()),
                     )
+                self._finish_capacity_execution(session, len(positions))
                 pending = []
 
                 # 3. Daily OHLC monitoring uses stop-first priority and pre-bar trail levels.
@@ -1242,7 +1384,7 @@ class BacktestEngine:
                 add_post_exit_diagnostics(position, self.database, sessions[-1]),
             )
         )
-        return BacktestResult(
+        result = BacktestResult(
             requested_start=start,
             requested_end=end,
             actual_start=sessions[0],
@@ -1284,6 +1426,11 @@ class BacktestEngine:
             strict_coverage_sensitivity=self.strict_coverage_sensitivity,
             research_diagnostics=self._research_diagnostics(trades, diagnosed_positions, skipped),
         )
+        self.entry_capacity_traces = tuple(
+            self._entry_capacity_trace_by_session[session]
+            for session in sorted(self._entry_capacity_trace_by_session)
+        )
+        return result
 
     def _entry_orders(
         self,
@@ -1296,10 +1443,28 @@ class BacktestEngine:
         closed_dates: dict[str, date] | None = None,
         reentry_trackers: dict[str, _ReentryTracker] | None = None,
     ) -> list[_PendingEntry]:
+        if self.entry_context_observer is not None:
+            self.entry_context_observer(report, positions, execution_session)
         trackers = reentry_trackers or {}
         self._update_reentry_trackers(report, trackers)
-        capacity = self.config.portfolio.max_positions - len(positions)
+        target_capacity = self._target_entry_capacity(report.as_of)
+        capacity = max(target_capacity - len(positions), 0)
         if capacity <= 0:
+            blocked = 0
+            if self.entry_capacity_provider is not None:
+                blocked = sum(
+                    evaluate_variant_entry(record, variant, self.config).eligible
+                    and record.symbol not in positions
+                    for record in report.records
+                )
+                self._record_capacity_selection(
+                    report.as_of,
+                    execution_session,
+                    target_capacity,
+                    len(positions),
+                    orders_created=0,
+                    capacity_blocked_candidates=blocked,
+                )
             if self.audit_observer is not None:
                 for record in report.records:
                     evaluation = evaluate_variant_entry(record, variant, self.config)
@@ -1443,6 +1608,7 @@ class BacktestEngine:
 
         sector_counts = Counter(position.sector for position in positions.values())
         orders: list[_PendingEntry] = []
+        capacity_blocked_candidates = 0
         for candidate in filtered:
             sector = (candidate.record.sic or "unknown")[:2]
             if sector_counts[sector] >= self.config.portfolio.max_sector_positions:
@@ -1460,6 +1626,7 @@ class BacktestEngine:
                 self.current_preset is not PositionManagementPreset.D5_HYBRID_CONFIRMED_SWING
                 and len(orders) >= capacity
             ):
+                capacity_blocked_candidates += 1
                 self._update_candidate_event(candidate, selection_outcome="max_positions_reached")
                 if self.audit_observer is not None:
                     self.audit_observer.observe_portfolio_decision(
@@ -1481,6 +1648,14 @@ class BacktestEngine:
                 self.audit_observer.observe_portfolio_decision(
                     report.as_of, candidate.record.symbol, "order_created"
                 )
+        self._record_capacity_selection(
+            report.as_of,
+            execution_session,
+            target_capacity,
+            len(positions),
+            orders_created=len(orders),
+            capacity_blocked_candidates=capacity_blocked_candidates,
+        )
         return orders
 
     def _first_hour_pullback_pending_entries(
@@ -1498,8 +1673,7 @@ class BacktestEngine:
             is PositionManagementPreset.F5_INTRADAY_FIRST_HOUR_PULLBACK_F0_MANAGEMENT
             else (
                 "f_entry"
-                if self.current_preset
-                is PositionManagementPreset.F_FIRST_HOUR_PULLBACK_CONFIGURED
+                if self.current_preset is PositionManagementPreset.F_FIRST_HOUR_PULLBACK_CONFIGURED
                 else "f4"
             )
         )
@@ -1856,6 +2030,9 @@ class BacktestEngine:
         executed: bool,
         reason: str | None = None,
     ) -> None:
+        trace = self._entry_capacity_trace_by_session.get(order.signal_date)
+        if trace is not None and executed:
+            trace.entries_opened += 1
         if self.audit_observer is not None:
             self.audit_observer.observe_execution(
                 order.signal_date,
@@ -1864,6 +2041,53 @@ class BacktestEngine:
                 executed,
                 reason,
             )
+
+    def _target_entry_capacity(self, signal_session: date) -> int:
+        target = (
+            self.config.portfolio.max_positions
+            if self.entry_capacity_provider is None
+            else self.entry_capacity_provider(signal_session)
+        )
+        if isinstance(target, bool) or not isinstance(target, int):
+            raise ValueError("entry capacity provider must return an integer")
+        if target < 1 or target > self.config.portfolio.max_positions:
+            raise ValueError(
+                "entry capacity target must be between 1 and the configured hard maximum"
+            )
+        return target
+
+    def _record_capacity_selection(
+        self,
+        signal_session: date,
+        execution_session: date | None,
+        target_capacity: int,
+        open_positions: int,
+        *,
+        orders_created: int,
+        capacity_blocked_candidates: int,
+    ) -> None:
+        if self.entry_capacity_provider is None:
+            return
+        trace = EntryCapacityTrace(
+            signal_session=signal_session,
+            execution_session=execution_session,
+            target_capacity=target_capacity,
+            open_positions_at_signal=open_positions,
+            available_slots=max(target_capacity - open_positions, 0),
+            orders_created=orders_created,
+            capacity_blocked_candidates=capacity_blocked_candidates,
+        )
+        self._entry_capacity_trace_by_session[signal_session] = trace
+        if execution_session is not None:
+            self._entry_capacity_traces_by_execution.setdefault(execution_session, []).append(trace)
+
+    def _begin_capacity_execution(self, session: date, open_positions: int) -> None:
+        for trace in self._entry_capacity_traces_by_execution.get(session, ()):
+            trace.open_positions_before_entries = open_positions
+
+    def _finish_capacity_execution(self, session: date, open_positions: int) -> None:
+        for trace in self._entry_capacity_traces_by_execution.get(session, ()):
+            trace.open_positions_after_entries = open_positions
 
     @staticmethod
     def _is_position_opening_bar(position: PositionState, bar: DailyBar) -> bool:
@@ -2009,6 +2233,8 @@ class BacktestEngine:
         entry_atr: float | None = None,
         warmup_history: list[DailyBar] | None = None,
     ) -> tuple[PositionState | None, float, str | None]:
+        if self.execution_context_observer is not None:
+            self.execution_context_observer(order.signal_date, order.record.symbol, positions)
         if len(positions) >= self.config.portfolio.max_positions:
             return None, cash, "max_positions"
         record = order.record
@@ -2187,8 +2413,8 @@ class BacktestEngine:
             confirmation_failure_reason=order.confirmation_failure_reason,
             intended_entry_timestamp=order.intended_entry_timestamp or bar.timestamp,
             actual_entry_timestamp=bar.timestamp,
-            entry_delayed_from_open=self.current_preset
-            in {*CONFIRMED_ENTRY_PRESETS, *FIRST_HOUR_PULLBACK_PRESETS},
+            entry_delayed_from_open=self.opening_weakness_veto
+            or self.current_preset in {*CONFIRMED_ENTRY_PRESETS, *FIRST_HOUR_PULLBACK_PRESETS},
             execution_bar_present=True,
             cooldown_applied=order.cooldown_applied,
             cooldown_blocked=order.cooldown_blocked,
@@ -2321,6 +2547,8 @@ class BacktestEngine:
         elif bar is not None and decision.reason in {
             ExitReason.OPENING_BAR_FAIL,
             ExitReason.CONFIRMED_SWING_HIGH,
+            ExitReason.LIFECYCLE_TREND,
+            ExitReason.LIFECYCLE_PEERS,
         }:
             position.highest_price_since_entry = max(
                 position.highest_price_since_entry, float(bar.open), reference
@@ -2572,8 +2800,7 @@ class BacktestEngine:
         )
         f_entry_positions = (
             list(positions)
-            if self.current_preset
-            is PositionManagementPreset.F_FIRST_HOUR_PULLBACK_CONFIGURED
+            if self.current_preset is PositionManagementPreset.F_FIRST_HOUR_PULLBACK_CONFIGURED
             else []
         )
         return {
@@ -2887,16 +3114,12 @@ def determine_intraday_comparison_requirements(
     timeframes_by_variant: dict[StrategyVariant, set[BarTimeframe]] = {}
     for timeframe, variant in runs_by_candidate_path:
         timeframes_by_variant.setdefault(variant, set()).add(timeframe)
-    earliest_execution_by_path: dict[
-        tuple[BarTimeframe, StrategyVariant], dict[str, date]
-    ] = {
+    earliest_execution_by_path: dict[tuple[BarTimeframe, StrategyVariant], dict[str, date]] = {
         candidate_path: {} for candidate_path in runs_by_candidate_path
     }
     candidate_execution_by_path: dict[
         tuple[BarTimeframe, StrategyVariant], set[tuple[str, date]]
-    ] = {
-        candidate_path: set() for candidate_path in runs_by_candidate_path
-    }
+    ] = {candidate_path: set() for candidate_path in runs_by_candidate_path}
     for index, signal_session in enumerate(sessions[:-1]):
         report = screen_source.screen(signal_session)
         execution_session = sessions[index + 1]
@@ -2969,9 +3192,7 @@ def determine_intraday_comparison_requirements(
                 timeframe=timeframe,
                 variants=tuple(
                     sorted(
-                        (
-                            path.variant for path in path_requirements
-                        ),
+                        (path.variant for path in path_requirements),
                         key=lambda item: item.value,
                     )
                 ),
@@ -3092,9 +3313,7 @@ def _intraday_required_sessions(
     comparison_index = {
         session: index for index, session in enumerate(requirement.comparison_sessions)
     }
-    required: dict[str, set[date]] = {
-        symbol: set() for symbol in requirement.symbols
-    }
+    required: dict[str, set[date]] = {symbol: set() for symbol in requirement.symbols}
     paths = requirement.candidate_path_requirements
     if not paths:
         for symbol, first_execution in requirement.first_execution_sessions:

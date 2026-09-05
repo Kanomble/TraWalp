@@ -5,6 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
+from trading_system.backtest.entry_quality import (
+    F_INTRADAY_ENTRY_RESEARCH_FAMILY,
+    F_INTRADAY_ENTRY_VARIANTS,
+)
+from trading_system.backtest.lifecycle import F_LIFECYCLE_RESEARCH_FAMILY, F_LIFECYCLE_VARIANTS
+from trading_system.backtest.market_regime import RegimeCapacityRule
 from trading_system.backtest.screen_strategies import SCREEN_STRATEGY_DEFINITIONS
 from trading_system.models.backtest import (
     PositionManagementPreset,
@@ -51,6 +57,17 @@ class FCapacityResearchVariant:
     frozen_champion_control: bool
 
 
+@dataclass(frozen=True, slots=True)
+class FRegimeCapacityResearchVariant:
+    """Research-only static or regime-aware capacity identity for Strategy F."""
+
+    research_id: str
+    label: str
+    rule: RegimeCapacityRule
+    configured_hard_max_positions: int
+    adaptive: bool
+
+
 FROZEN_CHAMPION_F = FrozenResearchChampion(
     validation_target="champion-f",
     forward_validation_target="champion-f-forward",
@@ -61,6 +78,11 @@ FROZEN_CHAMPION_F = FrozenResearchChampion(
 )
 
 F_CAPACITY_RESEARCH_FAMILY = "research-f-capacity"
+# Isolated lifecycle/entry identities are not production management enums or Cartesian runs.
+F_ISOLATED_RESEARCH_FAMILIES = {
+    F_LIFECYCLE_RESEARCH_FAMILY: F_LIFECYCLE_VARIANTS,
+    F_INTRADAY_ENTRY_RESEARCH_FAMILY: F_INTRADAY_ENTRY_VARIANTS,
+}
 F_CAPACITY_RESEARCH_VARIANTS: tuple[FCapacityResearchVariant, ...] = tuple(
     FCapacityResearchVariant(
         research_id=f"F-CAPACITY-{max_positions}",
@@ -71,6 +93,39 @@ F_CAPACITY_RESEARCH_VARIANTS: tuple[FCapacityResearchVariant, ...] = tuple(
         frozen_champion_control=max_positions == 1,
     )
     for max_positions in (1, 2, 3, 5)
+)
+
+F_REGIME_CAPACITY_RESEARCH_FAMILY = "research-f-regime-capacity"
+F_REGIME_CAPACITY_RESEARCH_STATUS = "historical research hypothesis"
+F_REGIME_CAPACITY_RESEARCH_VARIANTS: tuple[FRegimeCapacityResearchVariant, ...] = (
+    FRegimeCapacityResearchVariant(
+        research_id="CONTROL-C1",
+        label="F-regime-control-C1",
+        rule=RegimeCapacityRule.CONTROL_C1,
+        configured_hard_max_positions=1,
+        adaptive=False,
+    ),
+    FRegimeCapacityResearchVariant(
+        research_id="CONTROL-C5",
+        label="F-regime-control-C5",
+        rule=RegimeCapacityRule.CONTROL_C5,
+        configured_hard_max_positions=5,
+        adaptive=False,
+    ),
+    FRegimeCapacityResearchVariant(
+        research_id="REGIME-SMA200",
+        label="F-regime-SPY-SMA200-C1-C5",
+        rule=RegimeCapacityRule.REGIME_SMA200,
+        configured_hard_max_positions=5,
+        adaptive=True,
+    ),
+    FRegimeCapacityResearchVariant(
+        research_id="REGIME-SMA200-MOM126",
+        label="F-regime-SPY-SMA200-MOM126-C1-C5",
+        rule=RegimeCapacityRule.REGIME_SMA200_MOM126,
+        configured_hard_max_positions=5,
+        adaptive=True,
+    ),
 )
 
 
@@ -352,6 +407,12 @@ def f_capacity_research_variants() -> tuple[FCapacityResearchVariant, ...]:
     return F_CAPACITY_RESEARCH_VARIANTS
 
 
+def f_regime_capacity_research_variants() -> tuple[FRegimeCapacityResearchVariant, ...]:
+    """Return exactly the two controls and two frozen adaptive hypotheses."""
+
+    return F_REGIME_CAPACITY_RESEARCH_VARIANTS
+
+
 def research_metadata(
     variant: StrategyVariant,
     preset: PositionManagementPreset,
@@ -411,6 +472,19 @@ def validate_research_registry() -> None:
         for item in F_CAPACITY_RESEARCH_VARIANTS
     ):
         raise ValueError("F capacity research family must preserve F/configured identity")
+    regime_rules = [item.rule for item in F_REGIME_CAPACITY_RESEARCH_VARIANTS]
+    if regime_rules != [
+        RegimeCapacityRule.CONTROL_C1,
+        RegimeCapacityRule.CONTROL_C5,
+        RegimeCapacityRule.REGIME_SMA200,
+        RegimeCapacityRule.REGIME_SMA200_MOM126,
+    ]:
+        raise ValueError("F regime capacity research must contain exactly four frozen variants")
+    if any(
+        item.configured_hard_max_positions not in {1, 5}
+        for item in F_REGIME_CAPACITY_RESEARCH_VARIANTS
+    ):
+        raise ValueError("F regime capacity research permits only capacities 1 and 5")
 
 
 validate_research_registry()

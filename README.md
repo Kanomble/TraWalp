@@ -687,6 +687,18 @@ SPY wird nur verwendet, wenn adjustierte lokale Bars den gesamten tatsächlichen
 Der Benchmark ist ein kostenfreier Close-to-Close-Buy-and-Hold-Vergleich; fehlen Bars, bleibt er mit
 einer konkreten Warnung unavailable. Der Backtest lädt SPY niemals aus dem Netzwerk nach.
 
+### Strategy-F-Regime-Capacity-Research
+
+Der separate Workflow `research-f-regime-capacity` vergleicht statische F/configured-Kontrollen mit
+Capacity 1 und 5 sowie zwei eingefrorene PIT-Regeln: C5 bei `SPY close > SMA200` bzw. C5 bei
+`SPY close > SMA200 AND momentum126 > 0`, ansonsten C1. Ein Screen von `T` verwendet nur den
+lokalen SPY-Close und trailing Indikatoren bis `T`; fehlender Warmup ist `UNAVAILABLE` und C1.
+Capacity-Wechsel begrenzen ausschließlich neue Entries. Insbesondere erzwingt C5 → C1 keinen
+Verkauf bestehender Positionen; C1 → C5 gibt freie Slots wieder für das unveränderte Ranking frei.
+Der Frozen Champion bleibt F/configured mit Capacity 1. Universe und Survivorship-Limit bleiben
+`CURRENT_UNIVERSE_ONLY` und `NOT_SURVIVORSHIP_CLEAN`. Details und manueller Aufruf:
+[`docs/f-regime-capacity-research.md`](docs/f-regime-capacity-research.md).
+
 ### Bekannte Backtest-Grenzen
 
 `assets.tradable` beschreibt das aktuelle, nicht das historische Alpaca-Universum. TraWalp besitzt
@@ -770,6 +782,14 @@ fehlgeschlagenen Batches ab.
   handelbare Strategie oder Kaufempfehlung.
 
 ## Milestone-Reihenfolge
+
+Neue isolierte F-Research-Runden: `validate-f-lifecycle-v2` (L0–L6) und
+`preflight-f-intraday-entry` / `validate-f-intraday-entry` (I0/I1). Beide verwenden C1 und
+configured Daily Management; Frozen Champion und Regime-Capacity bleiben unverändert.
+Historische Ergebnisse sind DEVELOPMENT / RESEARCH. Details, Datenqualifikation, Reports und
+manuelle Befehle: [Lifecycle V2](docs/f-lifecycle-v2-research.md).
+Der [Research-Code-Audit](docs/research-code-audit.md) dokumentiert die erhaltenen historischen
+Pfade und die zurückgestellten Cleanup-Kandidaten.
 
 - Milestone 1 (fertig): Struktur, Config, Alpaca/SEC, lokale Datenbank.
 - Milestone 2 (fertig): Fundamentals, technische Indikatoren, Peer-Gruppen und Scoring.

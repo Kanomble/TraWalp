@@ -7,6 +7,11 @@ comparisons.
 
 ## Current champion
 
+- F/configured is the frozen champion for the current Daily robustness/capacity research.
+  See [F lifecycle V2](f-lifecycle-v2-research.md) for the separate new research families.
+
+## Historical intraday control
+
 - F0/C-intraday-dynamic — `CHAMPION_CONTROL`; frozen control with unchanged C selection and
   intraday execution/management semantics.
 
@@ -36,6 +41,9 @@ comparisons.
 - Dynamic-hold, take-profit, ATR-trailing, partial-profit and fixed-stop experiments are
   `ARCHIVED_RESEARCH`.
 - The original legacy preset and configured score controls remain `LEGACY_COMPATIBILITY`.
+
+For new hypotheses, all already analyzed 2022–2026 history is DEVELOPMENT / RESEARCH, not clean
+OOS. The following classification describes the historical F3/F5 round only.
 
 The period 2025-05-01 through 2026-08-12 has already informed hypothesis construction. F3/F5
 results over that period are development research evidence, not out-of-sample evidence. Earlier

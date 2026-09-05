@@ -40,9 +40,22 @@ from trading_system.backtest.intraday_next import (
     annotate_intraday_next_coverage,
     export_intraday_next_comparison,
 )
+from trading_system.backtest.lifecycle_validation import (
+    build_f_intraday_entry_preflight,
+    export_f_intraday_entry_preflight,
+    export_f_lifecycle_research,
+    research_output_paths,
+    run_f_intraday_entry,
+    run_f_lifecycle_v2,
+)
 from trading_system.backtest.preflight import (
     build_compare_preflight,
     export_compare_preflight,
+)
+from trading_system.backtest.regime_capacity_validation import (
+    export_f_regime_capacity_research,
+    format_f_regime_capacity_research_summary,
+    run_f_regime_capacity_research,
 )
 from trading_system.backtest.report import (
     export_backtest,
@@ -369,6 +382,22 @@ def _parser() -> argparse.ArgumentParser:
     capacity_research.add_argument("--start", type=date.fromisoformat, required=True)
     capacity_research.add_argument("--end", type=date.fromisoformat, required=True)
     capacity_research.add_argument("--output-stem", required=True)
+    regime_capacity_research = commands.add_parser(
+        "validate-f-regime-capacity",
+        help="Run the fixed local-only F/configured PIT regime-capacity family",
+    )
+    regime_capacity_research.add_argument("--start", type=date.fromisoformat, required=True)
+    regime_capacity_research.add_argument("--end", type=date.fromisoformat, required=True)
+    regime_capacity_research.add_argument("--output-stem", required=True)
+    for name, description in (
+        ("validate-f-lifecycle-v2", "Local F/configured lifecycle L0-L6 and canonical cost reruns"),
+        ("preflight-f-intraday-entry", "Local F candidate discovery and native entry coverage"),
+        ("validate-f-intraday-entry", "Qualified local F entry-quality comparison I0/I1"),
+    ):
+        research = commands.add_parser(name, help=description)
+        research.add_argument("--start", type=date.fromisoformat, required=True)
+        research.add_argument("--end", type=date.fromisoformat, required=True)
+        research.add_argument("--output-stem", required=True)
     universe_audit = commands.add_parser(
         "audit-universe-provenance",
         help="Report local historical-universe evidence without fetching data",
@@ -464,6 +493,44 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"\nVACUUM refused: {exc}", file=sys.stderr)
                     return 1
                 print("\nVACUUM completed.")
+        return 0
+    if args.command in {
+        "validate-f-lifecycle-v2",
+        "preflight-f-intraday-entry",
+        "validate-f-intraday-entry",
+    }:
+        # Research reads an existing local database; it must not initialize/migrate business data.
+        try:
+            preflight = args.command == "preflight-f-intraday-entry"
+            directory = settings.strategy.storage.reports_path
+            research_output_paths(directory, args.output_stem, preflight=preflight)
+            if preflight:
+                report, requirements = build_f_intraday_entry_preflight(
+                    database, settings.strategy, args.start, args.end
+                )
+                paths = export_f_intraday_entry_preflight(
+                    report, requirements, directory, stem=args.output_stem
+                )
+                print(
+                    f"Local preflight: qualified={report['intraday_qualified']}; "
+                    f"missing symbol-sessions={len(report['missing_symbol_sessions'])}"
+                )
+            else:
+                runner = (
+                    run_f_lifecycle_v2
+                    if args.command == "validate-f-lifecycle-v2"
+                    else run_f_intraday_entry
+                )
+                bundle = runner(database, settings.strategy, args.start, args.end)
+                paths = export_f_lifecycle_research(bundle, directory, stem=args.output_stem)
+                print(
+                    f"{bundle.family}: DEVELOPMENT / RESEARCH; "
+                    f"{len(bundle.results)} fixed variants; frozen champion unchanged."
+                )
+            print("\n".join(f"{name}: {path}" for name, path in paths.items()))
+        except (OSError, ValueError) as exc:
+            print(f"F lifecycle/entry research refused: {exc}", file=sys.stderr)
+            return 1
         return 0
     database.initialize()
     if args.command == "compare-preflight":
@@ -809,9 +876,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.reference_start,
                     args.reference_end,
                 )
-                paths = export_extended_validation(
-                    bundle, settings.strategy.storage.reports_path
-                )
+                paths = export_extended_validation(bundle, settings.strategy.storage.reports_path)
                 summary = format_extended_validation_summary(bundle)
         except (FileExistsError, ValueError) as exc:
             print(f"Extended validation refused: {exc}", file=sys.stderr)
@@ -875,17 +940,36 @@ def main(argv: list[str] | None = None) -> int:
         print(format_f_capacity_research_summary(bundle))
         print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
         return 0
+    if args.command == "validate-f-regime-capacity":
+        try:
+            print(
+                "Running registered F/configured PIT regime-capacity research...",
+                flush=True,
+            )
+            bundle = run_f_regime_capacity_research(
+                database,
+                settings.strategy,
+                args.start,
+                args.end,
+            )
+            paths = export_f_regime_capacity_research(
+                bundle,
+                settings.strategy.storage.reports_path,
+                stem=args.output_stem,
+            )
+        except (FileExistsError, ValueError) as exc:
+            print(f"F regime capacity research refused: {exc}", file=sys.stderr)
+            return 1
+        print(format_f_regime_capacity_research_summary(bundle))
+        print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
+        return 0
     if args.command == "compare-strategies":
         try:
             comparison_kind = StrategyComparisonKind(args.include.replace("-", "_"))
-            if (
-                args.strict_intraday_coverage
-                and comparison_kind
-                not in {
-                    StrategyComparisonKind.RESEARCH_D1_D5,
-                    StrategyComparisonKind.RESEARCH_F_ENTRY,
-                }
-            ):
+            if args.strict_intraday_coverage and comparison_kind not in {
+                StrategyComparisonKind.RESEARCH_D1_D5,
+                StrategyComparisonKind.RESEARCH_F_ENTRY,
+            }:
                 raise ValueError(
                     "--strict-intraday-coverage is available only with research-d1-d5 "
                     "or research-f-entry"
