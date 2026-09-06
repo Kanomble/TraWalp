@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 from trading_system.backtest.engine import BacktestEngine
@@ -32,7 +33,7 @@ from trading_system.data.database import Database
 from trading_system.data.market_sessions import regular_session_bounds, trading_sessions_between
 from trading_system.models.backtest import PositionManagementPreset
 from trading_system.models.fundamentals import CompanyIdentity, FundamentalMetrics
-from trading_system.models.market_data import BarTimeframe, DailyBar
+from trading_system.models.market_data import BarTimeframe, DailyBar, TradableAsset
 from trading_system.models.scores import ScoreBreakdown, StockScores
 from trading_system.models.screening import ScreenRecord, ScreenReport
 from trading_system.models.signals import TechnicalSnapshot
@@ -125,6 +126,35 @@ def local_market(tmp_path):
             for i, session in enumerate(sessions)
         ]
     )
+    return database, sessions
+
+
+@pytest.fixture
+def sic_market(tmp_path):
+    database = Database(tmp_path / "sic_market.sqlite3")
+    database.initialize()
+    sessions = trading_sessions_between(date(2024, 1, 2), date(2024, 2, 23))
+    history = trading_sessions_between(date(2023, 11, 1), sessions[-1])
+    sics = {
+        "AAA": "2834",
+        "BBB": "2834",
+        "CCC": "2834",
+        "DDD": "2834",
+        "EEE": "7372",
+        "FFF": "7399",
+        "MISSING": None,
+        "SPY": "2834",
+    }
+    for index, (symbol, sic) in enumerate(sics.items(), 1):
+        database.upsert_company(
+            CompanyIdentity(cik=str(index).zfill(10), symbol=symbol, name=symbol, sic=sic)
+        )
+        database.upsert_assets(
+            [TradableAsset(symbol=symbol, name=symbol, tradable=True, fractionable=True)]
+        )
+        database.upsert_bars(
+            [bar(symbol, session, 100 + i / 100) for i, session in enumerate(history)]
+        )
     return database, sessions
 
 
@@ -316,6 +346,65 @@ def test_peer_confirmation_exact_boundary(count, ratio, expected):
     assert peer_confirmation(count, ratio) is expected
 
 
+@pytest.mark.parametrize("missing_group", [None, float("nan"), pd.NA])
+def test_peer_context_normalizes_missing_assignment_before_sic2_fallback(
+    monkeypatch, sic_market, config, missing_group
+):
+    from trading_system.backtest import peer_context
+
+    db, sessions = sic_market
+    original = peer_context.assign_peer_groups
+
+    def assigned_with_missing(frame, min_peer_count):
+        result = original(frame, min_peer_count)
+        # Exercise each pandas missing sentinel independently of inferred column dtype.
+        result["peer_group"] = result["peer_group"].astype(object)
+        result.loc[result["peer_group"].isna(), "peer_group"] = missing_group
+        return result
+
+    monkeypatch.setattr(peer_context, "assign_peer_groups", assigned_with_missing)
+    provider = TechnicalPeerContextProvider(db, config, sessions[-1])
+    narrow = provider.context("AAA", sessions[0])
+    assert narrow.peer_group == "sic4:2834"
+    assert narrow.peer_symbols == ("BBB", "CCC", "DDD")
+    assert narrow.state is PeerTrendState.CONFIRMED
+    fallback = provider.context("EEE", sessions[0])
+    assert fallback.peer_group == "sic2:73"
+    assert fallback.peer_symbols == ("FFF",)
+    assert fallback.peer_count_valid == 1
+    assert fallback.peer_above_sma20_ratio == 1
+    assert fallback.state is PeerTrendState.UNAVAILABLE
+    assert provider.context("FFF", sessions[0]).peer_symbols == ("EEE",)
+    missing = provider.context("MISSING", sessions[0])
+    assert missing.peer_group is None
+    assert missing.peer_symbols == ()
+    assert missing.state is PeerTrendState.UNAVAILABLE
+    groups, members = provider._groups(sessions[0])
+    assert all(group is None or isinstance(group, str) for group in groups.values())
+    assert all(isinstance(group, str) for group in members)
+    assert all("MISSING" not in symbols and "SPY" not in symbols for symbols in members.values())
+
+
+@pytest.mark.parametrize("sic", [None, float("nan"), pd.NA, "bad"])
+def test_technical_peer_context_missing_sic_is_unavailable(sic_market, config, sic):
+    db, sessions = sic_market
+    provider = TechnicalPeerContextProvider(db, config, sessions[-1])
+    # Database identities use None; exercise other scalar inputs at the provider boundary.
+    provider.companies = tuple(
+        company.model_copy(update={"sic": sic}) if company.symbol == "MISSING" else company
+        for company in provider.companies
+    )
+    assert provider.technical("MISSING", sessions[0]) is not None
+    context = provider.context("MISSING", sessions[0])
+    assert context.peer_group is None
+    assert context.peer_count_valid == 0
+    assert context.peer_above_sma20_ratio is None
+    assert context.peer_symbols == ()
+    assert context.state is PeerTrendState.UNAVAILABLE
+    assert provider.peer_state("MISSING", sessions[0]) is PeerTrendState.UNAVAILABLE
+    assert provider.context("AAA", sessions[0]).peer_count_valid == 3
+
+
 def test_pit_peers_trend_missing_history_and_correlations(tmp_path, config):
     db = Database(tmp_path / "peers.sqlite3")
     db.initialize()
@@ -485,6 +574,60 @@ def research_preparation(monkeypatch, local_market):
     # Small deterministic screens replace SEC history; the actual engine/portfolio/reporting run.
     monkeypatch.setattr(validation, "_prepare", lambda *args: (preparation, {"ready": True}))
     return validation, db, sessions, preparation
+
+
+def test_lifecycle_runner_missing_sic_generates_unavailable_peer_diagnostics(
+    monkeypatch, sic_market, config, tmp_path
+):
+    import csv
+    import socket
+
+    import requests
+
+    validation, db, sessions, preparation = research_preparation(monkeypatch, sic_market)
+    preparation.screen_source = Screens(
+        sessions[0], (record("MISSING").model_copy(update={"sic": None}),)
+    )
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Fixture must never access the network")
+
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(requests.sessions.Session, "request", forbidden)
+    with db.read_only() as connection:
+        before = list(connection.iterdump())
+    bundle = validation.run_f_lifecycle_v2(db, config, sessions[0], sessions[-1])
+    expected_ids = {preset.research_id for preset in F_LIFECYCLE_VARIANTS}
+    assert set(bundle.results) == expected_ids
+    for result in bundle.results.values():
+        assert [position.symbol for position in result.positions] == ["MISSING"]
+        assert len(result.equity_curve) == len(sessions)
+    rows = bundle.tables["peer_context"]
+    assert {row["research_id"] for row in rows} == expected_ids
+    assert {row["observation_phase"] for row in rows} == {
+        "signal",
+        "entry",
+        "exit",
+        "exit_pre_session",
+    }
+    assert all(row["symbol"] == "MISSING" for row in rows)
+    assert all(row["peer_group"] is None for row in rows)
+    assert all(row["peer_count_valid"] == 0 for row in rows)
+    assert all(row["peer_state"] == PeerTrendState.UNAVAILABLE.value for row in rows)
+    baseline = BacktestEngine(db, config, screen_source=preparation.screen_source).run(
+        sessions[0], sessions[-1], variant=FROZEN_CHAMPION_F.variant
+    )
+    control = bundle.results["F-LIFECYCLE-L0"]
+    assert control.positions == baseline.positions
+    assert control.trades == baseline.trades
+    assert control.equity_curve == baseline.equity_curve
+    paths = validation.export_f_lifecycle_research(bundle, tmp_path, stem="missing_sic_fixture")
+    with paths["peer_context.csv"].open(newline="") as source:
+        exported = list(csv.DictReader(source))
+    assert len(exported) == len(rows)
+    assert all(row["peer_group"] == "" for row in exported)
+    with db.read_only() as connection:
+        assert list(connection.iterdump()) == before
 
 
 def test_local_daily_runner_exact_variants_full_cost_reruns_and_reports(

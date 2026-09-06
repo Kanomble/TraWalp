@@ -139,7 +139,8 @@ class TechnicalPeerContextProvider:
         groups, members = {}, {}
         for row in frame.itertuples():
             sic = normalize_sic(row.sic)
-            group = row.peer_group or (f"sic2:{sic[:2]}" if sic else None)
+            assigned_group = None if pd.isna(row.peer_group) else str(row.peer_group)
+            group = assigned_group or (f"sic2:{sic[:2]}" if sic else None)
             groups[row.symbol] = group
             if sic:
                 # A broad basket includes members whose own selected group is narrower.

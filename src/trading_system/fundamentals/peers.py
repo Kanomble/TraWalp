@@ -35,7 +35,8 @@ def assign_peer_groups(frame: pd.DataFrame, min_peer_count: int = 8) -> pd.DataF
     valid_sics = output["sic_normalized"].dropna()
     counts = {width: valid_sics.str[:width].value_counts().to_dict() for width in (4, 3, 2)}
 
-    def group_for(sic: str | None) -> str | None:
+    def group_for(value: object) -> str | None:
+        sic = normalize_sic(value)
         if sic is None:
             return None
         for width in (4, 3, 2):
