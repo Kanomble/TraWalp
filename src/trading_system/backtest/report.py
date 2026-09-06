@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 from collections import defaultdict
+from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
 
@@ -758,7 +759,7 @@ def _atomic_text(path: Path, text: str) -> None:
         raise
 
 
-def _atomic_csv(path: Path, rows: list[dict], fields: list[str]) -> None:
+def _atomic_csv(path: Path, rows: Iterable[dict], fields: list[str]) -> None:
     descriptor, temporary = tempfile.mkstemp(
         prefix=f".{path.name}.", dir=path.parent, text=True
     )

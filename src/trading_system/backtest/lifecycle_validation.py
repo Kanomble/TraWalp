@@ -184,7 +184,7 @@ class LifecycleResearchBundle:
     summary: dict
 
 
-def research_output_paths(directory: Path, stem: str, *, preflight=False):
+def research_output_paths(directory: Path, stem: str, *, preflight=False, daily_preflight=False):
     if not stem or Path(stem).name != stem or stem in {".", ".."}:
         raise ValueError("output-stem must be a plain file stem")
     names = (
@@ -192,6 +192,13 @@ def research_output_paths(directory: Path, stem: str, *, preflight=False):
         if preflight
         else ["summary.json", *[f"{name}.csv" for name in (*COMMON_TABLES, *DIAGNOSTIC_FIELDS)]]
     )
+    if daily_preflight:
+        names = [
+            "preflight.json",
+            "missing_symbol_sessions.csv",
+            "daily_requirements.csv",
+            "candidate_summary.csv",
+        ]
     paths = {name: directory / f"{stem}_{name}" for name in names}
     existing = [path for path in paths.values() if path.exists()]
     if existing:
@@ -199,7 +206,8 @@ def research_output_paths(directory: Path, stem: str, *, preflight=False):
     return paths
 
 
-def _prepare(database, config, start, end):
+def _qualify_daily_research(database, config, start, end):
+    """Shared frozen-control, warmup and portfolio-session qualification; no screens/run."""
     if not database.path.is_file():
         raise FileNotFoundError(f"Research requires an existing local database: {database.path}")
     _validate_frozen_control_config(config, start, end)
@@ -231,17 +239,43 @@ def _prepare(database, config, start, end):
     qualification = qualify_historical_screen_start(
         database, config, start, end, allow_start_shift=False
     )
+    official = trading_sessions_between(start, end)
+    missing = sorted(set(official) - set(database.bar_sessions(start, end)))
+    qualification["missing_portfolio_sessions"] = [session.isoformat() for session in missing]
+    if missing:
+        qualification["failure_reasons"].append(
+            "Daily research requires all requested portfolio sessions locally"
+        )
+    qualification["qualified"] = qualification["ready"] = not qualification["failure_reasons"]
+    qualification["failure_reason"] = "; ".join(qualification["failure_reasons"]) or None
+    return qualification
+
+
+def _prepare(database, config, start, end):
+    qualification = _qualify_daily_research(database, config, start, end)
     if qualification["failure_reasons"]:
         raise ValueError(
             "Daily qualification failed: " + "; ".join(qualification["failure_reasons"])
         )
-    official = trading_sessions_between(start, end)
-    if set(official) - set(database.bar_sessions(start, end)):
-        raise ValueError("Daily research requires all requested portfolio sessions locally")
     preparation = prepare_strategy_comparison(
         database, config, start, end, comparison_kind=StrategyComparisonKind.RESEARCH_CHAMPION_F
     )
     return preparation, qualification
+
+
+def iter_f_candidates(screen_source, config, sessions):
+    """Canonical PIT F eligibility/rank, before any allocation or future coverage checks."""
+    from trading_system.backtest.engine import evaluate_variant_entry
+
+    for signal, execution in zip(sessions[:-1], sessions[1:], strict=True):
+        records = []
+        for record in screen_source.screen(signal).records:
+            evaluation = evaluate_variant_entry(record, FROZEN_CHAMPION_F.variant, config)
+            if evaluation.eligible:
+                records.append((evaluation.score, record))
+        records.sort(key=lambda pair: (-pair[0], pair[1].symbol))
+        for rank, (_, record) in enumerate(records, 1):
+            yield signal, execution, rank, record
 
 
 def build_f_intraday_entry_preflight(
@@ -251,52 +285,43 @@ def build_f_intraday_entry_preflight(
     qualification = {}
     if preparation is None:
         preparation, qualification = _prepare(database, config, start, end)
-    # Keep eligibility/ranking in the engine's canonical evaluator.
-    from trading_system.backtest.engine import evaluate_variant_entry
-
-    sessions = preparation.sessions
     candidates, missing, checks = [], [], []
-    for signal, execution in zip(sessions[:-1], sessions[1:], strict=True):
-        records = []
-        for record in preparation.screen_source.screen(signal).records:
-            evaluation = evaluate_variant_entry(record, FROZEN_CHAMPION_F.variant, config)
-            if evaluation.eligible:
-                records.append((evaluation.score, record))
-        records.sort(key=lambda pair: (-pair[0], pair[1].symbol))
-        for rank, (_, record) in enumerate(records, 1):
-            opening, closing = regular_session_bounds(execution)
-            native = database.bars_between(
-                [record.symbol], opening, closing, timeframe=BarTimeframe.MINUTES_15
-            )
-            history = database.bars_available_as_of(record.symbol, signal, limit=1)
-            previous_close = (
-                float(history[-1].close)
-                if history and (history[-1].timestamp.date() == signal)
-                else None
-            )
-            decision = opening_weakness_decision(native, execution, previous_close)
-            gaps = missing_session_timestamps(native, execution)
-            unavailable = bool(gaps) or decision.status is EntryQualityStatus.UNAVAILABLE
-            row = {
-                "symbol": record.symbol,
-                "signal_date": signal.isoformat(),
-                "execution_session": execution.isoformat(),
-                "candidate_rank": rank,
-                "timeframe": "15m",
-                "candidate_paths": [F_INTRADAY_ENTRY_VARIANTS[1].label],
-                "requirement_type": "candidate_session",
-            }
-            candidates.append(row)
-            check = {
-                **row,
-                "status": "INTRADAY_UNAVAILABLE" if unavailable else "QUALIFIED",
-                "decision_status": decision.status.value,
-                "missing_timestamps": [t.isoformat() for t in gaps],
-                "reason": "incomplete_entry_session" if gaps else decision.reason,
-            }
-            checks.append(check)
-            if unavailable:
-                missing.append(check)
+    for signal, execution, rank, record in iter_f_candidates(
+        preparation.screen_source, config, preparation.sessions
+    ):
+        opening, closing = regular_session_bounds(execution)
+        native = database.bars_between(
+            [record.symbol], opening, closing, timeframe=BarTimeframe.MINUTES_15
+        )
+        history = database.bars_available_as_of(record.symbol, signal, limit=1)
+        previous_close = (
+            float(history[-1].close)
+            if history and (history[-1].timestamp.date() == signal)
+            else None
+        )
+        decision = opening_weakness_decision(native, execution, previous_close)
+        gaps = missing_session_timestamps(native, execution)
+        unavailable = bool(gaps) or decision.status is EntryQualityStatus.UNAVAILABLE
+        row = {
+            "symbol": record.symbol,
+            "signal_date": signal.isoformat(),
+            "execution_session": execution.isoformat(),
+            "candidate_rank": rank,
+            "timeframe": "15m",
+            "candidate_paths": [F_INTRADAY_ENTRY_VARIANTS[1].label],
+            "requirement_type": "candidate_session",
+        }
+        candidates.append(row)
+        check = {
+            **row,
+            "status": "INTRADAY_UNAVAILABLE" if unavailable else "QUALIFIED",
+            "decision_status": decision.status.value,
+            "missing_timestamps": [t.isoformat() for t in gaps],
+            "reason": "incomplete_entry_session" if gaps else decision.reason,
+        }
+        checks.append(check)
+        if unavailable:
+            missing.append(check)
     report = {
         "report_type": "local_f_intraday_entry_preflight",
         "local_only": True,

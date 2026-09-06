@@ -40,6 +40,10 @@ from trading_system.backtest.intraday_next import (
     annotate_intraday_next_coverage,
     export_intraday_next_comparison,
 )
+from trading_system.backtest.lifecycle_daily_preflight import (
+    build_f_lifecycle_daily_preflight,
+    export_f_lifecycle_daily_preflight,
+)
 from trading_system.backtest.lifecycle_validation import (
     build_f_intraday_entry_preflight,
     export_f_intraday_entry_preflight,
@@ -391,6 +395,7 @@ def _parser() -> argparse.ArgumentParser:
     regime_capacity_research.add_argument("--output-stem", required=True)
     for name, description in (
         ("validate-f-lifecycle-v2", "Local F/configured lifecycle L0-L6 and canonical cost reruns"),
+        ("preflight-f-lifecycle-daily", "Local F lifecycle Daily execution coverage"),
         ("preflight-f-intraday-entry", "Local F candidate discovery and native entry coverage"),
         ("validate-f-intraday-entry", "Qualified local F entry-quality comparison I0/I1"),
     ):
@@ -496,15 +501,30 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command in {
         "validate-f-lifecycle-v2",
+        "preflight-f-lifecycle-daily",
         "preflight-f-intraday-entry",
         "validate-f-intraday-entry",
     }:
         # Research reads an existing local database; it must not initialize/migrate business data.
         try:
             preflight = args.command == "preflight-f-intraday-entry"
+            daily_preflight = args.command == "preflight-f-lifecycle-daily"
             directory = settings.strategy.storage.reports_path
-            research_output_paths(directory, args.output_stem, preflight=preflight)
-            if preflight:
+            research_output_paths(
+                directory, args.output_stem, preflight=preflight, daily_preflight=daily_preflight
+            )
+            if daily_preflight:
+                bundle = build_f_lifecycle_daily_preflight(
+                    database, settings.strategy, args.start, args.end
+                )
+                paths = export_f_lifecycle_daily_preflight(bundle, directory, stem=args.output_stem)
+                print(
+                    "Local Daily preflight: "
+                    f"qualified={bundle.report['lifecycle_daily_qualified']}; "
+                    f"candidates={bundle.report['candidate_count']}; "
+                    f"missing symbol-sessions={bundle.report['missing_symbol_sessions']}"
+                )
+            elif preflight:
                 report, requirements = build_f_intraday_entry_preflight(
                     database, settings.strategy, args.start, args.end
                 )
@@ -528,6 +548,8 @@ def main(argv: list[str] | None = None) -> int:
                     f"{len(bundle.results)} fixed variants; frozen champion unchanged."
                 )
             print("\n".join(f"{name}: {path}" for name, path in paths.items()))
+            if daily_preflight and not bundle.report["lifecycle_daily_qualified"]:
+                return 1
         except (OSError, ValueError) as exc:
             print(f"F lifecycle/entry research refused: {exc}", file=sys.stderr)
             return 1
