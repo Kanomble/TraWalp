@@ -52,6 +52,7 @@ from trading_system.backtest.position_manager import (
     PositionState,
 )
 from trading_system.backtest.presets import position_management_preset
+from trading_system.backtest.progress import ProgressPhase
 from trading_system.backtest.research_registry import (
     RESEARCH_FAMILY_RUNS,
     STRATEGY_RESEARCH_REGISTRY,
@@ -407,6 +408,7 @@ class BacktestEngine:
         entry_context_observer: Callable | None = None,
         execution_context_observer: Callable | None = None,
         require_complete_daily_position_bars: bool = False,
+        progress: ProgressPhase | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.database = database
@@ -423,6 +425,7 @@ class BacktestEngine:
         self.entry_context_observer = entry_context_observer
         self.execution_context_observer = execution_context_observer
         self.require_complete_daily_position_bars = require_complete_daily_position_bars
+        self.progress = progress
         self.entry_quality_events: list[dict] = []
         self.clock = clock
         self.position_management = config.position_management
@@ -514,6 +517,11 @@ class BacktestEngine:
         self._entry_capacity_trace_by_session: dict[date, EntryCapacityTrace] = {}
         self._entry_capacity_traces_by_execution: dict[date, list[EntryCapacityTrace]] = {}
         sessions = _backtest_sessions(self.database, start, end)
+        if self.progress:
+            self.progress.update(
+                sessions_processed=0, sessions_total=len(sessions),
+                positions_closed=0, active_positions=0,
+            )
 
         cash = float(self.config.backtest.initial_capital)
         positions: dict[str, PositionState] = {}
@@ -1339,6 +1347,12 @@ class BacktestEngine:
                     unrealized_pnl=unrealized_pnl,
                 )
             )
+
+            if self.progress:
+                self.progress.update(
+                    session=session.isoformat(), sessions_processed=index + 1,
+                    positions_closed=len(completed_positions), active_positions=len(positions),
+                )
 
         warnings = list(BACKTEST_WARNINGS)
         if intraday_monitoring:

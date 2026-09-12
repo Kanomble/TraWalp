@@ -550,6 +550,14 @@ def main(argv: list[str] | None = None) -> int:
             print("\n".join(f"{name}: {path}" for name, path in paths.items()))
             if daily_preflight and not bundle.report["lifecycle_daily_qualified"]:
                 return 1
+        except KeyboardInterrupt:
+            label = (
+                "Intraday entry preflight" if args.command == "preflight-f-intraday-entry"
+                else "F intraday entry validation" if args.command == "validate-f-intraday-entry"
+                else "F lifecycle research"
+            )
+            logging.getLogger(__name__).info("%s interrupted by user", label)
+            return 130
         except (OSError, ValueError) as exc:
             print(f"F lifecycle/entry research refused: {exc}", file=sys.stderr)
             return 1

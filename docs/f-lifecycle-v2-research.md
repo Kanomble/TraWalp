@@ -142,6 +142,32 @@ is qualified data; missing required data is `INTRADAY_UNAVAILABLE`, never a pass
 The validation runner repeats qualification and refuses an incomplete dataset. A direct
 engine fixture explicitly skips unavailable signals and records the status.
 
+Both intraday commands log phase starts and completions at INFO level. During a long phase,
+`intraday_preflight_progress` / `intraday_validation_progress` emits a heartbeat every 1,800
+seconds measured with `time.monotonic()`, including while a single query or preparation call
+is still running. Counters describe completed work; an unchanged counter during a heartbeat
+means that operation has not returned. Candidate discovery counts signal sessions (including
+sessions with no candidates); I0/I1 backtests count portfolio sessions. Percentages are bounded
+at 100 and omitted for unknown or empty totals. There is no per-session or per-candidate log.
+
+The final timing summary and JSON `performance` object contain stage durations and workload
+counters. Validation's `coverage_verification_seconds` includes its nested discovery, load and
+evaluation timings, so those fields must not be summed again. `diagnostics_seconds` includes
+preparing the peer context and building the final diagnostic tables. Coverage currently loads
+one requirement per candidate-session: `coverage_batches` counts those requirements and
+`sqlite_query_count_coverage` counts both native intraday and preceding Daily data SELECTs.
+`daily_rows_loaded` reuses the screen source's loaded-bar counter plus coverage Daily rows;
+`coverage_daily_rows_loaded` isolates the latter. These are loaded rows, not distinct rows.
+
+Persisted `export_seconds` and `total_seconds` are measured through payload staging; the
+`export_timing_scope` field identifies this boundary. Final timing-metadata writing and atomic
+publication occur after that snapshot and are included in the export phase completion log
+and final terminal timing summary (`export_timing_scope=through_publication`).
+All reports are staged together, then the summary is published last. Ctrl+C exits with status
+130, stops heartbeat workers, and removes this run's staged or partially published files.
+Previously completed reports remain protected by the fresh-output-stem check. Instrumentation
+does not change F ranking, I0/I1 decisions, coverage rules, or research CSV contents.
+
 ## 8. Overnight gaps
 
 `*_entry_gap_analysis.csv` includes all eligible potential entries, selection/execution status,
