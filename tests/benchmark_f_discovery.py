@@ -69,18 +69,20 @@ def compare_discovery(sessions_count, companies_count):
             candidate.technical = candidate.technical.model_copy(update={"sma20_rising": False})
     results, expected = {}, None
     for reference in (True, False):
-        source = FixtureSource(candidates, config, reference=reference)
-        cached = CachedScreenSource(source)
+        source = FixtureSource(candidates, config)
         if reference:
-            # Exercise the original discovery architecture, including its full-report cache.
-            class ReferenceCache:
-                def screen(self, session, cached=cached):
-                    return cached.screen(session)
+            # Isolate peer preparation: both runs use the same streaming F discovery,
+            # scoring, replay and cache behavior. Only this run uses the DataFrame oracle.
+            def dataframe_peer_index(prepared, screener=source.screener):
+                started = perf_counter()
+                table = screener._peer_table(prepared)
+                screener.diagnostics.peer_table_seconds += perf_counter() - started
+                screener.diagnostics.peer_table_rows += len(table)
+                return screener._peer_index(table)
 
-            discovery_source = ReferenceCache()
-        else:
-            discovery_source = cached
-        spool = None if reference else ReplaySpool()
+            source.screener._f_peer_index = dataframe_peer_index
+        cached = CachedScreenSource(source)
+        spool = ReplaySpool()
         started = perf_counter()
         values = [
             (
@@ -91,7 +93,7 @@ def compare_discovery(sessions_count, companies_count):
                 record.scores.model_dump(),
             )
             for signal, execution, rank, record in iter_f_candidates(
-                discovery_source,
+                cached,
                 config,
                 sessions,
                 replay_spool=spool,
@@ -101,13 +103,13 @@ def compare_discovery(sessions_count, companies_count):
         label = "reference" if reference else "optimized"
         results[label] = {
             "elapsed_seconds": elapsed,
+            "candidate_discovery_seconds": source.discovery_diagnostics.screen_session_seconds,
             "candidate_count": len(values),
             "full_screen_cache_size": len(cached.cache),
             "discovery_diagnostics": source.discovery_diagnostics.as_dict(),
-            "replay_bytes": spool.file.tell() if spool else 0,
+            "replay_bytes": spool.file.tell(),
         }
-        if spool:
-            spool.file.close()
+        spool.file.close()
         if reference:
             expected = values
         else:
@@ -122,6 +124,16 @@ def compare_discovery(sessions_count, companies_count):
         companies=companies_count,
         speedup=results["reference"]["elapsed_seconds"] / results["optimized"]["elapsed_seconds"],
         exact_candidate_equality=True,
+        peer_preparation_speedup=(
+            sum(
+                results["reference"]["discovery_diagnostics"][key]
+                for key in ("peer_table_seconds", "peer_group_lookup_seconds")
+            )
+            / sum(
+                results["optimized"]["discovery_diagnostics"][key]
+                for key in ("peer_table_seconds", "peer_group_lookup_seconds")
+            )
+        ),
     )
     return results
 

@@ -336,11 +336,7 @@ class HistoricalFeatureScreenSource:
         diagnostics.candidate_prepare_seconds += time.perf_counter() - started
         diagnostics.companies_processed += len(self._companies) + len(self._conflicted)
         diagnostics.prepared_candidates += len(prepared)
-        peer_started = time.perf_counter()
-        table = self.screener._peer_table(prepared)
-        diagnostics.peer_table_seconds += time.perf_counter() - peer_started
-        diagnostics.peer_table_rows += len(table)
-        peers = self.screener._peer_index(table)
+        peers = self.screener._f_peer_index(prepared)
         eligible, rejected, screen_ranks = [], [], []
         omitted = Counter()
         for candidate in prepared:

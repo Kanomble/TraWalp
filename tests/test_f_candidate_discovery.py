@@ -23,7 +23,7 @@ from trading_system.backtest.lifecycle_validation import iter_f_candidates
 from trading_system.backtest.research_registry import FROZEN_CHAMPION_F
 from trading_system.config import load_settings
 from trading_system.data.database import Database
-from trading_system.models.fundamentals import CompanyIdentity
+from trading_system.models.fundamentals import CompanyIdentity, FundamentalMetrics
 from trading_system.strategy.scoring import PeerPercentiles, percentile_score
 from trading_system.strategy.screener import Screener
 
@@ -89,6 +89,84 @@ def test_full_screen_peer_scores_and_ranks_are_exact():
     }
 
 
+@pytest.mark.parametrize("session_offset", range(3))
+def test_direct_peer_index_groups_medians_percentiles_and_scores_are_exact(session_offset):
+    config = config_for_fixture()
+    session = date(2024, 8, 1) + timedelta(days=session_offset)
+    candidates = varied_cross_section()
+    # Keep the varied fixture's SIC4/3/2 fallbacks and insufficient/missing SICs.
+    # Rotate missing values, invalid multiples and ties through each selected group.
+    multiples = [None, float("nan"), -1.0, 0.0, 1.0, 4.0, 4.0, 20.0]
+    quality = [None, float("nan"), -0.4, 0.0, 0.2, 0.2, 0.2, 0.6]
+    for i, candidate in enumerate(candidates):
+        candidate.analysis_date = session
+        candidate.fundamentals = candidate.fundamentals.model_copy(
+            update={
+                **{
+                    metric: multiples[(i + session_offset) % len(multiples)]
+                    for metric in ("pe", "ev_to_ebitda", "ev_to_ebit")
+                },
+                **{
+                    metric: quality[(i + session_offset) % len(quality)]
+                    for metric in ("revenue_growth", "eps_growth", "roic", "fcf_yield")
+                },
+            }
+        )
+    screener = Screener(Database("unused"), config)
+    reference = screener._peer_index(screener._peer_table(candidates))
+    direct = screener._f_peer_index(candidates)
+    assert direct.by_symbol == reference.by_symbol
+    assert direct.by_group == reference.by_group  # Exact winsorized, sorted float tuples.
+    assert {group for group, _ in direct.by_symbol.values()} == {
+        "sic4:3571",
+        "sic3:357",
+        "sic2:35",
+        None,
+    }
+    # Median availability counts the final selected group, not all SIC prefix peers.
+    assert direct.by_symbol["S0014"][1]["pe"] is None
+    for candidate in candidates:
+        before, old_group, old_medians = screener._score_inputs(candidate, reference)
+        after, group, medians = screener._score_inputs(candidate, direct)
+        assert (group, medians) == (old_group, old_medians)
+        # JSON also compares all factor evidence while representing raw NaNs consistently.
+        assert after.scores.model_dump_json() == before.scores.model_dump_json()
+        assert after.exclusion_reasons == before.exclusion_reasons
+        assert evaluate_variant_entry(after, FROZEN_CHAMPION_F.variant, config) == (
+            evaluate_variant_entry(before, FROZEN_CHAMPION_F.variant, config)
+        )
+    source = FixtureSource(candidates, config)
+    report = source.screen(session)
+    expected = sorted(
+        (evaluation.score, record.symbol, record.rank)
+        for record in report.records
+        if (
+            evaluation := evaluate_variant_entry(record, FROZEN_CHAMPION_F.variant, config)
+        ).eligible
+    )
+    actual = source.f_candidates(session, config)
+    assert sorted((score, r.symbol, r.rank) for score, r in actual.records) == expected
+
+
+@pytest.mark.parametrize("case", ["empty", "excluded", "missing_sic", "normalized_sic"])
+def test_direct_peer_index_empty_and_sic_edge_cases(case):
+    candidates = cross_section(8) if case != "empty" else []
+    for i, candidate in enumerate(candidates):
+        if case == "excluded":
+            candidate.base_exclusions = ["insufficient_liquidity"]
+        else:
+            sics = (
+                [None, float("nan"), pd.NA, "", "bad", "12345", "35.1", "-35"]
+                if case == "missing_sic"
+                else [" 7 ", "7", "0007", "007"] * 2
+            )
+            candidate.company = candidate.company.model_copy(update={"sic": sics[i]})
+    screener = Screener(Database("unused"), config_for_fixture())
+    assert screener._f_peer_index(candidates) == screener._peer_index(
+        screener._peer_table(candidates)
+    )
+
+
 def test_f_stream_evaluations_scores_reasons_order_and_count_are_exact():
     config = config_for_fixture()
     sessions = [date(2024, 8, 1) + timedelta(days=i) for i in range(6)]
@@ -124,15 +202,11 @@ def test_f_stream_evaluations_scores_reasons_order_and_count_are_exact():
 def test_no_candidate_dataframe_scans_or_non_f_record_construction(monkeypatch):
     config = config_for_fixture()
     source = FixtureSource(varied_cross_section(), config)
-    original_index = source.screener._peer_index
     materialized = []
     original_materialize = source.screener._materialize
 
-    def index(frame):
-        result = original_index(frame)
-        # Any candidate-level DataFrame operation now fails, after session preparation.
-        monkeypatch.setattr(pd.DataFrame, "loc", property(lambda _: pytest.fail("candidate scan")))
-        return result
+    def forbidden(*args, **kwargs):
+        pytest.fail("F discovery must not construct/scan a peer DataFrame or dump fundamentals")
 
     def materialize(*args):
         record = original_materialize(*args)
@@ -140,7 +214,11 @@ def test_no_candidate_dataframe_scans_or_non_f_record_construction(monkeypatch):
         assert evaluate_variant_entry(record, FROZEN_CHAMPION_F.variant, config).eligible
         return record
 
-    monkeypatch.setattr(source.screener, "_peer_index", index)
+    monkeypatch.setattr(source.screener, "_peer_table", forbidden)
+    monkeypatch.setattr(source.screener, "_peer_index", forbidden)
+    monkeypatch.setattr(pd.DataFrame, "__init__", forbidden)
+    monkeypatch.setattr(pd.DataFrame, "loc", property(forbidden))
+    monkeypatch.setattr(FundamentalMetrics, "model_dump", forbidden)
     monkeypatch.setattr(source.screener, "_materialize", materialize)
     result = source.f_candidates(date(2024, 8, 1), config)
     assert set(materialized) == {record.symbol for _, record in result.records}

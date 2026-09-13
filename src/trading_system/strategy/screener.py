@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from statistics import median
 from time import perf_counter
 from typing import Any
 
 import pandas as pd
 
-from trading_system.config import StrategyConfig
+from trading_system.config import ScoreConfig, StrategyConfig
 from trading_system.data.database import Database
 from trading_system.data.market_sessions import (
     effective_trading_session,
@@ -25,7 +27,7 @@ from trading_system.data.universe import (
     is_reit,
     passes_universe_filters,
 )
-from trading_system.fundamentals.peers import assign_peer_groups, peer_diagnostics
+from trading_system.fundamentals.peers import assign_peer_groups, normalize_sic, peer_diagnostics
 from trading_system.fundamentals.quality import analyze_fundamentals
 from trading_system.models.fundamentals import CompanyIdentity, FundamentalMetrics
 from trading_system.models.market_data import DailyBar
@@ -93,6 +95,86 @@ class ScoredCandidate:
 class PeerIndex:
     by_symbol: dict[str, tuple[str | None, dict[str, float | None]]]
     by_group: dict[str, dict[str, PeerPercentiles]]
+
+
+def build_peer_index_from_prepared(
+    prepared: list[_PreparedCandidate],
+    min_peer_count: int,
+    score_config: ScoreConfig,
+    *,
+    diagnostics: DiscoveryDiagnostics,
+) -> PeerIndex:
+    """F-only equivalent of _peer_table -> _peer_index, without a peer DataFrame.
+
+    Prefix counts include every participating row. Statistics include only members
+    assigned the SAME selected label, exactly like canonical groupby(peer_group).
+    No cross-session state or prepared fundamentals serialization is needed.
+    """
+    started = perf_counter()
+    participating = [candidate for candidate in prepared if not candidate.base_exclusions]
+    sics = [normalize_sic(candidate.company.sic) for candidate in participating]
+    counts = {width: Counter(sic[:width] for sic in sics if sic is not None) for width in (4, 3, 2)}
+    selected, grouped = [], defaultdict(list)
+    for candidate, sic in zip(participating, sics, strict=True):
+        group = (
+            next(
+                (
+                    f"sic{width}:{sic[:width]}"
+                    for width in (4, 3, 2)
+                    if counts[width][sic[:width]] >= min_peer_count
+                ),
+                None,
+            )
+            if sic
+            else None
+        )
+        selected.append((candidate.company.symbol, group))
+        if group is not None:
+            grouped[group].append(candidate.fundamentals)
+
+    metrics = tuple(dict.fromkeys((*INDUSTRY_METRICS, *PEER_VALUE_METRICS)))
+    values_by_group, medians_by_group = {}, {}
+    for group, fundamentals in grouped.items():
+        values = {
+            metric: tuple(_optional_float(getattr(row, metric)) for row in fundamentals)
+            for metric in metrics
+        }
+        values_by_group[group] = values
+        medians = {}
+        for metric in INDUSTRY_METRICS:
+            valid = [
+                value
+                for value in values[metric]
+                if value is not None
+                and (metric not in {"pe", "ev_to_ebitda", "ev_to_ebit"} or value > 0)
+            ]
+            medians[metric] = (
+                _optional_float(median(valid)) if len(valid) >= min_peer_count else None
+            )
+        medians_by_group[group] = medians
+    unavailable = {metric: None for metric in INDUSTRY_METRICS}
+    by_symbol = {}
+    for symbol, group in selected:
+        by_symbol.setdefault(symbol, (group, medians_by_group.get(group, unavailable)))
+    diagnostics.peer_table_rows += len(participating)
+    diagnostics.peer_table_seconds += perf_counter() - started
+
+    started = perf_counter()
+    by_group, percentiles_by_values = {}, {}
+    for group, values in values_by_group.items():
+        peers = {}
+        for metric in PEER_VALUE_METRICS:
+            vector = values[metric]
+            if sum(value is not None for value in vector) < min_peer_count:
+                vector = ()
+            # Same ordered inputs + same session config => the same frozen result.
+            # Preserve canonical winsorization, including NaNs, interpolation and ties.
+            if vector not in percentiles_by_values:
+                percentiles_by_values[vector] = PeerPercentiles.prepare(vector, score_config)
+            peers[metric] = percentiles_by_values[vector]
+        by_group[group] = peers
+    diagnostics.peer_group_lookup_seconds += perf_counter() - started
+    return PeerIndex(by_symbol, by_group)
 
 
 class Screener:
@@ -491,6 +573,14 @@ class Screener:
             by_group[str(name)] = metrics
         self.diagnostics.peer_group_lookup_seconds += perf_counter() - started
         return PeerIndex(by_symbol, by_group)
+
+    def _f_peer_index(self, prepared: list[_PreparedCandidate]) -> PeerIndex:
+        return build_peer_index_from_prepared(
+            prepared,
+            self.config.peers.min_peer_count,
+            self.config.scores,
+            diagnostics=self.diagnostics,
+        )
 
     def _score_inputs(self, candidate: _PreparedCandidate, peers: PeerIndex):
         started = perf_counter()
