@@ -266,6 +266,7 @@ Der empfohlene Tagesablauf lautet:
 ```bash
 # nachts / morgens
 python -m trading_system.cli sync --incremental
+python -m trading_system.cli sync-assets
 python -m trading_system.cli update-bars
 
 # kurz vor dem Screening
@@ -788,6 +789,10 @@ Neue isolierte F-Research-Runden: `validate-f-lifecycle-v2` (L0–L6) und
 configured Daily Management; Frozen Champion und Regime-Capacity bleiben unverändert.
 Historische Ergebnisse sind DEVELOPMENT / RESEARCH. Details, Datenqualifikation, Reports und
 manuelle Befehle: [Lifecycle V2](docs/f-lifecycle-v2-research.md).
+Der Intraday-Preflight exportiert jetzt ein kompatibilitätsgeprüftes Kandidatenmanifest mit
+einer gestreamten Replay-Datei. `validate-f-intraday-entry --candidate-manifest <pfad>` verwendet
+beide Dateien ohne erneutes historisches Screening. Architektur, Messwerte und aktuelle Befehle:
+[F Candidate Discovery Performance](docs/f-candidate-discovery-performance.md).
 Der [Research-Code-Audit](docs/research-code-audit.md) dokumentiert die erhaltenen historischen
 Pfade und die zurückgestellten Cleanup-Kandidaten.
 

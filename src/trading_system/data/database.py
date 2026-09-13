@@ -467,8 +467,7 @@ class Database:
             else:
                 valid.append(bar)
         unique = {
-            (bar.symbol.upper(), bar.timeframe.value, _iso(bar.timestamp)): bar
-            for bar in valid
+            (bar.symbol.upper(), bar.timeframe.value, _iso(bar.timestamp)): bar for bar in valid
         }
         rows = [
             (
@@ -514,9 +513,7 @@ class Database:
                 for row in existing_rows
             }
             incoming_values = {(row[0], row[1], row[2]): tuple(row[3:]) for row in rows}
-            updated = sum(
-                existing_values[key] != incoming_values[key] for key in existing_values
-            )
+            updated = sum(existing_values[key] != incoming_values[key] for key in existing_values)
             existing = len(existing_rows)
             connection.executemany(
                 """INSERT INTO bars VALUES (?,?,?,?,?,?,?,?,?,?)
@@ -687,6 +684,67 @@ class Database:
             ).fetchall()
         return [_bar_from_row(row) for row in rows]
 
+    def iter_entry_coverage_batches(self, requirements, *, batch_size=200):
+        """Two SELECTs per bounded batch of exact (symbol, signal, execution) requirements.
+
+        VALUES joins use the existing symbol/timeframe/timestamp index. Never fetch
+        a symbol's unrestricted history; missing previous-session closes stay missing.
+        """
+        from trading_system.data.market_sessions import regular_session_bounds
+
+        if batch_size < 1 or batch_size > 200:
+            raise ValueError("coverage batch_size must be between 1 and 200")
+        unique = sorted(set(requirements))
+        with self.read_only() as connection:
+            connection.execute("BEGIN")
+            for offset in range(0, len(unique), batch_size):
+                batch = unique[offset : offset + batch_size]
+                placeholders = ",".join("(?,?,?,?)" for _ in batch)
+                native_parameters, daily_parameters = [], []
+                native, previous = {}, {}
+                for symbol, signal, execution in batch:
+                    opening, closing = regular_session_bounds(execution)
+                    native_parameters.extend(
+                        (symbol, execution.isoformat(), _iso(opening), _iso(closing))
+                    )
+                    daily_parameters.extend(
+                        (
+                            symbol,
+                            signal.isoformat(),
+                            signal.isoformat(),
+                            (signal + timedelta(days=1)).isoformat(),
+                        )
+                    )
+                    native[symbol, execution] = []
+                    previous[symbol, signal] = None
+                native_rows = connection.execute(
+                    f"""WITH requirements(symbol,session,start,end) AS (VALUES {placeholders})
+                    SELECT bars.*,requirements.session AS required_session
+                    FROM requirements JOIN bars ON bars.symbol=requirements.symbol
+                    AND bars.timeframe='15m' AND bars.timestamp>=requirements.start
+                    AND bars.timestamp<requirements.end
+                    ORDER BY bars.timestamp,bars.symbol""",
+                    native_parameters,
+                ).fetchall()
+                daily_rows = connection.execute(
+                    f"""WITH requirements(symbol,session,start,end) AS (VALUES {placeholders})
+                    SELECT bars.*,requirements.session AS required_session
+                    FROM requirements JOIN bars ON bars.symbol=requirements.symbol
+                    AND bars.timeframe='1d' AND bars.timestamp>=requirements.start
+                    AND bars.timestamp<requirements.end
+                    ORDER BY bars.timestamp,bars.symbol""",
+                    daily_parameters,
+                ).fetchall()
+                for row in native_rows:
+                    native[row["symbol"], date.fromisoformat(row["required_session"])].append(
+                        _bar_from_row(row)
+                    )
+                for row in daily_rows:
+                    previous[row["symbol"], date.fromisoformat(row["required_session"])] = float(
+                        row["close"]
+                    )
+                yield native, previous, len(native_rows), len(daily_rows)
+
     def bar_bounds(
         self,
         symbol: str,
@@ -741,7 +799,7 @@ class Database:
             rows = connection.execute(
                 f"""SELECT symbol,MIN(timestamp) AS first_timestamp,
                 MAX(timestamp) AS last_timestamp FROM bars
-                WHERE {' AND '.join(clauses)} GROUP BY symbol""",
+                WHERE {" AND ".join(clauses)} GROUP BY symbol""",
                 parameters,
             ).fetchall()
         return {
@@ -1312,9 +1370,7 @@ def _bar_from_row(row: sqlite3.Row) -> DailyBar:
 def _migrate_daily_bars(connection: sqlite3.Connection) -> None:
     """Migrate the legacy daily-only table once and retain a read compatibility view."""
 
-    legacy = connection.execute(
-        "SELECT type FROM sqlite_master WHERE name='daily_bars'"
-    ).fetchone()
+    legacy = connection.execute("SELECT type FROM sqlite_master WHERE name='daily_bars'").fetchone()
     if legacy is not None and legacy["type"] == "table":
         legacy_count = int(connection.execute("SELECT COUNT(*) FROM daily_bars").fetchone()[0])
         connection.execute(

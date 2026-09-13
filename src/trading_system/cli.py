@@ -403,6 +403,18 @@ def _parser() -> argparse.ArgumentParser:
         research.add_argument("--start", type=date.fromisoformat, required=True)
         research.add_argument("--end", type=date.fromisoformat, required=True)
         research.add_argument("--output-stem", required=True)
+        if name == "validate-f-intraday-entry":
+            discovery = research.add_mutually_exclusive_group(required=True)
+            discovery.add_argument(
+                "--candidate-manifest",
+                type=Path,
+                help="Reuse the compatible intraday_candidates.json from preflight",
+            )
+            discovery.add_argument(
+                "--rediscover-candidates",
+                action="store_true",
+                help="Explicitly repeat local historical candidate discovery",
+            )
     universe_audit = commands.add_parser(
         "audit-universe-provenance",
         help="Report local historical-universe evidence without fetching data",
@@ -541,7 +553,15 @@ def main(argv: list[str] | None = None) -> int:
                     if args.command == "validate-f-lifecycle-v2"
                     else run_f_intraday_entry
                 )
-                bundle = runner(database, settings.strategy, args.start, args.end)
+                kwargs = (
+                    {
+                        "candidate_manifest": args.candidate_manifest,
+                        "rediscover_candidates": args.rediscover_candidates,
+                    }
+                    if args.command == "validate-f-intraday-entry"
+                    else {}
+                )
+                bundle = runner(database, settings.strategy, args.start, args.end, **kwargs)
                 paths = export_f_lifecycle_research(bundle, directory, stem=args.output_stem)
                 print(
                     f"{bundle.family}: DEVELOPMENT / RESEARCH; "
@@ -552,8 +572,10 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
         except KeyboardInterrupt:
             label = (
-                "Intraday entry preflight" if args.command == "preflight-f-intraday-entry"
-                else "F intraday entry validation" if args.command == "validate-f-intraday-entry"
+                "Intraday entry preflight"
+                if args.command == "preflight-f-intraday-entry"
+                else "F intraday entry validation"
+                if args.command == "validate-f-intraday-entry"
                 else "F lifecycle research"
             )
             logging.getLogger(__name__).info("%s interrupted by user", label)

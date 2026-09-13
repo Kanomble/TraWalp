@@ -366,8 +366,14 @@ After manual data qualification/synchronization with the existing intraday infra
 .\.venv\Scripts\python.exe -m trading_system.cli validate-f-intraday-entry `
   --start 2022-01-03 `
   --end 2026-08-12 `
+  --candidate-manifest .\reports\f_intraday_entry_preflight_2022-01-03_2026-08-12_v1_intraday_candidates.json `
   --output-stem f_intraday_entry_2022-01-03_2026-08-12_v1
 ```
 
 The task's command names are implemented exactly. Preflight itself is a potentially long local
 candidate-discovery job and is therefore also left to the user for the full historical period.
+
+Validation now requires a compatible candidate manifest and its sibling replay file, or an
+explicit `--rediscover-candidates`. Earlier manifests lacking fingerprints must be regenerated.
+See [candidate discovery performance](f-candidate-discovery-performance.md) for the bounded
+cache, peer-statistics reuse, exact coverage batching, and current benchmark/verification report.

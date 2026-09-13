@@ -7,6 +7,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from time import perf_counter
 from typing import Any
 
 import pandas as pd
@@ -31,7 +32,9 @@ from trading_system.models.market_data import DailyBar
 from trading_system.models.scores import ScoreBreakdown, StockScores
 from trading_system.models.screening import MarketDebug, PeerDebug, ScreenRecord, ScreenReport
 from trading_system.models.signals import TechnicalSnapshot
+from trading_system.strategy.performance import DiscoveryDiagnostics
 from trading_system.strategy.scoring import (
+    PeerPercentiles,
     combine_scores,
     score_opportunity,
     score_quality,
@@ -77,12 +80,28 @@ class _PreparedCandidate:
     latest_pit_period_end: date | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ScoredCandidate:
+    """The canonical entry evaluator needs only these three fields."""
+
+    scores: StockScores
+    technical: TechnicalSnapshot
+    exclusion_reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PeerIndex:
+    by_symbol: dict[str, tuple[str | None, dict[str, float | None]]]
+    by_group: dict[str, dict[str, PeerPercentiles]]
+
+
 class Screener:
     """Calculate an explainable cross-sectional screen from local point-in-time data."""
 
     def __init__(self, database: Database, config: StrategyConfig) -> None:
         self.database = database
         self.config = config
+        self.diagnostics = DiscoveryDiagnostics()
 
     def run(
         self,
@@ -127,8 +146,13 @@ class Screener:
     ) -> ScreenReport:
         """Score a prepared PIT cross-section using the canonical peer/ranking logic."""
 
+        started = perf_counter()
         peer_table = self._peer_table(prepared)
-        records = [self._score(candidate, peer_table) for candidate in prepared]
+        self.diagnostics.peer_table_seconds += perf_counter() - started
+        self.diagnostics.peer_table_rows += len(peer_table)
+        peer_index = self._peer_index(peer_table)
+        records = [self._score(candidate, peer_index) for candidate in prepared]
+        started = perf_counter()
         records.extend(
             self._identity_conflict_record(company, market_session)
             for company in conflicted_companies
@@ -155,7 +179,7 @@ class Screener:
                 record.symbol,
             )
         )
-        return ScreenReport(
+        report = ScreenReport(
             as_of=market_session,
             requested_as_of=requested_as_of,
             effective_market_session=market_session,
@@ -168,6 +192,9 @@ class Screener:
             ),
             records=tuple(ranked),
         )
+        self.diagnostics.report_construction_seconds += perf_counter() - started
+        self.diagnostics.eligible_screen_records += len(eligible)
+        return report
 
     def debug_peers(
         self, symbol: str, as_of: date, *, now: datetime | None = None
@@ -193,6 +220,7 @@ class Screener:
     def _identity_conflict_record(
         self, company: CompanyIdentity, market_session: date
     ) -> ScreenRecord:
+        view = self._identity_conflict_inputs()
         return ScreenRecord(
             symbol=company.symbol,
             name=company.name,
@@ -202,13 +230,21 @@ class Screener:
             exclusion_reasons=("identity_conflict",),
             data_warnings=("unresolved_current_issuer_identity",),
             fundamentals=FundamentalMetrics(),
-            technical=TechnicalSnapshot(),
+            technical=view.technical,
+            scores=view.scores,
+        )
+
+    @staticmethod
+    def _identity_conflict_inputs() -> ScoredCandidate:
+        return ScoredCandidate(
             scores=StockScores(
                 quality=_unavailable_score("quality"),
                 valuation=_unavailable_score("valuation"),
                 opportunity=_unavailable_score("opportunity"),
                 timing=_unavailable_score("timing"),
             ),
+            technical=TechnicalSnapshot(),
+            exclusion_reasons=("identity_conflict",),
         )
 
     def debug_market(self, symbol: str, as_of: date, *, now: datetime | None = None) -> MarketDebug:
@@ -277,9 +313,7 @@ class Screener:
             )
             snapshot_price_selected = False
             snapshot_timestamp = (
-                market_snapshot.latest_trade_timestamp
-                if market_snapshot is not None
-                else None
+                market_snapshot.latest_trade_timestamp if market_snapshot is not None else None
             )
             snapshot_timestamp_utc = (
                 snapshot_timestamp.astimezone(UTC)
@@ -350,9 +384,7 @@ class Screener:
                 market_history_count=len(bars),
                 pit_fact_count=len(facts),
                 estimated_market_cap=(
-                    float(fundamentals.market_cap)
-                    if fundamentals.market_cap is not None
-                    else None
+                    float(fundamentals.market_cap) if fundamentals.market_cap is not None else None
                 ),
                 latest_pit_filing_date=latest_fact.filed if latest_fact else None,
                 latest_pit_period_end=latest_fact.period_end if latest_fact else None,
@@ -411,6 +443,8 @@ class Screener:
         if frame.empty:
             return pd.DataFrame(columns=[*columns, "peer_group"])
         output = assign_peer_groups(frame, self.config.peers.min_peer_count)
+        if not LOGGER.isEnabledFor(logging.DEBUG):
+            return output
         for sic in output["sic_normalized"].dropna().unique():
             diagnostic = peer_diagnostics(output, "*", str(sic), self.config.peers.min_peer_count)
             logged_group = diagnostic.selected_group or f"sic2:{str(sic)[:2]} (insufficient)"
@@ -432,40 +466,65 @@ class Screener:
             )
         return output
 
-    def _score(self, candidate: _PreparedCandidate, peer_table: pd.DataFrame) -> ScreenRecord:
-        # Base-excluded candidates are intentionally absent from ``peer_table``.
-        # Avoid an O(peer rows) DataFrame scan for thousands of already rejected
-        # symbols on every historical session; their score inputs remain exactly
-        # the same empty-peer context as before.
-        peer_row = (
-            peer_table.iloc[0:0]
-            if candidate.base_exclusions
-            else peer_table.loc[peer_table["symbol"] == candidate.company.symbol]
+    def _peer_index(self, peer_table: pd.DataFrame) -> PeerIndex:
+        started = perf_counter()
+        by_symbol = {}
+        for row in peer_table.to_dict("records"):
+            by_symbol.setdefault(
+                row["symbol"],
+                (
+                    _optional_string(row["peer_group"]),
+                    {
+                        metric: _optional_float(row.get(f"industry_median_{metric}"))
+                        for metric in INDUSTRY_METRICS
+                    },
+                ),
+            )
+        by_group = {}
+        for name, group in peer_table.groupby("peer_group", sort=False):
+            metrics = {}
+            for metric in PEER_VALUE_METRICS:
+                values = _optional_float_list(group[metric]) if metric in group.columns else []
+                if sum(value is not None for value in values) < self.config.peers.min_peer_count:
+                    values = []
+                metrics[metric] = PeerPercentiles.prepare(values, self.config.scores)
+            by_group[str(name)] = metrics
+        self.diagnostics.peer_group_lookup_seconds += perf_counter() - started
+        return PeerIndex(by_symbol, by_group)
+
+    def _score_inputs(self, candidate: _PreparedCandidate, peers: PeerIndex):
+        started = perf_counter()
+        peer_group, industry_medians = (
+            peers.by_symbol.get(
+                candidate.company.symbol, (None, {metric: None for metric in INDUSTRY_METRICS})
+            )
+            if not candidate.base_exclusions
+            else (None, {m: None for m in INDUSTRY_METRICS})
         )
-        peer_group = None if peer_row.empty else _optional_string(peer_row.iloc[0]["peer_group"])
-        group = (
-            peer_table.loc[peer_table["peer_group"] == peer_group]
-            if peer_group is not None
-            else peer_table.iloc[0:0]
-        )
-        peer_values: dict[str, list[float | None]] = {}
-        for metric in PEER_VALUE_METRICS:
-            values = _optional_float_list(group[metric]) if metric in group.columns else []
-            valid_count = sum(value is not None for value in values)
-            peer_values[metric] = values if valid_count >= self.config.peers.min_peer_count else []
-        industry_medians = {
-            metric: _optional_float(peer_row.iloc[0].get(f"industry_median_{metric}"))
-            if not peer_row.empty
-            else None
-            for metric in INDUSTRY_METRICS
-        }
+        peer_values = peers.by_group.get(peer_group, {})
+        self.diagnostics.peer_group_lookup_seconds += perf_counter() - started
+        started = perf_counter()
         scores = self._scores(candidate, peer_values, industry_medians)
+        self.diagnostics.scoring_seconds += perf_counter() - started
         exclusions = list(candidate.base_exclusions)
         if candidate.fundamentals_evaluated:
             exclusions.extend(self._hard_filter_exclusions(candidate.fundamentals, scores))
+        return (
+            ScoredCandidate(scores, candidate.technical, tuple(dict.fromkeys(exclusions))),
+            peer_group,
+            industry_medians,
+        )
+
+    def _score(self, candidate: _PreparedCandidate, peer_table: PeerIndex) -> ScreenRecord:
+        view, peer_group, industry_medians = self._score_inputs(candidate, peer_table)
+        return self._materialize(candidate, view, peer_group, industry_medians)
+
+    def _materialize(self, candidate, view, peer_group, industry_medians):
+        started = perf_counter()
         if peer_group is None:
             candidate.data_warnings.append("insufficient_peer_group")
-        eligible = not exclusions
+        eligible = not view.exclusion_reasons
+        scores = view.scores
         if scores.total is not None:
             LOGGER.debug(
                 "Candidate %s score=%.1f eligible=%s",
@@ -473,14 +532,14 @@ class Screener:
                 scores.total,
                 eligible,
             )
-        return ScreenRecord(
+        record = ScreenRecord(
             symbol=candidate.company.symbol,
             name=candidate.company.name,
             as_of=candidate.analysis_date,
             sic=candidate.company.sic,
             peer_group=peer_group,
             eligible=eligible,
-            exclusion_reasons=tuple(dict.fromkeys(exclusions)),
+            exclusion_reasons=view.exclusion_reasons,
             data_warnings=tuple(dict.fromkeys(candidate.data_warnings)),
             average_dollar_volume_20d=candidate.average_dollar_volume_20d,
             industry_medians=industry_medians,
@@ -493,6 +552,8 @@ class Screener:
             latest_pit_filing_date=candidate.latest_pit_filing_date,
             latest_pit_period_end=candidate.latest_pit_period_end,
         )
+        self.diagnostics.report_construction_seconds += perf_counter() - started
+        return record
 
     def _scores(
         self,

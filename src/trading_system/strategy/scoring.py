@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -56,6 +58,29 @@ def percentile_score(
     equal = int((clean == clipped).sum())
     percentile = 100 * (less + 0.5 * equal) / len(clean)
     return clip_score(percentile if higher_is_better else 100 - percentile)
+
+
+@dataclass(frozen=True, slots=True)
+class PeerPercentiles:
+    """Canonical pandas winsorization once; exact tie counts via binary search."""
+
+    values: tuple[float, ...]
+
+    @classmethod
+    def prepare(cls, values, config: ScoreConfig):
+        clean = winsorize(
+            values, config.winsor_lower_quantile, config.winsor_upper_quantile
+        ).dropna()
+        return cls(tuple(sorted(clean)))
+
+    def score(self, value, *, higher_is_better=True):
+        if value is None or not np.isfinite(value) or not self.values:
+            return None
+        clipped = min(float(self.values[-1]), max(float(self.values[0]), value))
+        less = bisect_left(self.values, clipped)
+        equal = bisect_right(self.values, clipped) - less
+        percentile = 100 * (less + 0.5 * equal) / len(self.values)
+        return clip_score(percentile if higher_is_better else 100 - percentile)
 
 
 def _breakdown(
@@ -112,9 +137,12 @@ def _peer_score(
     *,
     higher_is_better: bool = True,
 ) -> float | None:
+    peers = peer_values.get(metric, ())
+    if isinstance(peers, PeerPercentiles):
+        return peers.score(value, higher_is_better=higher_is_better)
     return percentile_score(
         value,
-        peer_values.get(metric, ()),
+        peers,
         higher_is_better=higher_is_better,
         lower_quantile=config.winsor_lower_quantile,
         upper_quantile=config.winsor_upper_quantile,

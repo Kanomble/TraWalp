@@ -4,24 +4,41 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
+from collections import deque
 from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 
 from trading_system.backtest.capacity_validation import (
     _single_result_comparison,
     _validate_frozen_control_config,
 )
-from trading_system.backtest.engine import BacktestEngine, prepare_strategy_comparison
+from trading_system.backtest.engine import (
+    BacktestEngine,
+    _backtest_sessions,
+    prepare_strategy_comparison,
+)
 from trading_system.backtest.entry_quality import (
     F_INTRADAY_ENTRY_RESEARCH_FAMILY,
     F_INTRADAY_ENTRY_VARIANTS,
     EntryQualityStatus,
     missing_session_timestamps,
     opening_weakness_decision,
+)
+from trading_system.backtest.f_candidates import (
+    CandidateManifest,
+    ManifestScreenSource,
+    ReplaySpool,
+    compact_record,
+    data_fingerprint,
+    load_manifest,
+    manifest_metadata,
+    replay_session,
 )
 from trading_system.backtest.lifecycle import (
     F_LIFECYCLE_RESEARCH_FAMILY,
@@ -47,7 +64,7 @@ from trading_system.backtest.validation import (
 )
 from trading_system.config import StrategyConfig
 from trading_system.data.database import Database
-from trading_system.data.market_sessions import regular_session_bounds, trading_sessions_between
+from trading_system.data.market_sessions import trading_sessions_between
 from trading_system.models.backtest import (
     BacktestPosition,
     BacktestResult,
@@ -193,7 +210,12 @@ def research_output_paths(directory: Path, stem: str, *, preflight=False, daily_
     if not stem or Path(stem).name != stem or stem in {".", ".."}:
         raise ValueError("output-stem must be a plain file stem")
     names = (
-        ["preflight.json", "intraday_candidates.json", "missing_symbol_sessions.csv"]
+        [
+            "preflight.json",
+            "intraday_candidates.json",
+            "candidate_replay.jsonl",
+            "missing_symbol_sessions.csv",
+        ]
         if preflight
         else ["summary.json", *[f"{name}.csv" for name in (*COMMON_TABLES, *DIAGNOSTIC_FIELDS)]]
     )
@@ -258,8 +280,7 @@ def _qualify_daily_research(database, config, start, end):
 
 def _prepare(database, config, start, end, progress=None):
     with (
-        progress.phase("daily_qualification", "daily qualification")
-        if progress else nullcontext()
+        progress.phase("daily_qualification", "daily qualification") if progress else nullcontext()
     ) as phase:
         qualification = _qualify_daily_research(database, config, start, end)
     if progress:
@@ -270,7 +291,8 @@ def _prepare(database, config, start, end, progress=None):
         )
     with (
         progress.phase("screen_source_prepare", "preparing PIT screen source")
-        if progress else nullcontext()
+        if progress
+        else nullcontext()
     ) as phase:
         preparation = prepare_strategy_comparison(
             database, config, start, end, comparison_kind=StrategyComparisonKind.RESEARCH_CHAMPION_F
@@ -280,127 +302,231 @@ def _prepare(database, config, start, end, progress=None):
     return preparation, qualification
 
 
-def iter_f_candidates(screen_source, config, sessions, *, progress=None):
+def iter_f_candidates(screen_source, config, sessions, *, progress=None, replay_spool=None):
     """Canonical PIT F eligibility/rank, before any allocation or future coverage checks."""
     from trading_system.backtest.engine import evaluate_variant_entry
 
     discovered = 0
-    for index, (signal, execution) in enumerate(
-        zip(sessions[:-1], sessions[1:], strict=True), 1
-    ):
-        records = []
-        for record in screen_source.screen(signal).records:
-            evaluation = evaluate_variant_entry(record, FROZEN_CHAMPION_F.variant, config)
-            if evaluation.eligible:
-                records.append((evaluation.score, record))
-        records.sort(key=lambda pair: (-pair[0], pair[1].symbol))
+    recent = deque(maxlen=10)
+    elapsed = 0.0
+    # Bypass the comparison cache only for this streaming API.
+    source = getattr(screen_source, "source", screen_source)
+    for index, (signal, execution) in enumerate(zip(sessions[:-1], sessions[1:], strict=True), 1):
+        started = time.monotonic()
+        if hasattr(source, "f_candidates"):
+            result = source.f_candidates(signal, config)
+            records = result.records
+            if replay_spool:
+                replay_spool.append(result.replay)
+        else:
+            records, rejected = [], []
+            for record in source.screen(signal).records:
+                evaluation = evaluate_variant_entry(record, FROZEN_CHAMPION_F.variant, config)
+                if evaluation.eligible:
+                    records.append((evaluation.score, record))
+                elif replay_spool:
+                    rejected.append(compact_record(record.symbol, record))
+            records.sort(key=lambda pair: (-pair[0], pair[1].symbol))
+            if replay_spool:
+                replay_spool.append(replay_session(signal, records, rejected))
         for rank, (_, record) in enumerate(records, 1):
             yield signal, execution, rank, record
         discovered += len(records)
+        seconds = time.monotonic() - started
+        elapsed += seconds
+        recent.append(seconds)
         if progress:
+            timing = {
+                "avg_seconds_per_session": elapsed / index,
+                "recent_seconds_per_session": sum(recent) / len(recent),
+            }
+            if len(recent) >= 3 and sum(recent) > 0:
+                timing["estimated_remaining_seconds"] = (
+                    (len(sessions) - 1 - index) * sum(recent) / len(recent)
+                )
             progress.update(
-                sessions_processed=index, candidate_sessions_discovered=discovered,
+                sessions_processed=index,
+                candidate_sessions_discovered=discovered,
                 session=signal.isoformat(),
+                **timing,
             )
 
 
 def build_f_intraday_entry_preflight(
-    database: Database, config: StrategyConfig, start: date, end: date, *, preparation=None,
+    database: Database,
+    config: StrategyConfig,
+    start: date,
+    end: date,
+    *,
+    preparation=None,
     progress=None,
+    candidate_manifest=None,
 ):
     """Discover every eligible F candidate, including capacity-blocked candidates; no backtest."""
     progress = progress or ResearchProgress()
     qualification = {}
+    spool = None
+    snapshot = None
+    if candidate_manifest is None:
+        with progress.phase(
+            "snapshot_fingerprint", "fingerprinting local discovery inputs"
+        ) as phase:
+            snapshot = data_fingerprint(database)
+        progress.record("snapshot_fingerprint", phase)
     if preparation is None:
         preparation, qualification = _prepare(database, config, start, end, progress)
     candidates, missing, checks = [], [], []
-    with progress.phase(
-        "candidate_discovery", "discovering F candidates",
-        percentage=("sessions_processed", "sessions_total"),
-        sessions_processed=0, sessions_total=max(0, len(preparation.sessions) - 1),
-        candidate_sessions_discovered=0,
-    ) as phase:
-        discovered = list(iter_f_candidates(
-            preparation.screen_source, config, preparation.sessions, progress=phase,
-        ))
-        symbols = {record.symbol for _, _, _, record in discovered}
-        phase.update(unique_symbols=len(symbols))
-    progress.record("candidate_discovery", phase)
-    loaded = []
+    if candidate_manifest is None:
+        spool = ReplaySpool()
+        with progress.phase(
+            "candidate_discovery",
+            "discovering F candidates",
+            percentage=("sessions_processed", "sessions_total"),
+            sessions_processed=0,
+            sessions_total=max(0, len(preparation.sessions) - 1),
+            candidate_sessions_discovered=0,
+        ) as phase:
+            for signal, execution, rank, record in iter_f_candidates(
+                preparation.screen_source,
+                config,
+                preparation.sessions,
+                progress=phase,
+                replay_spool=spool,
+            ):
+                from trading_system.backtest.engine import evaluate_variant_entry
+
+                candidates.append(
+                    {
+                        "symbol": record.symbol,
+                        "signal_date": signal.isoformat(),
+                        "signal_session": signal.isoformat(),
+                        "execution_session": execution.isoformat(),
+                        "candidate_rank": rank,
+                        "evaluation_score": evaluate_variant_entry(
+                            record, FROZEN_CHAMPION_F.variant, config
+                        ).score,
+                        "timeframe": "15m",
+                        "candidate_paths": [F_INTRADAY_ENTRY_VARIANTS[1].label],
+                        "requirement_type": "candidate_session",
+                    }
+                )
+            phase.update(unique_symbols=len({row["symbol"] for row in candidates}))
+        progress.record("candidate_discovery", phase)
+        with progress.phase(
+            "snapshot_verification", "verifying discovery inputs stayed unchanged"
+        ) as phase:
+            if data_fingerprint(database) != snapshot:
+                spool.file.close()
+                raise ValueError(
+                    "Discovery inputs changed during preflight; rerun on a stable snapshot"
+                )
+        progress.record("snapshot_verification", phase)
+    else:
+        candidates = candidate_manifest["candidate_sessions"]
+    symbols = {row["symbol"] for row in candidates}
+    requirements_by_key = {
+        (
+            row["symbol"],
+            date.fromisoformat(row["signal_date"]),
+            date.fromisoformat(row["execution_session"]),
+        ): row
+        for row in candidates
+    }
+    execution_by_signal = {
+        (symbol, signal): execution for symbol, signal, execution in requirements_by_key
+    }
     intraday_rows = daily_rows = queries = 0
-    # These are the existing single candidate-session requirements, not additional queries.
-    with progress.phase(
-        "coverage_load", "loading native 15m candidate-session coverage",
-        percentage=("requirement_batches_processed", "requirement_batches_total"),
-        requirement_batches_processed=0, requirement_batches_total=len(discovered),
-        intraday_rows_loaded=0, daily_rows_loaded=0,
-    ) as phase:
-        for signal, execution, _, record in discovered:
-            opening, closing = regular_session_bounds(execution)
-            native = database.bars_between(
-                [record.symbol], opening, closing, timeframe=BarTimeframe.MINUTES_15
+    batches = 0
+    load_seconds = evaluation_seconds = 0.0
+    with (
+        progress.phase(
+            "coverage_load",
+            "loading native 15m candidate-session coverage",
+            percentage=("requirement_batches_processed", "requirement_batches_total"),
+            requirement_batches_processed=0,
+            requirement_batches_total=(len(requirements_by_key) + 199) // 200,
+            intraday_rows_loaded=0,
+            daily_rows_loaded=0,
+        ) as load_phase,
+        progress.phase(
+            "coverage_evaluation",
+            "evaluating I1 entry-quality coverage",
+            percentage=("candidate_sessions_checked", "candidate_sessions_total"),
+            candidate_sessions_checked=0,
+            candidate_sessions_total=len(candidates),
+            qualified=0,
+            unavailable=0,
+        ) as phase,
+    ):
+        load_started = time.monotonic()
+        for (
+            native_by_key,
+            previous_by_key,
+            native_count,
+            daily_count,
+        ) in database.iter_entry_coverage_batches(requirements_by_key):
+            load_seconds += time.monotonic() - load_started
+            evaluation_started = time.monotonic()
+            batches += 1
+            queries += 2
+            intraday_rows += native_count
+            daily_rows += daily_count
+            load_phase.update(
+                requirement_batches_processed=batches,
+                intraday_rows_loaded=intraday_rows,
+                daily_rows_loaded=daily_rows,
+                sqlite_query_count_coverage=queries,
             )
-            queries += 1
-            history = database.bars_available_as_of(record.symbol, signal, limit=1)
-            queries += 1
-            previous_close = (
-                float(history[-1].close)
-                if history and (history[-1].timestamp.date() == signal)
-                else None
-            )
-            loaded.append((native, previous_close))
-            intraday_rows += len(native)
-            daily_rows += len(history)
-            phase.update(
-                requirement_batches_processed=len(loaded), intraday_rows_loaded=intraday_rows,
-                daily_rows_loaded=daily_rows, sqlite_query_count_coverage=queries,
-            )
-    progress.record("coverage_load", phase)
-    with progress.phase(
-        "coverage_evaluation", "evaluating I1 entry-quality coverage",
-        percentage=("candidate_sessions_checked", "candidate_sessions_total"),
-        candidate_sessions_checked=0, candidate_sessions_total=len(discovered),
-        qualified=0, unavailable=0,
-    ) as phase:
-        for (signal, execution, rank, record), (native, previous_close) in zip(
-            discovered, loaded, strict=True
-        ):
-            decision = opening_weakness_decision(native, execution, previous_close)
-            gaps = missing_session_timestamps(native, execution)
-            unavailable = bool(gaps) or decision.status is EntryQualityStatus.UNAVAILABLE
-            row = {
-                "symbol": record.symbol,
-                "signal_date": signal.isoformat(),
-                "execution_session": execution.isoformat(),
-                "candidate_rank": rank,
-                "timeframe": "15m",
-                "candidate_paths": [F_INTRADAY_ENTRY_VARIANTS[1].label],
-                "requirement_type": "candidate_session",
-            }
-            candidates.append(row)
-            check = {
-                **row,
-                "status": "INTRADAY_UNAVAILABLE" if unavailable else "QUALIFIED",
-                "decision_status": decision.status.value,
-                "missing_timestamps": [t.isoformat() for t in gaps],
-                "reason": "incomplete_entry_session" if gaps else decision.reason,
-            }
-            checks.append(check)
-            if unavailable:
-                missing.append(check)
-            phase.update(
-                candidate_sessions_checked=len(checks), qualified=len(checks) - len(missing),
-                unavailable=len(missing),
-            )
+            for (symbol, signal), previous_close in previous_by_key.items():
+                # Execution is fixed by the candidate requirement, never by future prices.
+                execution = execution_by_signal[symbol, signal]
+                key = symbol, signal, execution
+                row = requirements_by_key[key]
+                native = native_by_key[symbol, execution]
+                decision = opening_weakness_decision(native, execution, previous_close)
+                gaps = missing_session_timestamps(native, execution)
+                unavailable = bool(gaps) or decision.status is EntryQualityStatus.UNAVAILABLE
+                check = {
+                    **row,
+                    "status": "INTRADAY_UNAVAILABLE" if unavailable else "QUALIFIED",
+                    "decision_status": decision.status.value,
+                    "missing_timestamps": [t.isoformat() for t in gaps],
+                    "reason": "incomplete_entry_session" if gaps else decision.reason,
+                }
+                checks.append(check)
+                if unavailable:
+                    missing.append(check)
+                phase.update(
+                    candidate_sessions_checked=len(checks),
+                    qualified=len(checks) - len(missing),
+                    unavailable=len(missing),
+                )
+            evaluation_seconds += time.monotonic() - evaluation_started
+            load_started = time.monotonic()
+        load_seconds += time.monotonic() - load_started
+    order = {(row["symbol"], row["execution_session"]): i for i, row in enumerate(candidates)}
+    checks.sort(key=lambda row: order[row["symbol"], row["execution_session"]])
+    missing.sort(key=lambda row: order[row["symbol"], row["execution_session"]])
+    progress.record("coverage_load", load_phase)
     progress.record("coverage_evaluation", phase)
+    # Streaming phases overlap in wall time; report disjoint measured work durations.
+    progress.performance.update(
+        coverage_load_seconds=load_seconds, coverage_evaluation_seconds=evaluation_seconds
+    )
     source_diagnostics = getattr(preparation.screen_source, "diagnostics", None)
     progress.performance.update(
-        candidate_sessions=len(candidates), unique_candidate_symbols=len(symbols),
+        candidate_sessions=len(candidates),
+        unique_candidate_symbols=len(symbols),
         intraday_rows_loaded=intraday_rows,
         daily_rows_loaded=daily_rows + getattr(source_diagnostics, "bars_rows_loaded", 0),
-        coverage_daily_rows_loaded=daily_rows, coverage_batches=len(loaded),
+        coverage_daily_rows_loaded=daily_rows,
+        coverage_batches=batches,
         sqlite_query_count_coverage=queries,
+        full_screen_cache_size=len(getattr(preparation.screen_source, "cache", {})),
     )
+    discovery_source = getattr(preparation.screen_source, "source", preparation.screen_source)
+    if diagnostics := getattr(discovery_source, "discovery_diagnostics", None):
+        progress.performance.update(diagnostics.as_dict())
     report = {
         "report_type": "local_f_intraday_entry_preflight",
         "local_only": True,
@@ -436,6 +562,11 @@ def build_f_intraday_entry_preflight(
         "required_sessions": candidates,
         "potential_position_ranges": [],
     }
+    if spool is not None:
+        requirements.update(manifest_metadata(config, candidates, spool, snapshot))
+        requirements = CandidateManifest(requirements, spool)
+    elif candidate_manifest is not None:
+        requirements = candidate_manifest
     report["performance"] = progress.snapshot()
     return report, requirements
 
@@ -444,7 +575,18 @@ def export_f_intraday_entry_preflight(report, requirements, directory: Path, *, 
     paths = research_output_paths(directory, stem, preflight=True)
     with _research_export(paths, report, "preflight.json", validation=False) as staged:
         _atomic_text(staged["preflight.json"], json.dumps(report, indent=2))
-        _atomic_text(staged["intraday_candidates.json"], json.dumps(requirements, indent=2))
+        public = {key: value for key, value in requirements.items() if not key.startswith("_")}
+        spool = getattr(requirements, "replay_spool", None)
+        if spool is not None:
+            spool.file.seek(0)
+            with staged["candidate_replay.jsonl"].open("wb") as output:
+                shutil.copyfileobj(spool.file, output)
+            public["replay_file"] = paths["candidate_replay.jsonl"].name
+        else:
+            _atomic_text(staged["candidate_replay.jsonl"], "")
+        _atomic_text(
+            staged["intraday_candidates.json"], json.dumps(public, indent=2, allow_nan=False)
+        )
         rows = report["missing_symbol_sessions"]
         _atomic_csv(
             staged["missing_symbol_sessions.csv"],
@@ -474,8 +616,8 @@ def _research_export(paths, summary, summary_name, *, validation):
         try:
             yield staged
             performance = dict(summary.get("performance", {}))
-            build_seconds = (
-                performance.get("total_seconds", 0.0) - performance.get("export_seconds", 0.0)
+            build_seconds = performance.get("total_seconds", 0.0) - performance.get(
+                "export_seconds", 0.0
             )
             performance["export_seconds"] = time.monotonic() - phase.started
             performance["total_seconds"] = build_seconds + performance["export_seconds"]
@@ -504,10 +646,14 @@ def _research_export(paths, summary, summary_name, *, validation):
     log_completion(
         "F intraday entry validation" if validation else "Intraday entry preflight",
         completed_performance,
-        **({
-            "qualified": summary["intraday_qualified"],
-            "missing_symbol_sessions": len(summary["missing_symbol_sessions"]),
-        } if not validation else {}),
+        **(
+            {
+                "qualified": summary["intraday_qualified"],
+                "missing_symbol_sessions": len(summary["missing_symbol_sessions"]),
+            }
+            if not validation
+            else {}
+        ),
     )
 
 
@@ -515,25 +661,65 @@ def run_f_lifecycle_v2(database: Database, config: StrategyConfig, start: date, 
     return _run_research(database, config, start, end, intraday=False)
 
 
-def run_f_intraday_entry(database: Database, config: StrategyConfig, start: date, end: date):
-    return _run_research(database, config, start, end, intraday=True)
+def run_f_intraday_entry(
+    database: Database,
+    config: StrategyConfig,
+    start: date,
+    end: date,
+    *,
+    candidate_manifest: Path | None = None,
+    rediscover_candidates=False,
+):
+    if candidate_manifest is None and not rediscover_candidates:
+        raise ValueError(
+            "Validation requires --candidate-manifest from preflight, "
+            "or explicit --rediscover-candidates"
+        )
+    return _run_research(
+        database, config, start, end, intraday=True, candidate_manifest=candidate_manifest
+    )
 
 
-def _run_research(database, config, start, end, *, intraday):
+def _run_research(database, config, start, end, *, intraday, candidate_manifest=None):
     progress = ResearchProgress(validation=True) if intraday else None
     with (
         progress.phase("qualification", "daily qualification") if progress else nullcontext()
     ) as phase:
-        preparation, qualification = _prepare(database, config, start, end)
+        manifest = None
+        if candidate_manifest is not None:
+            qualification = _qualify_daily_research(database, config, start, end)
+            if qualification["failure_reasons"]:
+                raise ValueError(
+                    "Daily qualification failed: " + "; ".join(qualification["failure_reasons"])
+                )
+            sessions = tuple(_backtest_sessions(database, start, end))
+            manifest, source = load_manifest(
+                candidate_manifest, database, config, start, end, sessions
+            )
+            preparation = SimpleNamespace(sessions=sessions, screen_source=source)
+        else:
+            preparation, qualification = _prepare(database, config, start, end)
     if progress:
         progress.record("qualification", phase)
     intraday_qualification = None
     if intraday:
         with progress.phase("coverage_verification", "intraday coverage verification") as phase:
-            intraday_qualification, _ = build_f_intraday_entry_preflight(
-                database, config, start, end, preparation=preparation, progress=progress,
+            intraday_qualification, requirements = build_f_intraday_entry_preflight(
+                database,
+                config,
+                start,
+                end,
+                preparation=preparation,
+                progress=progress,
+                candidate_manifest=manifest,
             )
         progress.record("coverage_verification", phase)
+        if manifest is None:
+            spool = requirements.replay_spool
+            preparation = SimpleNamespace(
+                sessions=preparation.sessions,
+                screen_source=ManifestScreenSource(None, spool.offsets, stream=spool.file),
+            )
         if not intraday_qualification["intraday_qualified"]:
             raise ValueError(
                 "INTRADAY_UNAVAILABLE: run preflight-f-intraday-entry, then manually "
@@ -543,7 +729,8 @@ def _run_research(database, config, start, end, *, intraday):
     family = F_INTRADAY_ENTRY_RESEARCH_FAMILY if intraday else F_LIFECYCLE_RESEARCH_FAMILY
     with (
         progress.phase("diagnostics_prepare", "preparing diagnostic context")
-        if progress else nullcontext()
+        if progress
+        else nullcontext()
     ) as phase:
         context = TechnicalPeerContextProvider(database, config, end)
     diagnostics_prepare_seconds = phase.seconds if progress else 0.0
@@ -582,11 +769,17 @@ def _run_research(database, config, start, end, *, intraday):
             strategy = identity.research_id.rsplit("-", 1)[-1]
             with (
                 progress.phase(
-                    "backtest", f"running {strategy}", strategy=strategy,
+                    "backtest",
+                    f"running {strategy}",
+                    strategy=strategy,
                     percentage=("sessions_processed", "sessions_total"),
-                    sessions_processed=0, sessions_total=len(preparation.sessions),
-                    positions_closed=0, active_positions=0,
-                ) if progress else nullcontext()
+                    sessions_processed=0,
+                    sessions_total=len(preparation.sessions),
+                    positions_closed=0,
+                    active_positions=0,
+                )
+                if progress
+                else nullcontext()
             ) as phase:
                 engine.progress = phase
                 result = engine.run(
@@ -594,14 +787,23 @@ def _run_research(database, config, start, end, *, intraday):
                 )
             if progress:
                 progress.record(strategy.lower(), phase)
-                progress.performance.update({
-                    f"sessions_processed_{strategy}": len(result.equity_curve),
-                    f"positions_{strategy}": len(result.positions),
-                })
+                progress.performance.update(
+                    {
+                        f"sessions_processed_{strategy}": len(result.equity_curve),
+                        f"positions_{strategy}": len(result.positions),
+                    }
+                )
                 pending_diagnostics.append((case, identity, result, observer, engine))
                 continue
             _append_research_tables(
-                results, tables, family, case, identity, result, observer, engine,
+                results,
+                tables,
+                family,
+                case,
+                identity,
+                result,
+                observer,
+                engine,
             )
     with (
         progress.phase("diagnostics", "building diagnostics") if progress else nullcontext()

@@ -143,6 +143,7 @@ class HistoricalFeatureScreenSource:
         self.start = start
         self.end = end
         self.screener = Screener(database, config)
+        self.discovery_diagnostics = self.screener.diagnostics
         self.diagnostics = HistoricalPerformanceDiagnostics()
         self._market: dict[str, dict[date, _MarketFeature]] = {}
         self._facts: dict[str, _AccountingCache] = {}
@@ -296,6 +297,9 @@ class HistoricalFeatureScreenSource:
     def screen(self, session: date) -> ScreenReport:
         started = time.perf_counter()
         prepared = [self._candidate(company, session) for company in self._companies]
+        self.discovery_diagnostics.candidate_prepare_seconds += time.perf_counter() - started
+        self.discovery_diagnostics.companies_processed += len(self._companies)
+        self.discovery_diagnostics.prepared_candidates += len(prepared)
         score_started = time.perf_counter()
         report = self.screener.report_from_prepared(
             prepared,
@@ -305,10 +309,74 @@ class HistoricalFeatureScreenSource:
         )
         score_seconds = time.perf_counter() - score_started
         self.diagnostics.peer_score_seconds += score_seconds
-        self.diagnostics.report_construction_seconds += score_seconds
+        self.diagnostics.report_construction_seconds = (
+            self.discovery_diagnostics.report_construction_seconds
+        )
         self.diagnostics.screen_seconds += time.perf_counter() - started
         self.diagnostics.sessions_screened += 1
+        self.discovery_diagnostics.screen_session_seconds += time.perf_counter() - started
+        self.discovery_diagnostics.sessions_processed += 1
         return report
+
+    def f_candidates(self, session: date, config: StrategyConfig):
+        """Same PIT cross-section and evaluator, materializing only eligible F entries."""
+        from trading_system.backtest.engine import evaluate_variant_entry
+        from trading_system.backtest.f_candidates import (
+            FSessionCandidates,
+            compact_record,
+            replay_session,
+        )
+        from trading_system.backtest.research_registry import FROZEN_CHAMPION_F
+
+        started = time.perf_counter()
+        diagnostics = self.discovery_diagnostics
+        prepared = [self._candidate(company, session) for company in self._companies]
+        diagnostics.candidate_prepare_seconds += time.perf_counter() - started
+        diagnostics.companies_processed += len(self._companies) + len(self._conflicted)
+        diagnostics.prepared_candidates += len(prepared)
+        peer_started = time.perf_counter()
+        table = self.screener._peer_table(prepared)
+        diagnostics.peer_table_seconds += time.perf_counter() - peer_started
+        diagnostics.peer_table_rows += len(table)
+        peers = self.screener._peer_index(table)
+        eligible, rejected, screen_ranks = [], [], []
+        for candidate in prepared:
+            view, group, medians = self.screener._score_inputs(candidate, peers)
+            diagnostics.eligible_screen_records += not view.exclusion_reasons
+            if not view.exclusion_reasons:
+                screen_ranks.append(
+                    (
+                        -(view.scores.total or 0),
+                        -(view.scores.quality.score or 0),
+                        -(view.scores.valuation.score or 0),
+                        candidate.company.symbol,
+                    )
+                )
+            evaluation_started = time.perf_counter()
+            evaluation = evaluate_variant_entry(view, FROZEN_CHAMPION_F.variant, config)
+            diagnostics.variant_f_evaluation_seconds += time.perf_counter() - evaluation_started
+            if evaluation.eligible:
+                record = self.screener._materialize(candidate, view, group, medians)
+                eligible.append((evaluation.score, record))
+            else:
+                rejected.append(compact_record(candidate.company.symbol, view))
+        for company in self._conflicted:
+            view = self.screener._identity_conflict_inputs()
+            rejected.append(compact_record(company.symbol, view))
+        eligible.sort(key=lambda pair: (-pair[0], pair[1].symbol))
+        ranks = {row[-1]: rank for rank, row in enumerate(sorted(screen_ranks), 1)}
+        eligible = [
+            (score, record.model_copy(update={"rank": ranks.get(record.symbol)}))
+            for score, record in eligible
+        ]
+        diagnostics.eligible_f_candidates += len(eligible)
+        report_started = time.perf_counter()
+        result = FSessionCandidates(tuple(eligible), replay_session(session, eligible, rejected))
+        diagnostics.report_construction_seconds += time.perf_counter() - report_started
+        diagnostics.sessions_processed += 1
+        diagnostics.screen_session_seconds += time.perf_counter() - started
+        self.diagnostics.sessions_screened += 1
+        return result
 
     def _candidate(self, company: CompanyIdentity, session: date) -> _PreparedCandidate:
         static = self._static_exclusions.get(company.symbol)

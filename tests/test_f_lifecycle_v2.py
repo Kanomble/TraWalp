@@ -55,6 +55,8 @@ def record(symbol="AAA"):
     score = ScoreBreakdown(name="fixture", score=90, factors=(), available_factor_count=4)
     return ScreenRecord.model_construct(
         symbol=symbol,
+        name=symbol,
+        as_of=date(2024, 1, 2),
         sic="2834",
         eligible=True,
         exclusion_reasons=(),
@@ -542,8 +544,20 @@ def test_fixed_family_cli_no_sweeps_or_champion_change():
     ):
         parsed = _parser().parse_args(
             [command, "--start", "2024-01-02", "--end", "2024-01-04", "--output-stem", "fixture"]
+            + (["--rediscover-candidates"] if command == "validate-f-intraday-entry" else [])
         )
-        assert set(vars(parsed)) == {"command", "start", "end", "output_stem", "config", "verbose"}
+        assert set(vars(parsed)) == {
+            "command",
+            "start",
+            "end",
+            "output_stem",
+            "config",
+            "verbose",
+        } | (
+            {"candidate_manifest", "rediscover_candidates"}
+            if command == "validate-f-intraday-entry"
+            else set()
+        )
     assert FROZEN_CHAMPION_F.label == "F/configured"
 
 
@@ -740,14 +754,18 @@ def test_preflight_sync_compatibility_and_qualification_then_i0_i1(
     assert parsed[0].symbol == "AAA"
     assert parsed[0].session == sessions[1]
     with pytest.raises(ValueError, match="INTRADAY_UNAVAILABLE"):
-        validation.run_f_intraday_entry(db, config, sessions[0], sessions[-1])
+        validation.run_f_intraday_entry(
+            db, config, sessions[0], sessions[-1], rediscover_candidates=True
+        )
     db.upsert_bars(native_session(sessions[1], weak=True))
     qualified, _ = validation.build_f_intraday_entry_preflight(
         db, config, sessions[0], sessions[-1]
     )
     assert qualified["intraday_qualified"] is True  # Veto is a valid research outcome.
     monkeypatch.setattr(BacktestEngine, "run", original_run)
-    bundle = validation.run_f_intraday_entry(db, config, sessions[0], sessions[-1])
+    bundle = validation.run_f_intraday_entry(
+        db, config, sessions[0], sessions[-1], rediscover_candidates=True
+    )
     assert len(bundle.results) == 2
     assert bundle.results["F-INTRADAY-ENTRY-I0"].positions
     assert not bundle.results["F-INTRADAY-ENTRY-I1"].positions

@@ -35,7 +35,11 @@ def monotonic(monkeypatch):
 def test_boundaries_interval_counters_and_percentage(monotonic, caplog):
     caplog.set_level(logging.INFO, logger=progress.__name__)
     with ProgressPhase(
-        "fixture_progress", "discovery", percentage=("done", "total"), done=0, total=10,
+        "fixture_progress",
+        "discovery",
+        percentage=("done", "total"),
+        done=0,
+        total=10,
     ) as phase:
         assert "status=starting" in caplog.messages[0]
         assert "progress_pct=0.0" in caplog.messages[0]
@@ -64,7 +68,11 @@ def test_unknown_or_empty_denominator_has_no_percentage(monotonic, caplog, total
     caplog.set_level(logging.INFO, logger=progress.__name__)
     counters = {} if total is None else {"total": total}
     with ProgressPhase(
-        "fixture_progress", "preparation", percentage=("done", "total"), done=0, **counters,
+        "fixture_progress",
+        "preparation",
+        percentage=("done", "total"),
+        done=0,
+        **counters,
     ) as phase:
         monotonic.now += 1800
         phase.heartbeat()
@@ -107,7 +115,11 @@ def test_watchdog_heartbeat_without_counter_updates(monotonic, monkeypatch, capl
 
 
 def test_preflight_counts_empty_sessions_and_keeps_coverage_results(
-    monkeypatch, local_market, config, monotonic, caplog,
+    monkeypatch,
+    local_market,
+    config,
+    monotonic,
+    caplog,
 ):
     _, db, sessions, preparation = research_preparation(monkeypatch, local_market)
     db.upsert_bars(native_session(sessions[1], weak=True))
@@ -121,18 +133,23 @@ def test_preflight_counts_empty_sessions_and_keeps_coverage_results(
     monkeypatch.setattr(preparation.screen_source, "screen", screen)
     caplog.set_level(logging.INFO, logger=progress.__name__)
     report, requirements = validation.build_f_intraday_entry_preflight(
-        db, config, sessions[0], sessions[-1], preparation=preparation,
+        db,
+        config,
+        sessions[0],
+        sessions[-1],
+        preparation=preparation,
     )
     perf = report["performance"]
     assert perf["candidate_sessions"] == perf["unique_candidate_symbols"] == 2
-    assert perf["coverage_batches"] == 2
-    assert perf["sqlite_query_count_coverage"] == 4
+    assert perf["coverage_batches"] == 1
+    assert perf["sqlite_query_count_coverage"] == 2
     assert perf["daily_rows_loaded"] == 1
     assert perf["intraday_rows_loaded"] == len(native_session(sessions[1], weak=True))
     assert perf["candidate_discovery_seconds"] == 1800 * (len(sessions) - 1)
     assert [row["candidate_rank"] for row in requirements["candidate_sessions"]] == [1, 2]
     assert [row["decision_status"] for row in report["coverage"]] == [
-        "OPENING_WEAKNESS_VETO", "INTRADAY_UNAVAILABLE",
+        "OPENING_WEAKNESS_VETO",
+        "INTRADAY_UNAVAILABLE",
     ]
     assert report["coverage"][0]["status"] == "QUALIFIED"
     discovery = [m for m in caplog.messages if "phase=candidate_discovery" in m]
@@ -146,7 +163,11 @@ def test_preflight_counts_empty_sessions_and_keeps_coverage_results(
     # Disable emission and rerun the same research; only performance metadata may differ.
     monkeypatch.setattr(ProgressPhase, "_emit", lambda *args: None)
     quiet_report, quiet_requirements = validation.build_f_intraday_entry_preflight(
-        db, config, sessions[0], sessions[-1], preparation=preparation,
+        db,
+        config,
+        sessions[0],
+        sessions[-1],
+        preparation=preparation,
     )
     assert requirements == quiet_requirements
     report.pop("performance")
@@ -156,7 +177,12 @@ def test_preflight_counts_empty_sessions_and_keeps_coverage_results(
 
 @pytest.mark.parametrize("veto", [False, True])
 def test_engine_heartbeat_counts_and_result_equivalence(
-    monkeypatch, local_market, config, monotonic, caplog, veto,
+    monkeypatch,
+    local_market,
+    config,
+    monotonic,
+    caplog,
+    veto,
 ):
     db, sessions = local_market
     db.upsert_bars(native_session(sessions[1], weak=False))
@@ -170,7 +196,9 @@ def test_engine_heartbeat_counts_and_result_equivalence(
     monkeypatch.setattr(db, "bars_on_session", bars_on_session)
     caplog.set_level(logging.INFO, logger=progress.__name__)
     with ProgressPhase(
-        "intraday_validation_progress", "backtest", strategy="I1" if veto else "I0",
+        "intraday_validation_progress",
+        "backtest",
+        strategy="I1" if veto else "I0",
         percentage=("sessions_processed", "sessions_total"),
     ) as phase:
         observed = run(db, sessions, config, opening_weakness_veto=veto, progress=phase)
@@ -183,7 +211,12 @@ def test_engine_heartbeat_counts_and_result_equivalence(
 
 
 def test_validation_stages_counters_and_persisted_timings(
-    monkeypatch, local_market, config, tmp_path, monotonic, caplog,
+    monkeypatch,
+    local_market,
+    config,
+    tmp_path,
+    monotonic,
+    caplog,
 ):
     _, db, sessions, _ = research_preparation(monkeypatch, local_market)
     db.upsert_bars(native_session(sessions[1], weak=True))
@@ -195,7 +228,9 @@ def test_validation_stages_counters_and_persisted_timings(
 
     monkeypatch.setattr(BacktestEngine, "run", timed_run)
     caplog.set_level(logging.INFO, logger=progress.__name__)
-    bundle = validation.run_f_intraday_entry(db, config, sessions[0], sessions[-1])
+    bundle = validation.run_f_intraday_entry(
+        db, config, sessions[0], sessions[-1], rediscover_candidates=True
+    )
     perf = bundle.summary["performance"]
     assert perf["i0_seconds"] == perf["i1_seconds"] == 3
     assert perf["sessions_processed_I0"] == perf["sessions_processed_I1"] == len(sessions)
@@ -204,21 +239,42 @@ def test_validation_stages_counters_and_persisted_timings(
     paths = validation.export_f_lifecycle_research(bundle, tmp_path, stem="timed")
     persisted = json.loads(paths["summary.json"].read_text())["performance"]
     assert persisted == perf
-    assert set((
-        "qualification_seconds", "coverage_verification_seconds", "i0_seconds", "i1_seconds",
-        "diagnostics_seconds", "export_seconds", "total_seconds",
-    )) <= persisted.keys()
+    assert (
+        set(
+            (
+                "qualification_seconds",
+                "coverage_verification_seconds",
+                "i0_seconds",
+                "i1_seconds",
+                "diagnostics_seconds",
+                "export_seconds",
+                "total_seconds",
+            )
+        )
+        <= persisted.keys()
+    )
     assert persisted["total_seconds"] == 6
     starts = [m.split("phase=")[1].split()[0] for m in caplog.messages if "status=starting" in m]
     assert starts == [
-        "qualification", "coverage_verification", "candidate_discovery", "coverage_load",
-        "coverage_evaluation", "diagnostics_prepare", "backtest", "backtest", "diagnostics",
+        "qualification",
+        "coverage_verification",
+        "snapshot_fingerprint",
+        "candidate_discovery",
+        "snapshot_verification",
+        "coverage_load",
+        "coverage_evaluation",
+        "diagnostics_prepare",
+        "backtest",
+        "backtest",
+        "diagnostics",
         "export",
     ]
     assert "F intraday entry validation: completed" in caplog.text
     assert "F intraday entry validation timings:" in caplog.text
     monkeypatch.setattr(ProgressPhase, "_emit", lambda *args: None)
-    quiet = validation.run_f_intraday_entry(db, config, sessions[0], sessions[-1])
+    quiet = validation.run_f_intraday_entry(
+        db, config, sessions[0], sessions[-1], rediscover_candidates=True
+    )
     assert bundle.tables == quiet.tables
     for strategy, result in bundle.results.items():
         assert result.model_dump(exclude={"generated_at"}) == quiet.results[strategy].model_dump(
@@ -231,7 +287,12 @@ def test_validation_stages_counters_and_persisted_timings(
 
 
 def test_preflight_measures_preparation_and_export(
-    monkeypatch, local_market, config, tmp_path, monotonic, caplog,
+    monkeypatch,
+    local_market,
+    config,
+    tmp_path,
+    monotonic,
+    caplog,
 ):
     db, sessions = local_market
     source = Screens(sessions[0])
@@ -242,23 +303,38 @@ def test_preflight_measures_preparation_and_export(
         def call(*args, **kwargs):
             monotonic.now += seconds
             return function(*args, **kwargs)
+
         return call
 
     monkeypatch.setattr(
-        validation, "_qualify_daily_research",
+        validation,
+        "_qualify_daily_research",
         timed(lambda *args: {"ready": True, "failure_reasons": []}, 2),
     )
     monkeypatch.setattr(
-        validation, "prepare_strategy_comparison", timed(lambda *args, **kwargs: preparation, 3),
+        validation,
+        "prepare_strategy_comparison",
+        timed(lambda *args, **kwargs: preparation, 3),
     )
-    monkeypatch.setattr(db, "bars_between", timed(db.bars_between, 5))
-    monkeypatch.setattr(db, "bars_available_as_of", timed(db.bars_available_as_of, 7))
+    original_batches = db.iter_entry_coverage_batches
+
+    def batches(*args, **kwargs):
+        for batch in original_batches(*args, **kwargs):
+            monotonic.now += 12
+            yield batch
+
+    monkeypatch.setattr(db, "iter_entry_coverage_batches", batches)
     monkeypatch.setattr(
-        validation, "opening_weakness_decision", timed(validation.opening_weakness_decision, 11),
+        validation,
+        "opening_weakness_decision",
+        timed(validation.opening_weakness_decision, 11),
     )
     caplog.set_level(logging.INFO, logger=progress.__name__)
     report, requirements = validation.build_f_intraday_entry_preflight(
-        db, config, sessions[0], sessions[-1],
+        db,
+        config,
+        sessions[0],
+        sessions[-1],
     )
     perf = report["performance"]
     assert perf["daily_qualification_seconds"] == 2
@@ -271,7 +347,10 @@ def test_preflight_measures_preparation_and_export(
     monkeypatch.setattr(validation, "_atomic_text", timed(validation._atomic_text, 13))
     monkeypatch.setattr(validation, "_atomic_csv", timed(validation._atomic_csv, 17))
     paths = validation.export_f_intraday_entry_preflight(
-        report, requirements, tmp_path, stem="timings",
+        report,
+        requirements,
+        tmp_path,
+        stem="timings",
     )
     persisted = json.loads(paths["preflight.json"].read_text())["performance"]
     assert persisted == perf
@@ -287,21 +366,33 @@ def test_preflight_measures_preparation_and_export(
 @pytest.mark.parametrize("validation_run", [False, True])
 @pytest.mark.parametrize("interrupt_at", ["staging", "publication"])
 def test_interrupted_exports_leave_no_artifacts(
-    monkeypatch, local_market, config, tmp_path, validation_run, interrupt_at,
+    monkeypatch,
+    local_market,
+    config,
+    tmp_path,
+    validation_run,
+    interrupt_at,
 ):
     _, db, sessions, _ = research_preparation(monkeypatch, local_market)
     db.upsert_bars(native_session(sessions[1], weak=False))
     report, requirements = validation.build_f_intraday_entry_preflight(
-        db, config, sessions[0], sessions[-1],
+        db,
+        config,
+        sessions[0],
+        sessions[-1],
     )
-    bundle = validation.run_f_intraday_entry(db, config, sessions[0], sessions[-1])
+    bundle = validation.run_f_intraday_entry(
+        db, config, sessions[0], sessions[-1], rediscover_candidates=True
+    )
     directory = tmp_path / "exports"
     directory.mkdir()
     sentinel = directory / "previous_summary.json"
     sentinel.write_text("previous complete run")
     if interrupt_at == "staging":
+
         def interrupted(*args):
             raise KeyboardInterrupt
+
         monkeypatch.setattr(validation, "_atomic_csv", interrupted)
     else:
         original = validation.os.replace
@@ -317,7 +408,10 @@ def test_interrupted_exports_leave_no_artifacts(
             validation.export_f_lifecycle_research(bundle, directory, stem="interrupted")
         else:
             validation.export_f_intraday_entry_preflight(
-                report, requirements, directory, stem="interrupted",
+                report,
+                requirements,
+                directory,
+                stem="interrupted",
             )
     assert list(directory.iterdir()) == [sentinel]
     assert sentinel.read_text() == "previous complete run"
@@ -328,20 +422,37 @@ def test_cli_interrupt_terminates_without_export(monkeypatch, config, tmp_path, 
     monkeypatch.setattr(cli, "load_settings", lambda *args: SimpleNamespace(strategy=config))
     config.storage.reports_path = tmp_path / "reports"
 
-    def interrupted(*args):
+    def interrupted(*args, **kwargs):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(cli, "build_f_intraday_entry_preflight", interrupted)
     monkeypatch.setattr(cli, "run_f_intraday_entry", interrupted)
-    assert cli.main([
-        command, "--start", "2024-01-02", "--end", "2024-02-23", "--output-stem", "interrupt",
-    ]) == 130
+    assert (
+        cli.main(
+            [
+                command,
+                "--start",
+                "2024-01-02",
+                "--end",
+                "2024-02-23",
+                "--output-stem",
+                "interrupt",
+            ]
+            + (["--rediscover-candidates"] if command == "validate-f-intraday-entry" else [])
+        )
+        == 130
+    )
     assert not config.storage.reports_path.exists()
 
 
 @pytest.mark.parametrize("stage", ["discovery", "coverage_load", "coverage_evaluation", "backtest"])
 def test_cli_interrupt_during_research_leaves_no_reports(
-    monkeypatch, local_market, config, tmp_path, caplog, stage,
+    monkeypatch,
+    local_market,
+    config,
+    tmp_path,
+    caplog,
+    stage,
 ):
     _, db, sessions, preparation = research_preparation(monkeypatch, local_market)
     db.upsert_bars(native_session(sessions[1], weak=False))
@@ -355,17 +466,28 @@ def test_cli_interrupt_during_research_leaves_no_reports(
     if stage == "discovery":
         monkeypatch.setattr(preparation.screen_source, "screen", interrupted)
     elif stage == "coverage_load":
-        monkeypatch.setattr(validation.Database, "bars_between", interrupted)
+        monkeypatch.setattr(validation.Database, "iter_entry_coverage_batches", interrupted)
     elif stage == "coverage_evaluation":
         monkeypatch.setattr(validation, "opening_weakness_decision", interrupted)
     else:
         monkeypatch.setattr(BacktestEngine, "run", interrupted)
     command = "validate-f-intraday-entry" if stage == "backtest" else "preflight-f-intraday-entry"
     caplog.set_level(logging.INFO)
-    assert cli.main([
-        command, "--start", sessions[0].isoformat(), "--end", sessions[-1].isoformat(),
-        "--output-stem", "interrupt",
-    ]) == 130
+    assert (
+        cli.main(
+            [
+                command,
+                "--start",
+                sessions[0].isoformat(),
+                "--end",
+                sessions[-1].isoformat(),
+                "--output-stem",
+                "interrupt",
+            ]
+            + (["--rediscover-candidates"] if command == "validate-f-intraday-entry" else [])
+        )
+        == 130
+    )
     assert not config.storage.reports_path.exists()
     assert "interrupted by user" in caplog.text
     assert "phase=export" not in caplog.text

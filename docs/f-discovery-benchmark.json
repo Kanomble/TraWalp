@@ -1,0 +1,48 @@
+{
+  "reference": {
+    "elapsed_seconds": 230.50696959999914,
+    "candidate_count": 5000,
+    "full_screen_cache_size": 50,
+    "discovery_diagnostics": {
+      "screen_session_seconds": 230.02163760003168,
+      "candidate_prepare_seconds": 0.08326660009333864,
+      "peer_table_seconds": 0.0,
+      "peer_group_lookup_seconds": 0.0,
+      "scoring_seconds": 0.0,
+      "report_construction_seconds": 0.0,
+      "variant_f_evaluation_seconds": 0.0,
+      "sessions_processed": 50,
+      "companies_processed": 20000,
+      "prepared_candidates": 20000,
+      "peer_table_rows": 0,
+      "eligible_screen_records": 0,
+      "eligible_f_candidates": 0
+    },
+    "replay_bytes": 0
+  },
+  "optimized": {
+    "elapsed_seconds": 9.373552999997628,
+    "candidate_count": 5000,
+    "full_screen_cache_size": 0,
+    "discovery_diagnostics": {
+      "screen_session_seconds": 8.529605000061565,
+      "candidate_prepare_seconds": 0.07580530000268482,
+      "peer_table_seconds": 0.5865856000746135,
+      "peer_group_lookup_seconds": 3.854636199743254,
+      "scoring_seconds": 3.30701009951008,
+      "report_construction_seconds": 0.051764699892373756,
+      "variant_f_evaluation_seconds": 0.3705988997244276,
+      "sessions_processed": 50,
+      "companies_processed": 20050,
+      "prepared_candidates": 20000,
+      "peer_table_rows": 20000,
+      "eligible_screen_records": 0,
+      "eligible_f_candidates": 5000
+    },
+    "replay_bytes": 32415550
+  },
+  "sessions": 50,
+  "companies": 400,
+  "speedup": 24.591205661295934,
+  "exact_candidate_equality": true
+}
