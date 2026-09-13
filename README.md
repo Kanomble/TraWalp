@@ -782,6 +782,34 @@ fehlgeschlagenen Batches ab.
   lokale Bars sind standardmäßig Pflicht. Ergebnisse sind Research-Ausgaben, noch keine
   handelbare Strategie oder Kaufempfehlung.
 
+## Frozen L5 Forward Holdout
+
+`validate-f-l5-forward` vergleicht genau `L0_FORWARD` mit `L5_FORWARD` in der isolierten
+Familie `research-f-lifecycle-l5-forward-v1`. L0 bleibt F/configured/C1 mit hartem
+10-Session-Limit. L5 verwendet die bestehende Implementierung: einmalige Verlängerung
+am Tag 10 nur bei HEALTHY und PEER_CONFIRMED, hartes Limit 20 Sessions, Stop und Ziel
+bleiben aktiv. Es gibt keine Parameterwahl und keine automatische Champion-Promotion.
+
+```powershell
+.\.venv\Scripts\python.exe -m trading_system.cli validate-f-l5-forward `
+  --start 2024-08-13 `
+  --end 2026-08-12 `
+  --output-stem f_l5_forward_2024-08-13_2026-08-12_v1
+```
+
+Der Befehl arbeitet ausschließlich lokal und lehnt Startdaten vor dem 13.08.2024 ab.
+Der Zeitraum ist **FORWARD HOLDOUT / RESEARCH**, mit `forward_holdout=true` und
+`clean_oos=false`: Die aktuelle lokale tradable Universe-/SIC-Mitgliedschaft lässt
+historischen Survivorship Bias weiterhin offen. Die Primärdifferenz lautet
+`L5_FORWARD - L0_FORWARD`; der Champion bleibt F/configured/C1.
+
+Ein F-Discovery-Durchlauf liefert das gemeinsame temporäre Replay. Peer-Daily-Historien
+werden in Batches vorbereitet; kanonische Trend-/Peer-Werte und Lifecycle-Caches bleiben
+erhalten. Berichte unter dem Output-Stem: Summary, Metrics, Positions, Execution Legs,
+Equity Curve, Monthly, Yearly, Chronological Subperiods, Symbol Concentration und
+Lifecycle Events. Die Summary enthält Verlängerungszähler, Shared-Entry-PnL-Attribution
+und separate Discovery-/L0-/L5-/Diagnostik-Zeiten samt `peer_group_sessions_built`.
+
 ## Milestone-Reihenfolge
 
 Neue isolierte F-Research-Runden: `validate-f-lifecycle-v2` (L0–L6) und

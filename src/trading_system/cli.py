@@ -46,6 +46,12 @@ from trading_system.backtest.intraday_risk_validation import (
     risk_output_paths,
     run_f_intraday_risk,
 )
+from trading_system.backtest.l5_forward_validation import (
+    export_f_l5_forward,
+    l5_forward_output_paths,
+    run_f_l5_forward,
+    validate_forward_window,
+)
 from trading_system.backtest.lifecycle_daily_preflight import (
     build_f_lifecycle_daily_preflight,
     export_f_lifecycle_daily_preflight,
@@ -400,6 +406,10 @@ def _parser() -> argparse.ArgumentParser:
     regime_capacity_research.add_argument("--end", type=date.fromisoformat, required=True)
     regime_capacity_research.add_argument("--output-stem", required=True)
     for name, description in (
+        (
+            "validate-f-l5-forward",
+            "Local forward holdout: frozen F/configured/C1 versus canonical L5",
+        ),
         ("validate-f-lifecycle-v2", "Local F/configured lifecycle L0-L6 and canonical cost reruns"),
         ("preflight-f-lifecycle-daily", "Local F lifecycle Daily execution coverage"),
         ("preflight-f-intraday-entry", "Local F candidate discovery and native entry coverage"),
@@ -521,6 +531,26 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"\nVACUUM refused: {exc}", file=sys.stderr)
                     return 1
                 print("\nVACUUM completed.")
+        return 0
+    if args.command == "validate-f-l5-forward":
+        # Read-only research branch precedes database initialization/provider setup.
+        try:
+            validate_forward_window(args.start, args.end)
+            directory = settings.strategy.storage.reports_path
+            l5_forward_output_paths(directory, args.output_stem)
+            bundle = run_f_l5_forward(database, settings.strategy, args.start, args.end)
+            paths = export_f_l5_forward(bundle, directory, stem=args.output_stem)
+            print(
+                "research-f-lifecycle-l5-forward-v1: FORWARD HOLDOUT / RESEARCH; "
+                "clean_oos=false; L5_FORWARD - L0_FORWARD; frozen champion unchanged"
+            )
+            print("\n".join(f"{name}: {path}" for name, path in paths.items()))
+        except KeyboardInterrupt:
+            logging.getLogger(__name__).info("L5 forward research interrupted by user")
+            return 130
+        except (OSError, ValueError) as exc:
+            print(f"L5 forward research refused: {exc}", file=sys.stderr)
+            return 1
         return 0
     if args.command in {"preflight-f-intraday-risk", "validate-f-intraday-risk"}:
         try:
