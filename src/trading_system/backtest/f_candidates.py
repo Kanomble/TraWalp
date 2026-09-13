@@ -60,6 +60,7 @@ def discovery_code_fingerprint():
         "backtest/research_registry.py",
         "backtest/entry_quality.py",
         "data/database.py",
+        "data/sec_identity.py",
         "data/market_sessions.py",
         "data/universe.py",
         "strategy/screener.py",

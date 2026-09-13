@@ -5,6 +5,7 @@ from collections import Counter
 from dataclasses import fields
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -16,7 +17,11 @@ from test_f_candidate_manifest import export_fixture
 from trading_system.backtest import lifecycle_diagnostics
 from trading_system.backtest import lifecycle_validation as validation
 from trading_system.backtest.engine import evaluate_variant_entry
-from trading_system.backtest.f_candidates import data_fingerprint, load_manifest
+from trading_system.backtest.f_candidates import (
+    data_fingerprint,
+    discovery_code_fingerprint,
+    load_manifest,
+)
 from trading_system.backtest.f_replay import ReplayTechnical
 from trading_system.backtest.features import (
     _fast_technical_snapshot,
@@ -31,6 +36,20 @@ from trading_system.models.signals import TechnicalSnapshot
 
 config = fixtures.config
 local_market = fixtures.local_market
+
+
+def test_code_fingerprint_covers_canonical_identity_resolution(monkeypatch):
+    before = discovery_code_fingerprint()
+    original = Path.read_bytes
+
+    def changed(path):
+        payload = original(path)
+        return (
+            payload + b"\n# identity resolver change" if path.name == "sec_identity.py" else payload
+        )
+
+    monkeypatch.setattr(Path, "read_bytes", changed)
+    assert discovery_code_fingerprint() != before
 
 
 def test_scoped_fingerprint_excludes_future_and_nonparticipating_history(tmp_path):

@@ -60,7 +60,8 @@ candidate discovery now builds no replay payload. Its qualification rules are un
 Explicit columns use deterministic SQLite byte encoding and length-framed SHA-256 input,
 with batches of 200 symbols and fetches of 4,096 rows. No whole-row JSON or fact models are
 constructed. Operational `updated_at` columns and unrelated intraday data/cursors are absent.
-Configuration, code and runtime hashes remain separate; the code hash covers the new modules.
+Configuration, code and runtime hashes remain separate; the code hash covers the new modules
+and the canonical SEC identity resolver.
 
 **A 15m-only sync does not invalidate a Daily candidate manifest.** Future Daily bars and facts
 filed after the window are excluded; corrections within scope invalidate it. Newly tradable or
@@ -143,8 +144,10 @@ These bars are not exported, so manual intraday sync between preflight and valid
 
 ## 7. Correctness verification
 
-259 distinct focused tests pass. The broad focused run passed 258; its remaining progress test
+260 distinct focused tests pass. The broad focused run passed 258; its remaining progress test
 expected the old snapshot order. After updating that assertion, all 20 progress tests passed.
+The final compatibility review added an identity-code fingerprint regression; all 72 manifest,
+hardening and progress tests then passed together.
 Ruff and formatting checks cover the changed Python files.
 
 Exact deterministic assertions cover:
