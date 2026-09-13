@@ -5,12 +5,20 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date
 from statistics import mean
+from typing import Literal
 
 from trading_system.backtest.engine import evaluate_variant_entry
 from trading_system.backtest.lifecycle import previous_session
 from trading_system.backtest.peer_context import TechnicalPeerContextProvider
 from trading_system.data.market_sessions import trading_sessions_between
 from trading_system.models.backtest import BacktestResult, StrategyVariant
+
+_EMPTY_CORRELATIONS = {
+    "correlation_window_sessions": 60,
+    "correlation_pairs_valid": 0,
+    "mean_correlation_to_open_positions": None,
+    "max_correlation_to_open_positions": None,
+}
 
 
 def gap_observation(signal_close, next_open, atr) -> dict:
@@ -28,10 +36,20 @@ def gap_observation(signal_close, next_open, atr) -> dict:
 class LifecycleDiagnostics:
     """Observer has no return channel to entry filtering or lifecycle decisions."""
 
-    def __init__(self, context: TechnicalPeerContextProvider, config):
+    def __init__(
+        self,
+        context: TechnicalPeerContextProvider,
+        config,
+        *,
+        profile: Literal["lifecycle", "entry_quality"] = "lifecycle",
+    ):
+        if profile not in {"lifecycle", "entry_quality"}:
+            raise ValueError(f"Unknown diagnostics profile: {profile}")
         self.context = context
         self.config = config
+        self.profile = profile
         self.candidates: dict[tuple[date, str], dict] = {}
+        self._gap_correlation_symbols: dict[tuple[date, str], tuple[str, ...]] = {}
 
     def observe_screen(self, report, variant, config):
         pass  # Complete candidate context is supplied by the entry-context hook below.
@@ -59,8 +77,17 @@ class LifecycleDiagnostics:
                 "selection_outcome": "potential",
                 "executed": False,
                 "correlation_observation_basis": "signal_close_potential_entry",
-                **self.context.correlations(record.symbol, positions, report.as_of),
             }
+            if self.profile == "entry_quality":
+                # Gap CSVs historically include correlations. Snapshot symbols only;
+                # an execution observation may replace this potential-entry context.
+                self._gap_correlation_symbols[report.as_of, record.symbol] = tuple(positions)
+                # Reserve the legacy column order while deferring the calculation.
+                self.candidates[report.as_of, record.symbol].update(_EMPTY_CORRELATIONS)
+            else:
+                self.candidates[report.as_of, record.symbol].update(
+                    self.context.correlations(record.symbol, positions, report.as_of)
+                )
 
     def observe_portfolio_decision(self, signal_date, symbol, outcome, reason=None):
         row = self.candidates.get((signal_date, symbol))
@@ -70,7 +97,10 @@ class LifecycleDiagnostics:
     def observe_execution_context(self, signal_date, symbol, positions):
         row = self.candidates.get((signal_date, symbol))
         if row is not None:
-            row.update(self.context.correlations(symbol, positions, signal_date))
+            if self.profile == "entry_quality":
+                self._gap_correlation_symbols[signal_date, symbol] = tuple(positions)
+            else:
+                row.update(self.context.correlations(symbol, positions, signal_date))
             row["correlation_observation_basis"] = "execution_after_overnight_exits"
 
     def observe_execution(self, signal_date, execution_date, symbol, executed, reason=None):
@@ -94,6 +124,16 @@ class LifecycleDiagnostics:
         }
         positions = {(p.signal_date, p.symbol): p for p in result.positions}
         for (signal, symbol), candidate in self.candidates.items():
+            if self.profile == "entry_quality":
+                open_symbols = self._gap_correlation_symbols[signal, symbol]
+                # With no other open symbol the canonical answer is always empty;
+                # avoid even loading the 61-session history or constructing a Series.
+                correlations = (
+                    context.correlations(symbol, open_symbols, signal)
+                    if any(other != symbol for other in open_symbols)
+                    else _EMPTY_CORRELATIONS
+                )
+                candidate = {**candidate, **correlations}
             position = positions.get((signal, symbol))
             signal_bar = context.complete_history(symbol, signal, 1)
             next_session = date.fromisoformat(candidate["entry_session"])
@@ -113,6 +153,8 @@ class LifecycleDiagnostics:
                 "exit_reason": position.exit_reason if position else None,
             }
             tables["entry_gap_analysis"].append(gap)
+            if self.profile == "entry_quality":
+                continue
             tables["correlation"].append({**candidate, "position_result": gap["position_result"]})
             peer = context.context(symbol, signal)
             prior_peer = context.context(symbol, previous_session(signal))
@@ -168,6 +210,12 @@ class LifecycleDiagnostics:
 
         for position in result.positions:
             tables["holding_duration_analysis"].append(holding_row(context, position))
+        if self.profile == "entry_quality":
+            # Holding rows also supply required strategy-summary aggregates. Everything
+            # below is lifecycle/peer research and cannot inform the isolated I0/I1 run.
+            tables["entry_gap_summary"] = gap_summary(tables["entry_gap_analysis"])
+            tables["peer_summary"] = []
+            return tables
         if manager is not None:
             tables["trend_health_events"] = list(getattr(manager, "trend_events", ()))
             by_id = {p.position_id: p for p in result.positions}

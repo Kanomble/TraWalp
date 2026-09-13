@@ -315,9 +315,7 @@ class TemporalScreens:
         return SimpleNamespace(as_of=session, records=tuple(records))
 
 
-def test_reference_and_reduced_i0_i1_complete_results_tables_and_summary(
-    monkeypatch, local_market, config, tmp_path
-):
+def _temporal_manifest(monkeypatch, local_market, config, tmp_path):
     _, database, sessions, preparation = fixtures.research_preparation(monkeypatch, local_market)
     source = preparation.screen_source = TemporalScreens(sessions)
     daily = database.bars_between(
@@ -357,10 +355,26 @@ def test_reference_and_reduced_i0_i1_complete_results_tables_and_summary(
     path = paths["intraday_candidates.json"]
     assert requirements.replay_spool.records < 2 * len(sessions)
     requirements.close()
-    real_load = validation.load_manifest
     monkeypatch.setattr(
         validation, "_qualify_daily_research", lambda *args: {"ready": True, "failure_reasons": []}
     )
+    return database, sessions, source, path
+
+
+def test_reference_and_reduced_i0_i1_complete_results_tables_and_summary(
+    monkeypatch, local_market, config, tmp_path
+):
+    database, sessions, source, path = _temporal_manifest(
+        monkeypatch, local_market, config, tmp_path
+    )
+    real_load = validation.load_manifest
+    diagnostics_class = validation.LifecycleDiagnostics
+
+    def legacy_diagnostics(*args, **kwargs):
+        kwargs["profile"] = "lifecycle"
+        return diagnostics_class(*args, **kwargs)
+
+    monkeypatch.setattr(validation, "LifecycleDiagnostics", legacy_diagnostics)
 
     def full_reference(*args, **kwargs):
         manifest, _ = real_load(*args, **kwargs)
@@ -380,6 +394,7 @@ def test_reference_and_reduced_i0_i1_complete_results_tables_and_summary(
     )
     monkeypatch.setattr(validation, "load_manifest", real_load)
     monkeypatch.setattr(validation, "BacktestEngine", engine_class)
+    monkeypatch.setattr(validation, "LifecycleDiagnostics", diagnostics_class)
     original_bars_between = database.bars_between
 
     def no_repeated_native_read(*args, **kwargs):
@@ -395,7 +410,23 @@ def test_reference_and_reduced_i0_i1_complete_results_tables_and_summary(
     actual = validation.run_f_intraday_entry(
         database, config, sessions[0], sessions[-1], candidate_manifest=path
     )
-    assert actual.tables == reference.tables
+    omitted_tables = {
+        "peer_context",
+        "peer_spillover",
+        "peer_summary",
+        "correlation",
+        "trend_health_events",
+        "dynamic_profit_events",
+    }
+    for name in omitted_tables:
+        assert actual.tables[name] == []
+    assert reference.tables["peer_context"] and reference.tables["trend_health_events"]
+    assert {k: v for k, v in actual.tables.items() if k not in omitted_tables} == {
+        k: v for k, v in reference.tables.items() if k not in omitted_tables
+    }
+    assert validation._field_union(actual.tables["entry_gap_analysis"]) == validation._field_union(
+        reference.tables["entry_gap_analysis"]
+    )
     for key, expected in reference.results.items():
         assert expected.positions and len(expected.positions) >= 2
         assert any(p.is_reentry for p in expected.positions)
@@ -406,8 +437,86 @@ def test_reference_and_reduced_i0_i1_complete_results_tables_and_summary(
     assert any(
         row["status"] == "OPENING_WEAKNESS_VETO" for row in actual.tables["entry_quality_events"]
     )
+    assert actual.summary["performance"]["peer_group_sessions_built"] == 0
+    assert reference.summary["performance"]["peer_group_sessions_built"] > 0
+    print(
+        json.dumps(
+            {
+                "diagnostics_fixture_seconds": {
+                    "before": reference.summary["performance"]["diagnostics_seconds"],
+                    "after": actual.summary["performance"]["diagnostics_seconds"],
+                },
+                "validation_phases_seconds": {
+                    key: actual.summary["performance"][key]
+                    for key in (
+                        "qualification_seconds",
+                        "coverage_verification_seconds",
+                        "i0_seconds",
+                        "i1_seconds",
+                        "diagnostics_seconds",
+                    )
+                },
+                "entry_quality_candidate_rows": actual.summary["performance"][
+                    "entry_quality_candidate_rows"
+                ],
+                "peer_group_sessions_built": actual.summary["performance"][
+                    "peer_group_sessions_built"
+                ],
+            }
+        )
+    )
     # Timings alone are nondeterministic; nested qualification and summary rows match.
     for summary in (actual.summary, reference.summary):
         summary.pop("performance")
         summary["intraday_qualification"].pop("performance")
     assert actual.summary == reference.summary
+
+
+def test_entry_quality_diagnostics_never_build_peer_context(
+    monkeypatch, local_market, config, tmp_path
+):
+    database, sessions, _, path = _temporal_manifest(monkeypatch, local_market, config, tmp_path)
+    provider = validation.TechnicalPeerContextProvider
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Entry-quality validation reached lifecycle/peer diagnostics")
+
+    for method in ("_session_groups", "_context", "peer_state", "trend", "_technical"):
+        monkeypatch.setattr(provider, method, forbidden)
+    original_init = provider.__init__
+
+    def guarded_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        self.context = forbidden  # context() is an instance-owned LRU, not a class method.
+
+    monkeypatch.setattr(provider, "__init__", guarded_init)
+    result = validation.run_f_intraday_entry(
+        database, config, sessions[0], sessions[-1], candidate_manifest=path
+    )
+    assert result.tables["entry_gap_analysis"] and result.tables["entry_quality_events"]
+    assert result.summary["performance"]["peer_group_sessions_built"] == 0
+    assert result.summary["performance"]["entry_quality_candidate_rows"] == len(
+        result.tables["entry_gap_analysis"]
+    )
+    # Gap CSVs include historical correlation evidence. Compute that evidence only
+    # in tables(), against a snapshot of open symbols, never in the entry hooks.
+    calls = []
+    correlation = {"correlation_pairs_valid": 1, "mean_correlation_to_open_positions": 0.5}
+    context = SimpleNamespace(
+        correlations=lambda *args: calls.append(args) or correlation,
+        complete_history=lambda *args: [],
+    )
+    observer = lifecycle_diagnostics.LifecycleDiagnostics(context, config, profile="entry_quality")
+    report = SimpleNamespace(as_of=sessions[0], f_candidates=((90, fixtures.record("AAA")),))
+    positions = {"BBB": None}
+    observer.observe_entry_context(report, positions, sessions[1])
+    positions.clear()
+    assert calls == []
+    tables = observer.tables(SimpleNamespace(positions=()))
+    assert calls == [("AAA", ("BBB",), sessions[0])]
+    assert tables["entry_gap_analysis"][0]["mean_correlation_to_open_positions"] == 0.5
+    calls.clear()
+    observer.observe_execution_context(sessions[0], "AAA", positions)
+    tables = observer.tables(SimpleNamespace(positions=()))
+    assert calls == []
+    assert tables["entry_gap_analysis"][0]["correlation_pairs_valid"] == 0

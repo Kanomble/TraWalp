@@ -824,7 +824,19 @@ def _run_research_impl(
                 if intraday
                 else lifecycle_strategy_config(cost_config, identity)
             )
-            observer = LifecycleDiagnostics(context, variant_config) if case == "BASELINE" else None
+            observer = (
+                LifecycleDiagnostics(
+                    context,
+                    variant_config,
+                    profile=(
+                        "entry_quality"
+                        if family == F_INTRADAY_ENTRY_RESEARCH_FAMILY
+                        else "lifecycle"
+                    ),
+                )
+                if case == "BASELINE"
+                else None
+            )
             engine = BacktestEngine(
                 database,
                 variant_config,
@@ -885,6 +897,10 @@ def _run_research_impl(
         provenance = audit_universe_provenance(database, start, end)
     if progress:
         progress.performance["diagnostics_seconds"] = phase.seconds + diagnostics_prepare_seconds
+        progress.performance.update(
+            entry_quality_candidate_rows=len(tables["entry_gap_analysis"]),
+            peer_group_sessions_built=context._groups.cache_info().misses,
+        )
     summary = {
         "research_family": family,
         "period_classification": "DEVELOPMENT / RESEARCH",
