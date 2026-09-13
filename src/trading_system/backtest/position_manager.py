@@ -38,6 +38,7 @@ class ExitReason(StrEnum):
     SESSION_CLOSE = "session_close"
     LIFECYCLE_TREND = "lifecycle_trend_weakening"
     LIFECYCLE_PEERS = "lifecycle_peer_weakening"
+    INTRADAY_RISK_BREAKDOWN = "intraday_risk_breakdown"
 
 
 class ProfitLockState(StrEnum):

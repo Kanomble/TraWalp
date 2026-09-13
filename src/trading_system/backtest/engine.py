@@ -406,6 +406,7 @@ class BacktestEngine:
         lifecycle_context: LifecycleContextProvider | None = None,
         opening_weakness_veto: bool = False,
         entry_common_support: bool = False,
+        intraday_risk=None,
         native_entry_provider=None,
         entry_context_observer: Callable | None = None,
         execution_context_observer: Callable | None = None,
@@ -425,6 +426,7 @@ class BacktestEngine:
         self.lifecycle_context = lifecycle_context
         self.opening_weakness_veto = opening_weakness_veto
         self.entry_common_support = entry_common_support
+        self.intraday_risk = intraday_risk
         self.native_entry_provider = native_entry_provider
         self.entry_context_observer = entry_context_observer
         self.execution_context_observer = execution_context_observer
@@ -457,6 +459,17 @@ class BacktestEngine:
     ) -> BacktestResult:
         if start > end:
             raise ValueError("Backtest start must not be after end")
+        if self.intraday_risk is not None and (
+            variant is not StrategyVariant.QUALITY_VALUE_MOMENTUM
+            or preset is not PositionManagementPreset.CONFIGURED
+            or BarTimeframe(self.config.position_management.bar_timeframe) is not BarTimeframe.DAY_1
+            or self.config.portfolio.max_positions != 1
+            or self.lifecycle_preset is not None
+            or self.opening_weakness_veto
+            or self.entry_common_support
+            or self.entry_capacity_provider is not None
+        ):
+            raise ValueError("Intraday risk is isolated F/configured Daily/C1 research")
         if getattr(self.screen_source, "f_configured_replay", False) and (
             variant is not StrategyVariant.QUALITY_VALUE_MOMENTUM
             or preset is not PositionManagementPreset.CONFIGURED
@@ -1144,6 +1157,17 @@ class BacktestEngine:
                         )
                         continue
                     entry_bar = bar
+                    if self.intraday_risk is not None and not self.intraday_risk.allow_entry(
+                        order, session
+                    ):
+                        skipped["intraday_risk_unsupported_signal"] += 1
+                        self._observe_execution(
+                            order,
+                            session,
+                            executed=False,
+                            reason="intraday_risk_unsupported_signal",
+                        )
+                        continue
                     if (
                         self.entry_common_support
                         and self.intraday_session_statuses.get((order.record.symbol, session))
@@ -1252,6 +1276,8 @@ class BacktestEngine:
                     positions[position.symbol] = position
                     execution_legs[position.position_id] = []
                     reentry_trackers.pop(position.symbol, None)
+                    if self.intraday_risk is not None:
+                        self.intraday_risk.on_entry(position)
                     self._observe_execution(order, session, executed=True)
                     session_peak_market_value = max(
                         session_peak_market_value,
@@ -1266,6 +1292,12 @@ class BacktestEngine:
                     if bar is None:
                         continue
                     position = positions[symbol]
+                    if self.intraday_risk is not None:
+                        risk_exit = self.intraday_risk.session_exit(position, session)
+                        if risk_exit is not None:
+                            decision, execution_bar = risk_exit
+                            if execute_position_decision(symbol, session, decision, execution_bar):
+                                continue
                     position.last_price = float(bar.close)
                     while True:
                         decision = self.position_manager.evaluate_intrabar(position, bar)
@@ -2574,6 +2606,8 @@ class BacktestEngine:
     ) -> tuple[float, BacktestTrade, bool]:
         if decision.reason is None or decision.reference_price is None:
             raise ValueError("Sell decision requires reason and reference price")
+        if self.intraday_risk is not None:
+            self.intraday_risk.on_exit(position, decision, bar)
         reference = decision.reference_price
         if bar is not None and reference == float(bar.open):
             if decision.reason is ExitReason.TAKE_PROFIT and position.target_price is not None:
@@ -2619,6 +2653,7 @@ class BacktestEngine:
             ExitReason.CONFIRMED_SWING_HIGH,
             ExitReason.LIFECYCLE_TREND,
             ExitReason.LIFECYCLE_PEERS,
+            ExitReason.INTRADAY_RISK_BREAKDOWN,
         }:
             position.highest_price_since_entry = max(
                 position.highest_price_since_entry, float(bar.open), reference

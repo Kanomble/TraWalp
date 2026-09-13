@@ -40,6 +40,12 @@ from trading_system.backtest.intraday_next import (
     annotate_intraday_next_coverage,
     export_intraday_next_comparison,
 )
+from trading_system.backtest.intraday_risk_validation import (
+    build_f_intraday_risk_preflight,
+    export_f_intraday_risk,
+    risk_output_paths,
+    run_f_intraday_risk,
+)
 from trading_system.backtest.lifecycle_daily_preflight import (
     build_f_lifecycle_daily_preflight,
     export_f_lifecycle_daily_preflight,
@@ -398,6 +404,11 @@ def _parser() -> argparse.ArgumentParser:
         ("preflight-f-lifecycle-daily", "Local F lifecycle Daily execution coverage"),
         ("preflight-f-intraday-entry", "Local F candidate discovery and native entry coverage"),
         ("validate-f-intraday-entry", "Qualified local F entry-quality comparison I0/I1"),
+        (
+            "preflight-f-intraday-risk",
+            "Local Daily R0 baseline and native position-session coverage",
+        ),
+        ("validate-f-intraday-risk", "Isolated F/configured/C1 intraday risk containment"),
     ):
         research = commands.add_parser(name, help=description)
         research.add_argument("--start", type=date.fromisoformat, required=True)
@@ -510,6 +521,28 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"\nVACUUM refused: {exc}", file=sys.stderr)
                     return 1
                 print("\nVACUUM completed.")
+        return 0
+    if args.command in {"preflight-f-intraday-risk", "validate-f-intraday-risk"}:
+        try:
+            preflight = args.command == "preflight-f-intraday-risk"
+            directory = settings.strategy.storage.reports_path
+            risk_output_paths(directory, args.output_stem, preflight=preflight)
+            runner = build_f_intraday_risk_preflight if preflight else run_f_intraday_risk
+            bundle = runner(database, settings.strategy, args.start, args.end)
+            paths = export_f_intraday_risk(
+                bundle, directory, stem=args.output_stem, preflight=preflight
+            )
+            print(
+                f"research-f-intraday-risk-v1: {bundle.summary['qualification_status']}; "
+                "frozen champion unchanged"
+            )
+            print("\n".join(f"{name}: {path}" for name, path in paths.items()))
+        except KeyboardInterrupt:
+            logging.getLogger(__name__).info("Intraday risk research interrupted by user")
+            return 130
+        except (OSError, ValueError) as exc:
+            print(f"Intraday risk research refused: {exc}", file=sys.stderr)
+            return 1
         return 0
     if args.command in {
         "validate-f-lifecycle-v2",

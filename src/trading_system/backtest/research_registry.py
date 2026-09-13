@@ -9,6 +9,10 @@ from trading_system.backtest.entry_quality import (
     F_INTRADAY_ENTRY_RESEARCH_FAMILY,
     F_INTRADAY_ENTRY_VARIANTS,
 )
+from trading_system.backtest.intraday_risk import (
+    F_INTRADAY_RISK_RESEARCH_FAMILY,
+    F_INTRADAY_RISK_VARIANTS,
+)
 from trading_system.backtest.lifecycle import F_LIFECYCLE_RESEARCH_FAMILY, F_LIFECYCLE_VARIANTS
 from trading_system.backtest.market_regime import RegimeCapacityRule
 from trading_system.backtest.screen_strategies import SCREEN_STRATEGY_DEFINITIONS
@@ -80,6 +84,7 @@ FROZEN_CHAMPION_F = FrozenResearchChampion(
 F_CAPACITY_RESEARCH_FAMILY = "research-f-capacity"
 # Isolated lifecycle/entry identities are not production management enums or Cartesian runs.
 F_ISOLATED_RESEARCH_FAMILIES = {
+    F_INTRADAY_RISK_RESEARCH_FAMILY: F_INTRADAY_RISK_VARIANTS,
     F_LIFECYCLE_RESEARCH_FAMILY: F_LIFECYCLE_VARIANTS,
     F_INTRADAY_ENTRY_RESEARCH_FAMILY: F_INTRADAY_ENTRY_VARIANTS,
 }
