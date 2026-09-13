@@ -405,6 +405,7 @@ class BacktestEngine:
         lifecycle_preset: LifecyclePreset | None = None,
         lifecycle_context: LifecycleContextProvider | None = None,
         opening_weakness_veto: bool = False,
+        entry_common_support: bool = False,
         native_entry_provider=None,
         entry_context_observer: Callable | None = None,
         execution_context_observer: Callable | None = None,
@@ -423,6 +424,7 @@ class BacktestEngine:
         self.lifecycle_preset = lifecycle_preset
         self.lifecycle_context = lifecycle_context
         self.opening_weakness_veto = opening_weakness_veto
+        self.entry_common_support = entry_common_support
         self.native_entry_provider = native_entry_provider
         self.entry_context_observer = entry_context_observer
         self.execution_context_observer = execution_context_observer
@@ -460,13 +462,19 @@ class BacktestEngine:
             or preset is not PositionManagementPreset.CONFIGURED
         ):
             raise ValueError("Candidate manifest replay requires F/configured")
-        if self.lifecycle_preset is not None or self.opening_weakness_veto:
+        if (
+            self.lifecycle_preset is not None
+            or self.opening_weakness_veto
+            or self.entry_common_support
+        ):
             if variant is not StrategyVariant.QUALITY_VALUE_MOMENTUM or (
                 preset is not PositionManagementPreset.CONFIGURED
                 or BarTimeframe(self.config.position_management.bar_timeframe).intraday
             ):
                 raise ValueError("Lifecycle/entry-quality research requires F/configured Daily")
-            if self.lifecycle_preset is not None and self.opening_weakness_veto:
+            if self.lifecycle_preset is not None and (
+                self.opening_weakness_veto or self.entry_common_support
+            ):
                 raise ValueError("Lifecycle and intraday entry must be researched separately")
         if (
             self.entry_capacity_provider is not None
@@ -1136,6 +1144,32 @@ class BacktestEngine:
                         )
                         continue
                     entry_bar = bar
+                    if (
+                        self.entry_common_support
+                        and self.intraday_session_statuses.get((order.record.symbol, session))
+                        == EntryQualityStatus.PROVIDER_ABSENT.value
+                    ):
+                        # Selection already consumed capacity at T. Discard only this
+                        # pending signal at T+1; never rerank or promote another name.
+                        status = EntryQualityStatus.PROVIDER_ABSENT.value
+                        skipped[status] += 1
+                        self.entry_quality_events.append(
+                            {
+                                "symbol": order.record.symbol,
+                                "signal_date": order.signal_date.isoformat(),
+                                "entry_session": session.isoformat(),
+                                "candidate_rank": order.daily_candidate_rank,
+                                "candidate_count": order.daily_candidate_count,
+                                "status": status,
+                                "decision_timestamp": None,
+                                "actual_entry_timestamp": None,
+                                "last_15m_close": None,
+                                "session_vwap_to_date": None,
+                                "reason": "common_support_signal_consumed",
+                            }
+                        )
+                        self._observe_execution(order, session, executed=False, reason=status)
+                        continue
                     if self.opening_weakness_veto:
                         if self.native_entry_provider is not None:
                             native, previous_close = self.native_entry_provider.entry_session(

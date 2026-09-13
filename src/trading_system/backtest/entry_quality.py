@@ -17,6 +17,7 @@ class EntryQualityPreset:
     research_id: str
     label: str
     opening_weakness_veto: bool = False
+    common_support: bool = False
 
 
 F_INTRADAY_ENTRY_VARIANTS = (
@@ -24,11 +25,21 @@ F_INTRADAY_ENTRY_VARIANTS = (
     EntryQualityPreset("F-INTRADAY-ENTRY-I1", "F-entry-opening-weakness-veto", True),
 )
 
+# Validation runs; retain the discovery identities above for existing candidate manifests.
+F_INTRADAY_COMMON_SUPPORT_VARIANTS = (
+    EntryQualityPreset("F-INTRADAY-ENTRY-I0_FULL", "I0_FULL"),
+    EntryQualityPreset(
+        "F-INTRADAY-ENTRY-I0_COMMON_SUPPORT", "I0_COMMON_SUPPORT", common_support=True
+    ),
+    EntryQualityPreset("F-INTRADAY-ENTRY-I1_COMMON_SUPPORT", "I1_COMMON_SUPPORT", True, True),
+)
+
 
 class EntryQualityStatus(StrEnum):
     PASSED = "PASSED"
     VETO = "OPENING_WEAKNESS_VETO"
     UNAVAILABLE = "INTRADAY_UNAVAILABLE"
+    PROVIDER_ABSENT = "PROVIDER_CONFIRMED_ABSENT"
 
 
 @dataclass(frozen=True, slots=True)

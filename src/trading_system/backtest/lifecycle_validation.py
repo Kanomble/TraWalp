@@ -9,7 +9,7 @@ import time
 from collections import Counter, deque
 from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -24,6 +24,7 @@ from trading_system.backtest.engine import (
     prepare_strategy_comparison,
 )
 from trading_system.backtest.entry_quality import (
+    F_INTRADAY_COMMON_SUPPORT_VARIANTS,
     F_INTRADAY_ENTRY_RESEARCH_FAMILY,
     F_INTRADAY_ENTRY_VARIANTS,
     EntryQualityStatus,
@@ -65,6 +66,14 @@ from trading_system.backtest.validation import (
 )
 from trading_system.config import StrategyConfig
 from trading_system.data.database import Database
+from trading_system.data.intraday_remediation import (
+    PROVIDER_OBSERVATION_SOURCE,
+    CandidateIntradayRequirement,
+    IntradayQualificationStatus,
+    IntradayRequirementStatus,
+    _classify_missing,
+    _observation_key,
+)
 from trading_system.data.market_sessions import trading_sessions_between
 from trading_system.models.backtest import (
     BacktestPosition,
@@ -725,6 +734,60 @@ def run_f_intraday_entry(
     )
 
 
+def _entry_common_support(database, config, coverage):
+    """Apply canonical remediation evidence rules to the already-batched coverage.
+
+    No provider access or second price query. An absence must cover every currently
+    missing timestamp and match feed, adjustment, session and regular-hours scope.
+    Timestamp-complete data with unusable VWAP/previous close still blocks validation.
+    """
+    observations = database.sync_values(PROVIDER_OBSERVATION_SOURCE)
+    statuses = {}
+    for row in coverage["coverage"]:
+        requirement = CandidateIntradayRequirement(
+            row["symbol"], date.fromisoformat(row["execution_session"]), BarTimeframe.MINUTES_15
+        )
+        status, reason = _classify_missing(
+            requirement,
+            tuple(datetime.fromisoformat(value) for value in row["missing_timestamps"]),
+            observations.get(_observation_key(requirement)),
+            feed=config.universe.market_data_feed,
+            adjustment=config.universe.market_data_adjustment,
+            extended_hours=False,
+        )
+        if status is IntradayRequirementStatus.REQUIRED_PRESENT and row["status"] != "QUALIFIED":
+            status = IntradayRequirementStatus.LOCAL_MISSING_FETCHABLE
+            reason = row["reason"]
+        row.update(classification=status.value, provider_evidence_reason=reason)
+        statuses[requirement.symbol, requirement.session] = status.value
+    counts = Counter(statuses.values())
+    qualification = (
+        IntradayQualificationStatus.NOT_READY_PROVIDER_VERIFICATION_FAILURE
+        if counts[IntradayRequirementStatus.PROVIDER_CHECK_FAILED.value]
+        else IntradayQualificationStatus.NOT_READY_LOCAL_GAPS
+        if counts[IntradayRequirementStatus.LOCAL_MISSING_FETCHABLE.value]
+        else IntradayQualificationStatus.READY_WITH_PROVIDER_ABSENCE
+        if counts[IntradayRequirementStatus.PROVIDER_CONFIRMED_ABSENT.value]
+        else IntradayQualificationStatus.READY
+    )
+    coverage["qualification_status"] = qualification.value
+    coverage["provider_absent_candidate_sessions"] = counts[
+        IntradayRequirementStatus.PROVIDER_CONFIRMED_ABSENT.value
+    ]
+    coverage["common_support_candidate_sessions"] = counts[
+        IntradayRequirementStatus.REQUIRED_PRESENT.value
+    ]
+    if qualification not in {
+        IntradayQualificationStatus.READY,
+        IntradayQualificationStatus.READY_WITH_PROVIDER_ABSENCE,
+    }:
+        raise ValueError(
+            f"INTRADAY_UNAVAILABLE: {qualification.value}; "
+            "resolve candidate coverage before validation"
+        )
+    return statuses
+
+
 def _run_research(database, config, start, end, *, intraday, candidate_manifest=None):
     with ExitStack() as resources:
         native_entries = resources.enter_context(NativeEntrySessions()) if intraday else None
@@ -770,6 +833,7 @@ def _run_research_impl(
     if progress:
         progress.record("qualification", phase)
     intraday_qualification = None
+    support_statuses = {}
     if intraday:
         with progress.phase("coverage_verification", "intraday coverage verification") as phase:
             intraday_qualification, requirements = build_f_intraday_entry_preflight(
@@ -783,20 +847,17 @@ def _run_research_impl(
                 qualification=qualification,
                 native_entries=native_entries,
             )
+            if manifest is None:
+                resources.callback(requirements.close)
+            support_statuses = _entry_common_support(database, config, intraday_qualification)
         progress.record("coverage_verification", phase)
         if manifest is None:
-            resources.callback(requirements.close)
             spool = requirements.replay_spool
             preparation = SimpleNamespace(
                 sessions=preparation.sessions,
                 screen_source=ManifestScreenSource(None, spool.offsets, stream=spool.file),
             )
-        if not intraday_qualification["intraday_qualified"]:
-            raise ValueError(
-                "INTRADAY_UNAVAILABLE: run preflight-f-intraday-entry, then manually "
-                "qualify/sync the reported native symbol-sessions before validation"
-            )
-    identities = F_INTRADAY_ENTRY_VARIANTS if intraday else F_LIFECYCLE_VARIANTS
+    identities = F_INTRADAY_COMMON_SUPPORT_VARIANTS if intraday else F_LIFECYCLE_VARIANTS
     family = F_INTRADAY_ENTRY_RESEARCH_FAMILY if intraday else F_LIFECYCLE_RESEARCH_FAMILY
     with (
         progress.phase("diagnostics_prepare", "preparing diagnostic context")
@@ -844,6 +905,8 @@ def _run_research_impl(
                 lifecycle_preset=None if intraday else identity,
                 lifecycle_context=context,
                 opening_weakness_veto=intraday and identity.opening_weakness_veto,
+                entry_common_support=intraday and identity.common_support,
+                intraday_session_statuses=support_statuses if intraday else None,
                 native_entry_provider=native_entries,
                 audit_observer=observer,
                 entry_context_observer=observer.observe_entry_context if observer else None,
@@ -941,6 +1004,38 @@ def _run_research_impl(
         "warnings": sorted({w for result in results.values() for w in result.warnings}),
     }
     if progress:
+        by_label = {identity.label: results[identity.research_id] for identity in identities}
+        summary.update(
+            provider_absent_candidate_sessions=intraday_qualification[
+                "provider_absent_candidate_sessions"
+            ],
+            common_support_candidate_sessions=intraday_qualification[
+                "common_support_candidate_sessions"
+            ],
+            provider_absent_signals_consumed_I0=by_label["I0_COMMON_SUPPORT"].skipped_entries.get(
+                EntryQualityStatus.PROVIDER_ABSENT.value, 0
+            ),
+            provider_absent_signals_consumed_I1=by_label["I1_COMMON_SUPPORT"].skipped_entries.get(
+                EntryQualityStatus.PROVIDER_ABSENT.value, 0
+            ),
+        )
+        summary["comparisons"] = {}
+        for name, treated, control in (
+            ("opening_weakness_effect", "I1_COMMON_SUPPORT", "I0_COMMON_SUPPORT"),
+            ("coverage_support_bias", "I0_COMMON_SUPPORT", "I0_FULL"),
+        ):
+            before = by_label[control].metrics.model_dump()
+            after = by_label[treated].metrics.model_dump()
+            summary["comparisons"][name] = {
+                "comparison": f"{treated} - {control}",
+                "primary": name == "opening_weakness_effect",
+                "metric_deltas": {
+                    key: after[key] - before[key]
+                    if after[key] is not None and before[key] is not None
+                    else None
+                    for key in before
+                },
+            }
         progress.performance.update(
             native_entry_cache_peak=native_entries.peak_cache_size,
             native_entry_spool_reads=native_entries.reads,
