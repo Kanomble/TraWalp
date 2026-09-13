@@ -405,6 +405,7 @@ class BacktestEngine:
         lifecycle_preset: LifecyclePreset | None = None,
         lifecycle_context: LifecycleContextProvider | None = None,
         opening_weakness_veto: bool = False,
+        native_entry_provider=None,
         entry_context_observer: Callable | None = None,
         execution_context_observer: Callable | None = None,
         require_complete_daily_position_bars: bool = False,
@@ -422,6 +423,7 @@ class BacktestEngine:
         self.lifecycle_preset = lifecycle_preset
         self.lifecycle_context = lifecycle_context
         self.opening_weakness_veto = opening_weakness_veto
+        self.native_entry_provider = native_entry_provider
         self.entry_context_observer = entry_context_observer
         self.execution_context_observer = execution_context_observer
         self.require_complete_daily_position_bars = require_complete_daily_position_bars
@@ -453,6 +455,11 @@ class BacktestEngine:
     ) -> BacktestResult:
         if start > end:
             raise ValueError("Backtest start must not be after end")
+        if getattr(self.screen_source, "f_configured_replay", False) and (
+            variant is not StrategyVariant.QUALITY_VALUE_MOMENTUM
+            or preset is not PositionManagementPreset.CONFIGURED
+        ):
+            raise ValueError("Candidate manifest replay requires F/configured")
         if self.lifecycle_preset is not None or self.opening_weakness_veto:
             if variant is not StrategyVariant.QUALITY_VALUE_MOMENTUM or (
                 preset is not PositionManagementPreset.CONFIGURED
@@ -519,8 +526,10 @@ class BacktestEngine:
         sessions = _backtest_sessions(self.database, start, end)
         if self.progress:
             self.progress.update(
-                sessions_processed=0, sessions_total=len(sessions),
-                positions_closed=0, active_positions=0,
+                sessions_processed=0,
+                sessions_total=len(sessions),
+                positions_closed=0,
+                active_positions=0,
             )
 
         cash = float(self.config.backtest.initial_capital)
@@ -1128,21 +1137,29 @@ class BacktestEngine:
                         continue
                     entry_bar = bar
                     if self.opening_weakness_veto:
-                        window_start, window_end = regular_session_bounds(session)
-                        native = self.database.bars_between(
-                            [order.record.symbol],
-                            window_start,
-                            window_end,
-                            timeframe=BarTimeframe.MINUTES_15,
-                        )
-                        history = self.database.bars_available_as_of(
-                            order.record.symbol, order.signal_date, limit=1
-                        )
-                        previous_close = (
-                            float(history[-1].close)
-                            if history and history[-1].timestamp.date() == order.signal_date
-                            else None
-                        )
+                        if self.native_entry_provider is not None:
+                            native, previous_close = self.native_entry_provider.entry_session(
+                                order.record.symbol,
+                                order.signal_date,
+                                session,
+                                timeframe=BarTimeframe.MINUTES_15,
+                            )
+                        else:
+                            window_start, window_end = regular_session_bounds(session)
+                            native = self.database.bars_between(
+                                [order.record.symbol],
+                                window_start,
+                                window_end,
+                                timeframe=BarTimeframe.MINUTES_15,
+                            )
+                            history = self.database.bars_available_as_of(
+                                order.record.symbol, order.signal_date, limit=1
+                            )
+                            previous_close = (
+                                float(history[-1].close)
+                                if history and history[-1].timestamp.date() == order.signal_date
+                                else None
+                            )
                         quality = opening_weakness_decision(native, session, previous_close)
                         entry_bar = next_executable_bar(native, quality, session)
                         unavailable = bool(missing_session_timestamps(native, session))
@@ -1350,8 +1367,10 @@ class BacktestEngine:
 
             if self.progress:
                 self.progress.update(
-                    session=session.isoformat(), sessions_processed=index + 1,
-                    positions_closed=len(completed_positions), active_positions=len(positions),
+                    session=session.isoformat(),
+                    sessions_processed=index + 1,
+                    positions_closed=len(completed_positions),
+                    active_positions=len(positions),
                 )
 
         warnings = list(BACKTEST_WARNINGS)
@@ -1493,6 +1512,9 @@ class BacktestEngine:
                         report.as_of, record.symbol, "blocked", reason
                     )
             return []
+        # Omitted symbols have never been F eligible: only their first-rejection counts
+        # are observable. Capacity-full sessions deliberately return before this update.
+        skipped.update(dict(getattr(report, "omitted_rejections", ())))
         candidates: list[_PendingEntry] = []
         for record in report.records:
             evaluation = evaluate_variant_entry(record, variant, self.config)
@@ -3743,6 +3765,11 @@ def research_strategy_label(variant: StrategyVariant, preset: PositionManagement
     return registered_research_strategy_label(variant, preset)
 
 
+def entry_blocking_reasons(exclusion_reasons):
+    """Canonical ordered hard exclusions, shared with F's pre-scoring fast rejection."""
+    return tuple(reason for reason in exclusion_reasons if reason not in SCORE_FILTER_EXCLUSIONS)
+
+
 def evaluate_variant_entry(
     record: ScreenRecord, variant: StrategyVariant, config: StrategyConfig
 ) -> EntryFilterEvaluation:
@@ -3755,9 +3782,7 @@ def evaluate_variant_entry(
     rules = config.backtest
     definition = screen_strategy_definition(variant)
     gate = evaluate_strategy_gate(record.technical, variant, config)
-    blocking = tuple(
-        reason for reason in record.exclusion_reasons if reason not in SCORE_FILTER_EXCLUSIONS
-    )
+    blocking = entry_blocking_reasons(record.exclusion_reasons)
 
     def result(
         first_failure: str | None,

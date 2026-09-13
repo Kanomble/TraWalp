@@ -793,6 +793,10 @@ Der Intraday-Preflight exportiert jetzt ein kompatibilitätsgeprüftes Kandidate
 einer gestreamten Replay-Datei. `validate-f-intraday-entry --candidate-manifest <pfad>` verwendet
 beide Dateien ohne erneutes historisches Screening. Architektur, Messwerte und aktuelle Befehle:
 [F Candidate Discovery Performance](docs/f-candidate-discovery-performance.md).
+Die aktuelle Manifest-Version 2 mit scoped Fingerprint, reduziertem Replay, finaler Snapshot-
+Prüfung und korrigiertem Coverage-SQL-Plan ist in
+[F Preflight Hardening](docs/f-preflight-hardening.md) dokumentiert. Alte Manifeste benötigen
+einen neuen Preflight; ein reiner 15m-Sync bleibt mit dem Daily-Kandidatenmanifest kompatibel.
 Der [Research-Code-Audit](docs/research-code-audit.md) dokumentiert die erhaltenen historischen
 Pfade und die zurückgestellten Cleanup-Kandidaten.
 

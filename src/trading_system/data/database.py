@@ -687,7 +687,10 @@ class Database:
     def iter_entry_coverage_batches(self, requirements, *, batch_size=200):
         """Two SELECTs per bounded batch of exact (symbol, signal, execution) requirements.
 
-        VALUES joins use the existing symbol/timeframe/timestamp index. Never fetch
+        VALUES joins use the existing symbol/timeframe/timestamp index. CROSS JOIN
+        fixes requirements as the outer loop: otherwise SQLite may satisfy ORDER BY
+        by scanning the entire timeframe index and then scanning requirements per bar.
+        Never fetch
         a symbol's unrestricted history; missing previous-session closes stay missing.
         """
         from trading_system.data.market_sessions import regular_session_bounds
@@ -719,8 +722,10 @@ class Database:
                     previous[symbol, signal] = None
                 native_rows = connection.execute(
                     f"""WITH requirements(symbol,session,start,end) AS (VALUES {placeholders})
-                    SELECT bars.*,requirements.session AS required_session
-                    FROM requirements JOIN bars ON bars.symbol=requirements.symbol
+                    SELECT bars.symbol,bars.timeframe,bars.timestamp,bars.open,bars.high,
+                    bars.low,bars.close,bars.volume,bars.trade_count,bars.vwap,
+                    requirements.session AS required_session
+                    FROM requirements CROSS JOIN bars ON bars.symbol=requirements.symbol
                     AND bars.timeframe='15m' AND bars.timestamp>=requirements.start
                     AND bars.timestamp<requirements.end
                     ORDER BY bars.timestamp,bars.symbol""",
@@ -728,8 +733,8 @@ class Database:
                 ).fetchall()
                 daily_rows = connection.execute(
                     f"""WITH requirements(symbol,session,start,end) AS (VALUES {placeholders})
-                    SELECT bars.*,requirements.session AS required_session
-                    FROM requirements JOIN bars ON bars.symbol=requirements.symbol
+                    SELECT bars.symbol,bars.close,requirements.session AS required_session
+                    FROM requirements CROSS JOIN bars ON bars.symbol=requirements.symbol
                     AND bars.timeframe='1d' AND bars.timestamp>=requirements.start
                     AND bars.timestamp<requirements.end
                     ORDER BY bars.timestamp,bars.symbol""",

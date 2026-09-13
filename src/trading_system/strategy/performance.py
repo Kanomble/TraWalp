@@ -18,6 +18,7 @@ class DiscoveryDiagnostics:
     peer_table_rows: int = 0
     eligible_screen_records: int = 0
     eligible_f_candidates: int = 0
+    hard_rejections_without_scoring: int = 0
 
     def as_dict(self):
         return asdict(self)

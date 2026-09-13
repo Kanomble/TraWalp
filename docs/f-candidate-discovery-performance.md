@@ -1,5 +1,9 @@
 # F intraday candidate discovery performance refactor
 
+This documents the first refactor. The current version 2 manifest, scoped fingerprint,
+reduced replay and corrected coverage access plan are documented in
+[F Preflight Hardening](f-preflight-hardening.md), including new measurements and commands.
+
 This changes computation, storage, and observability, preserving the canonical research rules.
 The production screener still returns complete ranked `ScreenReport` objects. Comparison
 backtests retain their existing shared cache.

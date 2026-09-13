@@ -6,8 +6,8 @@ import json
 import os
 import shutil
 import time
-from collections import deque
-from contextlib import contextmanager, nullcontext
+from collections import Counter, deque
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
@@ -46,6 +46,7 @@ from trading_system.backtest.lifecycle import (
     lifecycle_strategy_config,
 )
 from trading_system.backtest.lifecycle_diagnostics import LifecycleDiagnostics
+from trading_system.backtest.native_entries import NativeEntrySessions
 from trading_system.backtest.peer_context import PEER_MEMBERSHIP_BASIS, TechnicalPeerContextProvider
 from trading_system.backtest.presets import position_management_preset
 from trading_system.backtest.progress import ProgressPhase, ResearchProgress, log_completion
@@ -302,35 +303,44 @@ def _prepare(database, config, start, end, progress=None):
     return preparation, qualification
 
 
-def iter_f_candidates(screen_source, config, sessions, *, progress=None, replay_spool=None):
+def iter_f_candidates(
+    screen_source, config, sessions, *, progress=None, replay_spool=None, include_score=False
+):
     """Canonical PIT F eligibility/rank, before any allocation or future coverage checks."""
     from trading_system.backtest.engine import evaluate_variant_entry
 
     discovered = 0
     recent = deque(maxlen=10)
     elapsed = 0.0
+    relevant = set() if replay_spool is not None else None
     # Bypass the comparison cache only for this streaming API.
     source = getattr(screen_source, "source", screen_source)
     for index, (signal, execution) in enumerate(zip(sessions[:-1], sessions[1:], strict=True), 1):
         started = time.monotonic()
         if hasattr(source, "f_candidates"):
-            result = source.f_candidates(signal, config)
+            result = source.f_candidates(signal, config, replay_symbols=relevant)
             records = result.records
             if replay_spool:
                 replay_spool.append(result.replay)
         else:
-            records, rejected = [], []
+            records, rejected, omitted = [], [], Counter()
             for record in source.screen(signal).records:
                 evaluation = evaluate_variant_entry(record, FROZEN_CHAMPION_F.variant, config)
                 if evaluation.eligible:
                     records.append((evaluation.score, record))
+                    if relevant is not None:
+                        relevant.add(record.symbol)
                 elif replay_spool:
-                    rejected.append(compact_record(record.symbol, record))
+                    if record.symbol in relevant:
+                        rejected.append(compact_record(record.symbol, record))
+                    else:
+                        omitted[evaluation.first_failure] += 1
             records.sort(key=lambda pair: (-pair[0], pair[1].symbol))
             if replay_spool:
-                replay_spool.append(replay_session(signal, records, rejected))
-        for rank, (_, record) in enumerate(records, 1):
-            yield signal, execution, rank, record
+                replay_spool.append(replay_session(signal, records, rejected, omitted))
+        for rank, (score, record) in enumerate(records, 1):
+            row = signal, execution, rank, record
+            yield (*row, score) if include_score else row
         discovered += len(records)
         seconds = time.monotonic() - started
         elapsed += seconds
@@ -361,18 +371,29 @@ def build_f_intraday_entry_preflight(
     preparation=None,
     progress=None,
     candidate_manifest=None,
+    qualification=None,
+    native_entries=None,
 ):
     """Discover every eligible F candidate, including capacity-blocked candidates; no backtest."""
     progress = progress or ResearchProgress()
-    qualification = {}
+    qualification = qualification if qualification is not None else {}
     spool = None
     snapshot = None
     if candidate_manifest is None:
+        snapshot_stats = {}
         with progress.phase(
             "snapshot_fingerprint", "fingerprinting local discovery inputs"
         ) as phase:
-            snapshot = data_fingerprint(database)
+            snapshot = data_fingerprint(
+                database, config, start=start, end=end, diagnostics=snapshot_stats
+            )
         progress.record("snapshot_fingerprint", phase)
+        progress.performance.update(
+            snapshot_fingerprint_sql_queries=snapshot_stats["fingerprint_sql_queries"],
+            snapshot_fingerprint_rows=snapshot_stats["fingerprint_rows"],
+            snapshot_fingerprint_symbols=snapshot_stats["fingerprint_symbols"],
+            snapshot_warmup_start=snapshot_stats["fingerprint_warmup_start"],
+        )
     if preparation is None:
         preparation, qualification = _prepare(database, config, start, end, progress)
     candidates, missing, checks = [], [], []
@@ -386,15 +407,14 @@ def build_f_intraday_entry_preflight(
             sessions_total=max(0, len(preparation.sessions) - 1),
             candidate_sessions_discovered=0,
         ) as phase:
-            for signal, execution, rank, record in iter_f_candidates(
+            for signal, execution, rank, record, score in iter_f_candidates(
                 preparation.screen_source,
                 config,
                 preparation.sessions,
                 progress=phase,
                 replay_spool=spool,
+                include_score=True,
             ):
-                from trading_system.backtest.engine import evaluate_variant_entry
-
                 candidates.append(
                     {
                         "symbol": record.symbol,
@@ -402,9 +422,7 @@ def build_f_intraday_entry_preflight(
                         "signal_session": signal.isoformat(),
                         "execution_session": execution.isoformat(),
                         "candidate_rank": rank,
-                        "evaluation_score": evaluate_variant_entry(
-                            record, FROZEN_CHAMPION_F.variant, config
-                        ).score,
+                        "evaluation_score": score,
                         "timeframe": "15m",
                         "candidate_paths": [F_INTRADAY_ENTRY_VARIANTS[1].label],
                         "requirement_type": "candidate_session",
@@ -412,17 +430,9 @@ def build_f_intraday_entry_preflight(
                 )
             phase.update(unique_symbols=len({row["symbol"] for row in candidates}))
         progress.record("candidate_discovery", phase)
-        with progress.phase(
-            "snapshot_verification", "verifying discovery inputs stayed unchanged"
-        ) as phase:
-            if data_fingerprint(database) != snapshot:
-                spool.file.close()
-                raise ValueError(
-                    "Discovery inputs changed during preflight; rerun on a stable snapshot"
-                )
-        progress.record("snapshot_verification", phase)
     else:
         candidates = candidate_manifest["candidate_sessions"]
+        snapshot = candidate_manifest["data_snapshot_fingerprint"]
     symbols = {row["symbol"] for row in candidates}
     requirements_by_key = {
         (
@@ -483,6 +493,8 @@ def build_f_intraday_entry_preflight(
                 key = symbol, signal, execution
                 row = requirements_by_key[key]
                 native = native_by_key[symbol, execution]
+                if native_entries is not None:
+                    native_entries.add(symbol, signal, execution, native, previous_close)
                 decision = opening_weakness_decision(native, execution, previous_close)
                 gaps = missing_session_timestamps(native, execution)
                 unavailable = bool(gaps) or decision.status is EntryQualityStatus.UNAVAILABLE
@@ -507,6 +519,25 @@ def build_f_intraday_entry_preflight(
     order = {(row["symbol"], row["execution_session"]): i for i, row in enumerate(candidates)}
     checks.sort(key=lambda row: order[row["symbol"], row["execution_session"]])
     missing.sort(key=lambda row: order[row["symbol"], row["execution_session"]])
+    # Verification belongs AFTER coverage/previous-close reads. Two scoped scans per
+    # preflight suffice; an intervening Daily correction cannot be exported silently.
+    with progress.phase(
+        "snapshot_verification", "verifying discovery inputs stayed unchanged"
+    ) as verification:
+        verification_stats = {}
+        if (
+            data_fingerprint(database, config, start=start, end=end, diagnostics=verification_stats)
+            != snapshot
+        ):
+            if spool is not None:
+                spool.file.close()
+            raise ValueError(
+                "Discovery inputs changed during preflight; rerun on a stable snapshot"
+            )
+    progress.record("snapshot_verification", verification)
+    progress.performance["snapshot_verification_sql_queries"] = verification_stats[
+        "fingerprint_sql_queries"
+    ]
     progress.record("coverage_load", load_phase)
     progress.record("coverage_evaluation", phase)
     # Streaming phases overlap in wall time; report disjoint measured work durations.
@@ -525,8 +556,22 @@ def build_f_intraday_entry_preflight(
         full_screen_cache_size=len(getattr(preparation.screen_source, "cache", {})),
     )
     discovery_source = getattr(preparation.screen_source, "source", preparation.screen_source)
+    progress.performance["candidate_preparation_sql_queries"] = getattr(
+        getattr(discovery_source, "diagnostics", None), "sqlite_query_count", 0
+    )
     if diagnostics := getattr(discovery_source, "discovery_diagnostics", None):
         progress.performance.update(diagnostics.as_dict())
+    if spool is not None:
+        progress.performance.update(
+            replay_serialization_seconds=spool.serialization_seconds,
+            replay_bytes=spool.bytes,
+            replay_records=spool.records,
+        )
+    progress.performance["timing_scope"] = (
+        "Discovery includes its stage timers and JSON/spool serialization; "
+        "manifest validation includes its fingerprint; replay parsing is inside backtests. "
+        "Coverage load/evaluation are disjoint. Inclusive phases must not be summed."
+    )
     report = {
         "report_type": "local_f_intraday_entry_preflight",
         "local_only": True,
@@ -681,6 +726,23 @@ def run_f_intraday_entry(
 
 
 def _run_research(database, config, start, end, *, intraday, candidate_manifest=None):
+    with ExitStack() as resources:
+        native_entries = resources.enter_context(NativeEntrySessions()) if intraday else None
+        return _run_research_impl(
+            database,
+            config,
+            start,
+            end,
+            intraday=intraday,
+            candidate_manifest=candidate_manifest,
+            native_entries=native_entries,
+            resources=resources,
+        )
+
+
+def _run_research_impl(
+    database, config, start, end, *, intraday, candidate_manifest, native_entries, resources
+):
     progress = ResearchProgress(validation=True) if intraday else None
     with (
         progress.phase("qualification", "daily qualification") if progress else nullcontext()
@@ -694,7 +756,13 @@ def _run_research(database, config, start, end, *, intraday, candidate_manifest=
                 )
             sessions = tuple(_backtest_sessions(database, start, end))
             manifest, source = load_manifest(
-                candidate_manifest, database, config, start, end, sessions
+                candidate_manifest,
+                database,
+                config,
+                start,
+                end,
+                sessions,
+                diagnostics=progress.performance,
             )
             preparation = SimpleNamespace(sessions=sessions, screen_source=source)
         else:
@@ -712,9 +780,12 @@ def _run_research(database, config, start, end, *, intraday, candidate_manifest=
                 preparation=preparation,
                 progress=progress,
                 candidate_manifest=manifest,
+                qualification=qualification,
+                native_entries=native_entries,
             )
         progress.record("coverage_verification", phase)
         if manifest is None:
+            resources.callback(requirements.close)
             spool = requirements.replay_spool
             preparation = SimpleNamespace(
                 sessions=preparation.sessions,
@@ -761,6 +832,7 @@ def _run_research(database, config, start, end, *, intraday, candidate_manifest=
                 lifecycle_preset=None if intraday else identity,
                 lifecycle_context=context,
                 opening_weakness_veto=intraday and identity.opening_weakness_veto,
+                native_entry_provider=native_entries,
                 audit_observer=observer,
                 entry_context_observer=observer.observe_entry_context if observer else None,
                 execution_context_observer=observer.observe_execution_context if observer else None,
@@ -853,6 +925,14 @@ def _run_research(database, config, start, end, *, intraday, candidate_manifest=
         "warnings": sorted({w for result in results.values() for w in result.warnings}),
     }
     if progress:
+        progress.performance.update(
+            native_entry_cache_peak=native_entries.peak_cache_size,
+            native_entry_spool_reads=native_entries.reads,
+            sqlite_query_count_native_entry=0,
+        )
+        progress.performance["manifest_replay_parse_seconds"] = getattr(
+            preparation.screen_source, "parse_seconds", 0.0
+        )
         summary["performance"] = progress.snapshot()
     return LifecycleResearchBundle(family, results, tables, summary)
 

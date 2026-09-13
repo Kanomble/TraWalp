@@ -1,6 +1,7 @@
 """Exact reference regressions and bounded-memory F discovery, entirely offline."""
 
 import json
+from collections import Counter
 from dataclasses import replace
 from datetime import date, timedelta
 from decimal import Decimal
@@ -94,7 +95,9 @@ def test_f_stream_evaluations_scores_reasons_order_and_count_are_exact():
     reference_source = FixtureSource(varied_cross_section(), config, reference=True)
     optimized_source = FixtureSource(varied_cross_section(), config)
     cached = CachedScreenSource(optimized_source)
-    expected = list(iter_f_candidates(reference_source, config, sessions))
+    expected = list(
+        iter_f_candidates(SimpleNamespace(screen=reference_source.screen), config, sessions)
+    )
     spool = ReplaySpool()
     actual = list(iter_f_candidates(cached, config, sessions, replay_spool=spool))
     assert actual == expected
@@ -110,7 +113,10 @@ def test_f_stream_evaluations_scores_reasons_order_and_count_are_exact():
             r.symbol: evaluate_variant_entry(r, FROZEN_CHAMPION_F.variant, config)
             for r in replay.screen(session).records
         }
-        assert after == before  # includes every rejected record's blocking reason/evidence
+        assert after == {symbol: before[symbol] for symbol in after}
+        omitted = Counter(e.first_failure for symbol, e in before.items() if symbol not in after)
+        assert None not in omitted  # No eligible symbol may be omitted.
+        assert dict(replay.screen(session).omitted_rejections) == omitted
         assert len(replay.cache) <= 1
     spool.file.close()
 
@@ -205,6 +211,18 @@ def test_historical_f_path_matches_reference_and_is_causal(tmp_path):
         }
     )
     database.upsert_facts([fact])
+    shares = next(f for f in _facts("AAA", "0000000001") if f.metric == "shares_outstanding")
+    database.upsert_facts(
+        [
+            shares.model_copy(
+                update={
+                    "filed": session + timedelta(days=1),
+                    "value": Decimal("1"),
+                    "accession_number": "future-shares",
+                }
+            )
+        ]
+    )
     later = HistoricalFeatureScreenSource(database, config, session, session + timedelta(days=2))
     assert later.f_candidates(session, config).records == actual.records
 

@@ -37,16 +37,18 @@ class LifecycleDiagnostics:
         pass  # Complete candidate context is supplied by the entry-context hook below.
 
     def observe_entry_context(self, report, positions, execution_session):
-        eligible = [
-            (evaluation.score, record)
-            for record in report.records
-            if (
-                evaluation := evaluate_variant_entry(
-                    record, StrategyVariant.QUALITY_VALUE_MOMENTUM, self.config
-                )
-            ).eligible
-        ]
-        eligible.sort(key=lambda item: (-item[0], item[1].symbol))
+        eligible = getattr(report, "f_candidates", None)
+        if eligible is None:
+            eligible = [
+                (evaluation.score, record)
+                for record in report.records
+                if (
+                    evaluation := evaluate_variant_entry(
+                        record, StrategyVariant.QUALITY_VALUE_MOMENTUM, self.config
+                    )
+                ).eligible
+            ]
+            eligible.sort(key=lambda item: (-item[0], item[1].symbol))
         for rank, (_, record) in enumerate(eligible, 1):
             self.candidates[report.as_of, record.symbol] = {
                 "symbol": record.symbol,

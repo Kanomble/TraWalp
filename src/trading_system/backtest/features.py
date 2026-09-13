@@ -318,9 +318,11 @@ class HistoricalFeatureScreenSource:
         self.discovery_diagnostics.sessions_processed += 1
         return report
 
-    def f_candidates(self, session: date, config: StrategyConfig):
+    def f_candidates(self, session: date, config: StrategyConfig, *, replay_symbols=None):
         """Same PIT cross-section and evaluator, materializing only eligible F entries."""
-        from trading_system.backtest.engine import evaluate_variant_entry
+        from collections import Counter
+
+        from trading_system.backtest.engine import entry_blocking_reasons, evaluate_variant_entry
         from trading_system.backtest.f_candidates import (
             FSessionCandidates,
             compact_record,
@@ -340,7 +342,18 @@ class HistoricalFeatureScreenSource:
         diagnostics.peer_table_rows += len(table)
         peers = self.screener._peer_index(table)
         eligible, rejected, screen_ranks = [], [], []
+        omitted = Counter()
         for candidate in prepared:
+            symbol = candidate.company.symbol
+            retained = replay_symbols is not None and symbol in replay_symbols
+            # Peer construction above is unchanged. Hard-excluded names already have
+            # no peer membership. Once F-relevant, retain even hard-rejected scores:
+            # a held position or re-entry tracker may still consume this session.
+            blocking = entry_blocking_reasons(candidate.base_exclusions)
+            if blocking and not retained:
+                omitted[blocking[0]] += 1
+                diagnostics.hard_rejections_without_scoring += 1
+                continue
             view, group, medians = self.screener._score_inputs(candidate, peers)
             diagnostics.eligible_screen_records += not view.exclusion_reasons
             if not view.exclusion_reasons:
@@ -358,11 +371,18 @@ class HistoricalFeatureScreenSource:
             if evaluation.eligible:
                 record = self.screener._materialize(candidate, view, group, medians)
                 eligible.append((evaluation.score, record))
+                if replay_symbols is not None:
+                    replay_symbols.add(symbol)
+            elif retained:
+                rejected.append(compact_record(symbol, view))
             else:
-                rejected.append(compact_record(candidate.company.symbol, view))
+                omitted[evaluation.first_failure] += 1
         for company in self._conflicted:
             view = self.screener._identity_conflict_inputs()
-            rejected.append(compact_record(company.symbol, view))
+            if replay_symbols is not None and company.symbol in replay_symbols:
+                rejected.append(compact_record(company.symbol, view))
+            else:
+                omitted[entry_blocking_reasons(view.exclusion_reasons)[0]] += 1
         eligible.sort(key=lambda pair: (-pair[0], pair[1].symbol))
         ranks = {row[-1]: rank for rank, row in enumerate(sorted(screen_ranks), 1)}
         eligible = [
@@ -371,7 +391,12 @@ class HistoricalFeatureScreenSource:
         ]
         diagnostics.eligible_f_candidates += len(eligible)
         report_started = time.perf_counter()
-        result = FSessionCandidates(tuple(eligible), replay_session(session, eligible, rejected))
+        result = FSessionCandidates(
+            tuple(eligible),
+            replay_session(session, eligible, rejected, omitted)
+            if replay_symbols is not None
+            else None,
+        )
         diagnostics.report_construction_seconds += time.perf_counter() - report_started
         diagnostics.sessions_processed += 1
         diagnostics.screen_session_seconds += time.perf_counter() - started
@@ -530,16 +555,16 @@ def _exact_market_features(
 
     output: dict[date, _MarketFeature] = {}
     position = -1
+    arrays = _technical_arrays(bars)
     for session, market in cheap.items():
         while position + 1 < len(bars) and bars[position + 1].session <= session:
             position += 1
         if position < 0:
             continue
         first = max(0, position + 1 - config.universe.market_data_days)
-        prefix = bars[first : position + 1]
-        technical = _fast_technical_snapshot(prefix, config).model_copy(
-            update={"market_session": bars[position].session}
-        )
+        technical = _technical_snapshot_arrays(
+            *(values[first : position + 1] for values in arrays), config
+        ).model_copy(update={"market_session": bars[position].session})
         output[session] = _MarketFeature(
             technical=technical,
             price=market.price,
@@ -558,10 +583,22 @@ def _fast_technical_snapshot(
 
     if not bars:
         return TechnicalSnapshot()
+    return _technical_snapshot_arrays(*_technical_arrays(bars), config)
+
+
+def _technical_arrays(bars):
+    """Convert once per symbol; PIT snapshots use identically ordered bounded views."""
     close = np.fromiter((float(bar.close) for bar in bars), dtype=float)
     high = np.fromiter((float(bar.high) for bar in bars), dtype=float)
     low = np.fromiter((float(bar.low) for bar in bars), dtype=float)
     volume = np.fromiter((float(bar.volume) for bar in bars), dtype=float)
+    return close, high, low, volume
+
+
+def _technical_snapshot_arrays(close, high, low, volume, config):
+    # Wilder RSI/ATR deliberately retain the canonical bounded-prefix re-seeding.
+    # Full-history rolling Wilder values differ once market_data_days trims the prefix;
+    # cumulative rolling sums would also alter floating-point reduction order.
     rules = config.technical
     rsi_values = _wilder_rsi(close, 14)
     rsi_now = _last_finite(rsi_values)

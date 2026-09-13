@@ -13,7 +13,8 @@ from trading_system.backtest import lifecycle_validation as validation
 from trading_system.backtest.engine import BacktestEngine
 from trading_system.backtest.f_candidates import data_fingerprint, fingerprint, load_manifest
 from trading_system.data.market_sessions import regular_session_bounds
-from trading_system.models.market_data import BarTimeframe
+from trading_system.models.fundamentals import CompanyIdentity
+from trading_system.models.market_data import BarTimeframe, TradableAsset
 
 config = fixtures.config
 local_market = fixtures.local_market
@@ -21,6 +22,10 @@ local_market = fixtures.local_market
 
 def export_fixture(monkeypatch, local_market, config, tmp_path):
     _, database, sessions, preparation = research_preparation(monkeypatch, local_market)
+    database.upsert_assets(
+        [TradableAsset(symbol="AAA", name="AAA", tradable=True, fractionable=True)]
+    )
+    database.upsert_company(CompanyIdentity(symbol="AAA", name="AAA", cik="0000000001", sic="2834"))
     report, requirements = validation.build_f_intraday_entry_preflight(
         database,
         config,
@@ -43,9 +48,11 @@ def export_fixture(monkeypatch, local_market, config, tmp_path):
         ("requested_end", "2030-01-01"),
         ("strategy_variant", "C"),
         ("config_fingerprint", "bad"),
+        ("discovery_code_fingerprint", "bad"),
         ("runtime_fingerprint", "bad"),
         ("data_snapshot_fingerprint", "bad"),
         ("candidate_discovery_version", 999),
+        ("candidate_discovery_version", 1),
         ("candidate_count", 999),
         ("discovery_complete", False),
         ("candidate_fingerprint", "bad"),
@@ -54,6 +61,8 @@ def export_fixture(monkeypatch, local_market, config, tmp_path):
         ("extended_hours", True),
         ("warmup_bars", 1),
         ("replay_file", "../outside.jsonl"),
+        ("replay_file", "..\\outside.jsonl"),
+        ("replay_file", "replay.jsonl:other"),
     ],
 )
 def test_manifest_rejects_incompatible_or_corrupt_metadata(
@@ -78,6 +87,8 @@ def test_manifest_rejects_incompatible_or_corrupt_metadata(
         ("candidate_rank", 2),
         ("evaluation_score", 1.0),
         ("execution_session", "2024-01-04"),
+        ("signal_session", "2024-01-04"),
+        ("signal_date", "2024-01-04"),
         ("symbol", "WRONG"),
         ("timeframe", "5m"),
     ],
@@ -107,9 +118,9 @@ def test_intraday_sync_allowed_but_daily_correction_invalidates(
     tmp_path,
 ):
     database, sessions, path = export_fixture(monkeypatch, local_market, config, tmp_path)
-    snapshot = data_fingerprint(database)
+    snapshot = data_fingerprint(database, config, start=sessions[0], end=sessions[-1])
     database.upsert_bars(native_session(sessions[1], weak=False))
-    assert data_fingerprint(database) == snapshot
+    assert data_fingerprint(database, config, start=sessions[0], end=sessions[-1]) == snapshot
     _, source = load_manifest(path, database, config, sessions[0], sessions[-1], sessions)
     for session in sessions[:-1]:
         source.screen(session)
@@ -149,6 +160,11 @@ def test_validation_reuses_manifest_without_preparing_or_discovering_again(
             key
         ].model_dump(exclude={"generated_at"})
     assert "candidate_discovery_seconds" not in result.summary["performance"]
+    assert (
+        result.summary["intraday_qualification"]["daily_qualification"]
+        == {"failure_reasons": []}
+        == result.summary["daily_qualification"]
+    )
     assert (
         result.summary["intraday_qualification"]["performance"]["sqlite_query_count_coverage"] == 2
     )
@@ -248,6 +264,10 @@ def test_coverage_batches_exact_requirements_query_count_and_previous_close(
             if query.startswith("WITH requirements")
         ]
     assert all(any("SEARCH bars USING INDEX" in row[3] for row in plan) for plan in plans)
+    assert all(
+        any("symbol=? AND timeframe=? AND timestamp>? AND timestamp<?" in row[3] for row in plan)
+        for plan in plans
+    )
 
 
 def test_validation_missing_manifest_fails_before_discovery(local_market, config):

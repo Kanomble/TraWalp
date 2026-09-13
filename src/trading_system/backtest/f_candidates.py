@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sys
 import tempfile
 from collections import defaultdict
@@ -12,17 +13,19 @@ from dataclasses import dataclass
 from datetime import date
 from importlib.metadata import version
 from pathlib import Path
-from types import SimpleNamespace
+from time import monotonic
 
+from trading_system.backtest.discovery_snapshot import data_fingerprint as data_fingerprint
 from trading_system.backtest.entry_quality import (
     F_INTRADAY_ENTRY_RESEARCH_FAMILY,
     F_INTRADAY_ENTRY_VARIANTS,
 )
+from trading_system.backtest.f_replay import replay_record, replay_report
 from trading_system.backtest.research_registry import FROZEN_CHAMPION_F
 from trading_system.models.screening import ScreenRecord
 from trading_system.models.signals import TechnicalSnapshot
 
-DISCOVERY_VERSION = 1
+DISCOVERY_VERSION = 2
 
 
 def fingerprint(value):
@@ -46,6 +49,11 @@ def discovery_code_fingerprint():
     digest = hashlib.sha256()
     for relative in (
         "backtest/f_candidates.py",
+        "backtest/discovery_snapshot.py",
+        "backtest/f_replay.py",
+        "backtest/lifecycle_validation.py",
+        "backtest/lifecycle_diagnostics.py",
+        "backtest/native_entries.py",
         "backtest/features.py",
         "backtest/engine.py",
         "backtest/screen_strategies.py",
@@ -85,44 +93,16 @@ def runtime_fingerprint():
     )
 
 
-def data_fingerprint(database):
-    """Hash actual discovery inputs, including corrections; intraday-only sync is compatible.
-
-    One streaming read transaction, independent of candidate count. No full database
-    file hash (a native 15m sync must not invalidate Daily candidate decisions).
-    """
-    digest = hashlib.sha256()
-    with database.read_only() as connection:
-        connection.execute("BEGIN")
-        for table, where, order in (
-            ("assets", "", "symbol"),
-            ("companies", "", "symbol"),
-            ("fundamental_facts", "", "id"),
-            ("bars", "WHERE timeframe='1d'", "symbol,timeframe,timestamp"),
-            (
-                "sync_state",
-                "WHERE source IN ('sec_identity_conflicts','sec_reference')",
-                "source,key",
-            ),
-        ):
-            digest.update(table.encode())
-            cursor = connection.execute(f"SELECT * FROM {table} {where} ORDER BY {order}")
-            while rows := cursor.fetchmany(4096):
-                for row in rows:
-                    digest.update(json.dumps(tuple(row), separators=(",", ":")).encode())
-                    digest.update(b"\n")
-    return digest.hexdigest()
-
-
 @dataclass(frozen=True, slots=True)
 class FSessionCandidates:
     records: tuple[tuple[float, ScreenRecord], ...]
-    replay: dict
+    replay: dict | None
 
 
 def compact_record(symbol, view):
     return {
         "symbol": symbol,
+        "sic": getattr(view, "sic", None),
         "scores": [
             getattr(view.scores, name).score
             for name in ("quality", "valuation", "opportunity", "timing")
@@ -132,11 +112,15 @@ def compact_record(symbol, view):
     }
 
 
-def replay_session(session, eligible, rejected):
+def replay_session(session, eligible, rejected, omitted_rejections):
     return {
         "session": session.isoformat(),
-        "eligible": [record.model_dump(mode="json") for _, record in eligible],
+        "eligible": [
+            {**compact_record(record.symbol, record), "evaluation_score": score}
+            for score, record in eligible
+        ],
         "rejected": rejected,
+        "omitted_rejections": dict(omitted_rejections),
     }
 
 
@@ -147,12 +131,18 @@ class ReplaySpool:
         self.file = tempfile.TemporaryFile(mode="w+b")  # noqa: SIM115 -- owned until export/replay
         self.digest = hashlib.sha256()
         self.offsets = {}
+        self.records = self.bytes = 0
+        self.serialization_seconds = 0.0
 
     def append(self, value):
+        started = monotonic()
         self.offsets[date.fromisoformat(value["session"])] = self.file.tell()
         encoded = (json.dumps(value, separators=(",", ":"), allow_nan=False) + "\n").encode()
         self.file.write(encoded)
         self.digest.update(encoded)
+        self.bytes += len(encoded)
+        self.records += len(value["eligible"]) + len(value["rejected"])
+        self.serialization_seconds += monotonic() - started
 
 
 class CandidateManifest(dict):
@@ -174,7 +164,8 @@ def manifest_metadata(config, candidates, spool, snapshot):
         "discovery_code_fingerprint": discovery_code_fingerprint(),
         "runtime_fingerprint": runtime_fingerprint(),
         "data_snapshot_fingerprint": snapshot,
-        "data_snapshot_scope": "all local Daily bars, facts, universe, identity quarantine",
+        "data_snapshot_scope": "current universe/identity; participating PIT facts <= end; "
+        "Daily technical warmup through end; SPY and portfolio session keys",
         "candidate_count": len(candidates),
         "candidate_fingerprint": fingerprint(candidates),
         "replay_sha256": spool.digest.hexdigest(),
@@ -182,55 +173,53 @@ def manifest_metadata(config, candidates, spool, snapshot):
 
 
 class ManifestScreenSource:
-    """Replay one disk session at a time, including rejected-symbol score/trigger evidence.
+    """One session of F/configured evidence; no full ScreenRecord reconstruction.
 
-    Only eligible entries become full ScreenRecords. Rejected views satisfy the
-    canonical evaluator and open-position score/re-entry observations structurally.
+    Retain every symbol from its first F eligibility onward, including all later
+    rejections. Earlier rejections have no position/trigger consumer, only counters.
     """
 
-    def __init__(self, path, offsets, *, stream=None):
+    f_configured_replay = True
+
+    def __init__(self, path, offsets, *, stream=None, checksums=None):
         self.path, self.offsets = path, offsets
         self.stream = stream
         self.cache = {}
+        self.parse_seconds = 0.0
+        self.checksums = checksums
 
     def screen(self, session):
         if session not in self.cache:
+            started = monotonic()
             with nullcontext(self.stream) if self.stream else self.path.open("rb") as stream:
                 stream.seek(self.offsets[session])
-                payload = json.loads(stream.readline())
-            records = [ScreenRecord.model_validate(row) for row in payload["eligible"]]
-            for row in payload["rejected"]:
-                scores = SimpleNamespace(
-                    **{
-                        name: SimpleNamespace(score=value)
-                        for name, value in zip(
-                            ("quality", "valuation", "opportunity", "timing"),
-                            row["scores"],
-                            strict=True,
-                        )
-                    }
+                line = stream.readline()
+            if (
+                self.checksums is not None
+                and hashlib.sha256(line).digest() != self.checksums[session]
+            ):
+                raise ValueError(
+                    "Candidate replay changed after manifest validation; rerun preflight"
                 )
-                records.append(
-                    SimpleNamespace(
-                        symbol=row["symbol"],
-                        scores=scores,
-                        technical=TechnicalSnapshot.model_validate(row["technical"]),
-                        exclusion_reasons=tuple(row["exclusion_reasons"]),
-                    )
-                )
+            payload = json.loads(line)
             self.cache.clear()
-            self.cache[session] = SimpleNamespace(as_of=session, records=tuple(records))
+            self.cache[session] = replay_report(payload)
+            self.parse_seconds += monotonic() - started
         return self.cache[session]
 
 
-def load_manifest(path, database, config, start, end, sessions):
+def load_manifest(path, database, config, start, end, sessions, *, diagnostics=None):
+    started = monotonic()
     try:
-        return _load_manifest(path, database, config, start, end, sessions)
+        return _load_manifest(path, database, config, start, end, sessions, diagnostics)
     except (KeyError, TypeError, AttributeError) as exc:
         raise ValueError("Malformed candidate manifest/replay; rerun preflight") from exc
+    finally:
+        if diagnostics is not None:
+            diagnostics["manifest_validation_seconds"] = monotonic() - started
 
 
-def _load_manifest(path, database, config, start, end, sessions):
+def _load_manifest(path, database, config, start, end, sessions, diagnostics):
     from trading_system.backtest.engine import evaluate_variant_entry
 
     manifest = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -255,7 +244,9 @@ def _load_manifest(path, database, config, start, end, sessions):
     for key, value in expected.items():
         if manifest.get(key) != value:
             raise ValueError(f"Candidate manifest incompatible/stale: {key}; rerun preflight")
-    if manifest.get("data_snapshot_fingerprint") != data_fingerprint(database):
+    if manifest.get("data_snapshot_fingerprint") != data_fingerprint(
+        database, config, start=start, end=end, diagnostics=diagnostics
+    ):
         raise ValueError(
             "Candidate manifest incompatible/stale: data_snapshot_fingerprint; rerun preflight"
         )
@@ -269,28 +260,55 @@ def _load_manifest(path, database, config, start, end, sessions):
     ):
         raise ValueError("Candidate manifest count/requirements/checksum mismatch")
     replay_name = manifest.get("replay_file", "")
-    if not replay_name or Path(replay_name).name != replay_name:
+    if (
+        not replay_name
+        or Path(replay_name).name != replay_name
+        or any(character in replay_name for character in "/\\:")
+    ):
         raise ValueError("Candidate manifest requires a sibling replay file")
     replay_path = Path(path).parent / replay_name
+    if replay_path.resolve().parent != Path(path).resolve().parent:
+        raise ValueError("Candidate manifest requires a sibling replay file")
     offsets, digest, by_session = {}, hashlib.sha256(), defaultdict(list)
     for row in candidates:
         by_session[row["signal_date"]].append(row)
+    relevant, checksums = set(), {}
     with replay_path.open("rb") as stream:
         for session, execution in zip(sessions[:-1], sessions[1:], strict=True):
             offsets[session] = stream.tell()
             line = stream.readline()
             digest.update(line)
+            checksums[session] = hashlib.sha256(line).digest()
             payload = json.loads(line)
             if payload["session"] != session.isoformat():
                 raise ValueError("Candidate manifest replay session mismatch")
             found = []
+            seen = set()
             for row in payload["eligible"]:
-                record = ScreenRecord.model_validate(row)
+                record = _validated_replay_record(row, session)
                 evaluation = evaluate_variant_entry(record, FROZEN_CHAMPION_F.variant, config)
-                if not evaluation.eligible or record.as_of != session:
+                if not evaluation.eligible or row["evaluation_score"] != evaluation.score:
                     raise ValueError("Candidate manifest has an invalid F entry or PIT session")
                 found.append((evaluation.score, record.symbol))
-            found.sort(key=lambda item: (-item[0], item[1]))
+                seen.add(record.symbol)
+            if found != sorted(found, key=lambda item: (-item[0], item[1])):
+                raise ValueError("Candidate manifest replay rank order mismatch")
+            for row in payload["rejected"]:
+                record = _validated_replay_record(row, session)
+                if (
+                    record.symbol not in relevant
+                    or record.symbol in seen
+                    or evaluate_variant_entry(record, FROZEN_CHAMPION_F.variant, config).eligible
+                ):
+                    raise ValueError("Candidate manifest has invalid retained rejection")
+                seen.add(record.symbol)
+            relevant.update(symbol for _, symbol in found)
+            omitted = payload["omitted_rejections"]
+            if not isinstance(omitted, dict) or any(
+                not isinstance(reason, str) or not reason or type(count) is not int or count <= 0
+                for reason, count in omitted.items()
+            ):
+                raise ValueError("Candidate manifest has invalid rejection counts")
             required = by_session.pop(session.isoformat(), [])
             if len(found) != len(required) or len({symbol for _, symbol in found}) != len(found):
                 raise ValueError("Candidate manifest replay count mismatch")
@@ -308,4 +326,27 @@ def _load_manifest(path, database, config, start, end, sessions):
                     raise ValueError("Candidate manifest rank/score/requirement mismatch")
         if stream.read(1) or by_session or digest.hexdigest() != manifest.get("replay_sha256"):
             raise ValueError("Candidate manifest replay checksum/session mismatch")
-    return manifest, ManifestScreenSource(replay_path, offsets)
+    return manifest, ManifestScreenSource(replay_path, offsets, checksums=checksums)
+
+
+def _validated_replay_record(row, session):
+    """Validate external payload once; subsequent trusted replay uses slotted views."""
+    if (
+        not isinstance(row["symbol"], str)
+        or not row["symbol"]
+        or row.get("sic") is not None
+        and not isinstance(row["sic"], str)
+        or len(row["scores"]) != 4
+        or any(
+            value is not None and (type(value) not in (float, int) or not math.isfinite(value))
+            for value in row["scores"]
+        )
+        or not isinstance(row["exclusion_reasons"], list)
+        or any(not isinstance(reason, str) for reason in row["exclusion_reasons"])
+        or set(row["technical"]) - TechnicalSnapshot.model_fields.keys()
+    ):
+        raise ValueError("Malformed candidate replay record; rerun preflight")
+    technical = TechnicalSnapshot.model_validate(row["technical"])
+    if technical.market_session is not None and technical.market_session > session:
+        raise ValueError("Candidate manifest has future technical evidence")
+    return replay_record(row, session)
