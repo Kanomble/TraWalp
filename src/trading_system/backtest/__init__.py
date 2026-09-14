@@ -1,17 +1,6 @@
-"""Point-in-time portfolio simulation and reporting."""
+"""Portfolio APIs, loaded on demand so shared research utilities do not load F alpha."""
 
-from trading_system.backtest.engine import (
-    BacktestEngine,
-    compare_position_management,
-    compare_strategies,
-)
-from trading_system.backtest.position_manager import (
-    ExitReason,
-    PositionAction,
-    PositionDecision,
-    PositionManager,
-    PositionState,
-)
+from importlib import import_module
 
 __all__ = [
     "BacktestEngine",
@@ -23,3 +12,16 @@ __all__ = [
     "compare_position_management",
     "compare_strategies",
 ]
+
+
+def __getattr__(name):
+    if name not in __all__:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = (
+        "engine"
+        if name in {"BacktestEngine", "compare_position_management", "compare_strategies"}
+        else "position_manager"
+    )
+    value = getattr(import_module(f"{__name__}.{module}"), name)
+    globals()[name] = value
+    return value

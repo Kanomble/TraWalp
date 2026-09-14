@@ -537,6 +537,8 @@ def _parser() -> argparse.ArgumentParser:
             "Local Daily R0 baseline and native position-session coverage",
         ),
         ("validate-f-intraday-risk", "Isolated F/configured/C1 intraday risk containment"),
+        ("preflight-orb-v1", "Local PIT liquid Top-100 and native 15m data qualification"),
+        ("validate-orb-v1", "Local independent ORB-V1-15M-LONG signal-level research"),
     ):
         research = commands.add_parser(name, help=description)
         research.add_argument("--start", type=date.fromisoformat, required=True)
@@ -638,6 +640,34 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
     database = Database(settings.strategy.storage.database_path)
+    if args.command in {"preflight-orb-v1", "validate-orb-v1"}:
+        # Read-only research dispatch must precede database initialization/provider setup.
+        from trading_system.backtest.orb_v1_research import run_orb_v1
+
+        try:
+            summary, paths = run_orb_v1(
+                database,
+                settings.strategy,
+                args.start,
+                args.end,
+                settings.strategy.storage.reports_path,
+                stem=args.output_stem,
+                preflight=args.command == "preflight-orb-v1",
+            )
+            print(
+                f"{summary['research_family']}: {summary['status']}; "
+                "signal-level research; frozen F champion unchanged"
+                f"\nReady for local validation: {summary['ready_for_local_validation']}"
+                f"\nMarket data feed: {summary['market_data_feed']}"
+            )
+            print("\n".join(summary["warnings"]))
+            print("\n".join(f"{name}: {path}" for name, path in paths.items()))
+        except KeyboardInterrupt:
+            return 130
+        except (OSError, ValueError) as exc:
+            print(f"ORB research refused: {exc}", file=sys.stderr)
+            return 1
+        return 0
     if args.command == "storage-report":
         try:
             print(_format_storage_report(database.storage_report()))
@@ -879,6 +909,20 @@ def main(argv: list[str] | None = None) -> int:
                 else args.extended_hours
             )
             if args.candidate_gaps_only:
+                warmup_bars = settings.strategy.intraday.warmup_bars
+                if payload.get("research_family") == "research-orb-v1":
+                    from trading_system.backtest.orb_v1_data import orb_remediation_warmup
+
+                    # ORB has no intraday indicator warmup and always uses regular hours.
+                    if args.extended_hours is None:
+                        extended_hours = False
+                    try:
+                        warmup_bars = orb_remediation_warmup(
+                            payload, settings.strategy, timeframes, extended_hours
+                        )
+                    except ValueError as exc:
+                        print(f"Intraday sync refused: {exc}", file=sys.stderr)
+                        return 2
                 strategies = payload.get("strategies") or [
                     str(payload.get("research_family", "candidate_report"))
                 ]
@@ -891,7 +935,7 @@ def main(argv: list[str] | None = None) -> int:
                     feed=settings.strategy.universe.market_data_feed,
                     adjustment=settings.strategy.universe.market_data_adjustment,
                     extended_hours=extended_hours,
-                    warmup_bars=settings.strategy.intraday.warmup_bars,
+                    warmup_bars=warmup_bars,
                     synchronizer_factory=lambda: _synchronizer(
                         settings, database, with_alpaca=True, with_sec=False
                     ),

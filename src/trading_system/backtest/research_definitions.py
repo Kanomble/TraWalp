@@ -76,3 +76,31 @@ class RegimeCapacityRule(StrEnum):
 
 
 F_INTRADAY_RISK_RESEARCH_FAMILY = "research-f-intraday-risk-v1"
+
+
+@dataclass(frozen=True, slots=True)
+class OrbDefinition:
+    research_family: str = "research-orb-v1"
+    research_id: str = "ORB-V1-15M-LONG"
+    status: str = "ACTIVE"
+    universe_name: str = "ORB_LIQUID_TOP100"
+    top_n: int = 100
+    daily_lookback_sessions: int = 20
+    timeframe: str = "15m"
+    opening_range_minutes: int = 15
+    direction: str = "LONG"
+    extended_hours: bool = False
+    slippage_bps: float = 5.0
+    commission_bps: float = 0.0
+    signal: str = "FIRST_COMPLETED_CLOSE_STRICTLY_ABOVE_OPENING_RANGE_HIGH"
+    entry: str = "NEXT_ACTUAL_NATIVE_BAR_OPEN"
+    stop: str = "FROZEN_OPENING_RANGE_LOW"
+    exits: tuple[str, ...] = ("STOP", "SESSION_CLOSE")
+    profit_target: None = None
+    maximum_attempts_per_symbol_session: int = 1
+    overnight: bool = False
+    portfolio_strategy_defined: bool = False
+    automatic_champion_selection: bool = False
+
+
+ORB_V1 = OrbDefinition()

@@ -36,6 +36,21 @@ The L5 forward period is **FORWARD HOLDOUT / RESEARCH**, not clean OOS.
 See [champion consolidation audit](reports/champion_consolidation_audit.md) for execution
 precedence, retained risks, removal decisions and paper/shadow readiness.
 
+## Independent intraday research: ORB V1
+
+`research-orb-v1` / **ORB-V1-15M-LONG** is `ACTIVE`, pending a later human research
+decision. It is independent of F: one native 15-minute long opening-range breakout,
+on the PIT Daily liquid Top-100, with next-bar entry, a frozen opening-range-low stop,
+and session-close liquidation. Costs are 5 bps per fill and zero commission.
+This is a signal-level study with no portfolio allocation, compounding, or automatic
+champion promotion. F/configured/C1 and its historical missing-Daily-bar policy remain
+unchanged; CC-01 remains mandatory work before paper/shadow execution.
+
+`preflight-orb-v1` and `validate-orb-v1` are local and read-only. Only explicit
+candidate-gap remediation can acquire native data. See the
+[ORB V1 research guide](docs/orb-v1-research.md) for the frozen definition, coverage
+rules, report units, feed limitations, and PowerShell commands.
+
 Ein modularer Research-Unterbau für die Strategie **High Quality + Attractive Valuation +
 Price Dislocation + Recovery Signal**. Die erste Zielversion ist ausschließlich für Screening,
 Backtests, Dry Runs und Alpaca Paper Trading vorgesehen. Live-Trading ist weder implementiert
