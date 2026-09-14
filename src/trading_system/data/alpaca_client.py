@@ -66,6 +66,7 @@ class AlpacaDataClient:
                     tradable=asset.tradable,
                     fractionable=asset.fractionable,
                     shortable=asset.shortable,
+                    asset_class=getattr(asset, "asset_class", None),
                 )
                 for asset in assets
                 if asset.tradable and asset.status == AssetStatus.ACTIVE

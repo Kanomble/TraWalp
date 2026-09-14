@@ -83,7 +83,7 @@ class OrbDefinition:
     research_family: str = "research-orb-v1"
     research_id: str = "ORB-V1-15M-LONG"
     status: str = "ACTIVE"
-    universe_name: str = "ORB_LIQUID_TOP100"
+    universe_name: str = "ORB_LIQUID_TOP100_US_EQUITY"
     top_n: int = 100
     daily_lookback_sessions: int = 20
     timeframe: str = "15m"

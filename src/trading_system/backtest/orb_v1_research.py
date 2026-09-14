@@ -236,7 +236,12 @@ def build_diagnostics(prepared, events):
 
 def summary_definition(prepared, config, *, preflight):
     warnings = [
-        "Historical universe uses current locally stored tradable company membership.",
+        "Historical universe uses current locally stored Alpaca tradable US_EQUITY instruments.",
+        "ETFs/ETPs and other Alpaca US_EQUITY instruments may be included; "
+        "direct crypto is excluded.",
+        "Alpaca tradable=true is a data/research universe property and does not prove that an "
+        "instrument can be purchased through a German/EU broker. Execution eligibility is not "
+        "evaluated in this research family.",
         "Results are not survivorship-clean.",
         "ORB V1 is a signal-level research study.",
         "No realistic multi-position capital-allocation policy has yet been defined.",

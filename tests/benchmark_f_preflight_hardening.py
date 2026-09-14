@@ -63,7 +63,9 @@ def seed_database(path, source, sessions):
     daily_sessions = trading_sessions_between(date(2023, 1, 1), sessions[-1])
     with database.connect() as connection:
         connection.executemany(
-            "INSERT INTO assets VALUES (?,?,NULL,1,1,0,'fixture')",
+            """INSERT INTO assets
+            (symbol,name,exchange,tradable,fractionable,shortable,updated_at)
+            VALUES (?,?,NULL,1,1,0,'fixture')""",
             ((c.symbol, c.name) for c in companies),
         )
         connection.executemany(

@@ -32,7 +32,7 @@ from trading_system.models.market_data import BarTimeframe
 
 
 class OrbReadOnlyDatabase(Database):
-    """Force inherited identity helpers onto read-only connections and count actual reads."""
+    """Force inherited asset helpers onto read-only connections and count actual reads."""
 
     def __init__(self, path):
         super().__init__(path)
@@ -81,14 +81,13 @@ def discover_orb_universe(database, config, start, end) -> OrbPreparation:
     each batch. Missing/duplicate/invalid Daily observations cannot supply a window.
     """
     started = perf_counter()
-    basis = selection_basis(database, start, end)
+    basis = selection_basis(database, config, start, end)
     digest = selection_digest(basis)
     sessions = [date.fromisoformat(s) for s in basis["sessions"]]
     history = [date.fromisoformat(s) for s in basis["history_sessions"]]
     first = history[0]
     session_set = set(sessions)
     next_session = dict(zip(history, history[1:], strict=False))
-    conflicts = basis["identity_conflicts"]
     symbols = basis["symbols"]
     top = {session: [] for session in sessions}
     complete = dict.fromkeys(sessions, 0)
@@ -151,13 +150,13 @@ def discover_orb_universe(database, config, start, end) -> OrbPreparation:
         "ready": bool(symbols) and all(complete.values()),
         "warmup_start": first.isoformat(),
         "required_completed_sessions": 20,
-        "current_tradable_company_count_after_identity_exclusions": len(symbols),
-        "identity_conflict_symbols_excluded": sorted(conflicts),
+        **basis["asset_scope_diagnostics"],
         "invalid_or_duplicate_daily_bars": invalid_daily_bars,
         "sessions": [
             {
                 "session": session.isoformat(),
                 "complete_daily_windows": complete[session],
+                "eligible_after_daily_window": complete[session],
                 "unavailable_daily_windows": len(symbols) - complete[session],
                 "liquid_survivors": survivors[session],
                 "selected": len(top[session]),

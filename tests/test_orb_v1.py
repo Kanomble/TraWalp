@@ -108,7 +108,7 @@ def test_exact_frozen_definition_and_independent_active_registry():
         "research_family": "research-orb-v1",
         "research_id": "ORB-V1-15M-LONG",
         "status": "ACTIVE",
-        "universe_name": "ORB_LIQUID_TOP100",
+        "universe_name": "ORB_LIQUID_TOP100_US_EQUITY",
         "top_n": 100,
         "daily_lookback_sessions": 20,
         "timeframe": "15m",
@@ -250,7 +250,15 @@ def seed_market(tmp_path, symbols=("AAA",), *, complete_native=True):
             CompanyIdentity(cik=f"{index:010d}", symbol=symbol, name=symbol, sic="6798")
         )  # REIT SIC must not be excluded
         database.upsert_assets(
-            [TradableAsset(symbol=symbol, name=symbol, tradable=True, fractionable=False)]
+            [
+                TradableAsset(
+                    symbol=symbol,
+                    name=symbol,
+                    tradable=True,
+                    fractionable=False,
+                    asset_class="US_EQUITY",
+                )
+            ]
         )
         daily.extend(
             MarketDataBar(
@@ -286,12 +294,9 @@ def absence(database, symbol="AAA", status="PROVIDER_CONFIRMED_ABSENT", **update
     database.set_sync_value(PROVIDER_OBSERVATION_SOURCE, f"15m|{symbol}|{SESSION}", payload)
 
 
-def test_top100_t_minus_one_deterministic_ties_identity_conflicts_and_no_absence_substitution(
-    tmp_path, config
-):
-    symbols = tuple(f"S{i:03d}" for i in range(101)) + ("CONFLICT",)
+def test_top100_t_minus_one_deterministic_ties_and_no_absence_substitution(tmp_path, config):
+    symbols = tuple(f"S{i:03d}" for i in range(101))
     database = seed_market(tmp_path, symbols, complete_native=False)
-    database.set_sync_value("sec_identity_conflicts", "CONFLICT", {"status": "unresolved"})
     # T's giant close/volume is invisible to the T universe, visible only from T+1.
     database.upsert_bars(
         [
@@ -306,7 +311,7 @@ def test_top100_t_minus_one_deterministic_ties_identity_conflicts_and_no_absence
             )
         ]
     )
-    for symbol in symbols[:-1]:
+    for symbol in symbols:
         absence(database, symbol)
     prepared = prepare_orb_data(database, config, SESSION, SESSION)
     assert [row.symbol for row in prepared.candidates] == list(symbols[:100])
@@ -315,7 +320,7 @@ def test_top100_t_minus_one_deterministic_ties_identity_conflicts_and_no_absence
         row.previous_close == 100 and row.average_dollar_volume_20d == 20_000_000
         for row in prepared.candidates
     )
-    assert prepared.daily_qualification["identity_conflict_symbols_excluded"] == ["CONFLICT"]
+    assert prepared.daily_qualification["us_equity_assets_considered"] == 101
     assert prepared.ready
     with NativeEntrySessions() as spool:
         events = simulate_prepared_orb(prepared, spool)
@@ -329,6 +334,89 @@ def test_top100_t_minus_one_deterministic_ties_identity_conflicts_and_no_absence
     assert (
         following.candidates[0].average_dollar_volume_20d == (19 * 20_000_000 + 2_000_000_000) / 20
     )
+
+
+@pytest.mark.parametrize("end", [SESSION, date(2025, 5, 5)])
+def test_asset_scope_ignores_names_and_sec_identity_and_loads_assets_once(
+    tmp_path, config, monkeypatch, end
+):
+    equities = ("AAPL", "MSFT", "SPY", "QQQ", "GLD", "IBIT")
+    database = seed_market(tmp_path, equities + ("COIN", "UNCLASSIFIED", "INACTIVE", "OPTION"))
+    with database.connect() as connection:
+        connection.execute("DELETE FROM companies")
+        connection.execute("UPDATE assets SET name='ETF Trust Fund' WHERE symbol='AAPL'")
+        connection.execute("UPDATE assets SET name='Operating Company' WHERE symbol='SPY'")
+        connection.execute("UPDATE assets SET asset_class='CRYPTO' WHERE symbol='COIN'")
+        connection.execute("UPDATE assets SET asset_class='UNKNOWN' WHERE symbol='UNCLASSIFIED'")
+        connection.execute("UPDATE assets SET asset_class='US_OPTION' WHERE symbol='OPTION'")
+        connection.execute("UPDATE assets SET tradable=0 WHERE symbol='INACTIVE'")
+    database.set_sync_value("sec_identity_conflicts", "AAPL", {"status": "unresolved"})
+    for method in (
+        "list_tradable_companies",
+        "company_symbol_to_cik",
+        "unresolved_sec_identity_conflict_symbols",
+    ):
+        monkeypatch.setattr(Database, method, forbidden)
+    original = Database.list_tradable_assets
+    calls = []
+
+    def counted(self):
+        calls.append(self.path)
+        return original(self)
+
+    monkeypatch.setattr(Database, "list_tradable_assets", counted)
+    summary, paths = run_orb_v1(
+        database, config, SESSION, end, tmp_path, stem="asset_scope", preflight=True
+    )
+    assert calls == [database.path]
+    evidence = summary["daily_qualification"]
+    assert evidence["tradable_assets_total"] == 9
+    assert evidence["us_equity_assets_considered"] == 6
+    assert evidence["crypto_assets_excluded"] == 1
+    assert evidence["unknown_asset_class_excluded"] == 1
+    assert evidence["other_asset_classes_excluded"] == 1
+    assert evidence["sessions"][0]["eligible_after_daily_window"] == 6
+    assert evidence["sessions"][0]["liquid_survivors"] == 6
+    assert evidence["sessions"][0]["selected"] == 6
+    scope = summary["universe_definition"]
+    assert scope["asset_universe"] == "CURRENT_ALPACA_TRADABLE_US_EQUITY"
+    assert scope["security_scope"] == "ALPACA_TRADABLE_US_EQUITY"
+    assert scope["individual_stocks_only"] is False
+    assert scope["etfs_etps_may_be_included"] is True
+    assert scope["direct_crypto_allowed"] is False
+    assert scope["execution_eligibility_germany"] == "NOT_EVALUATED"
+    assert scope["sec_identity_required"] is False
+    assert any("German/EU broker" in warning for warning in summary["warnings"])
+    manifest = json.loads(paths["orb_candidates"].read_text())
+    expected_symbols = sorted(equities) * len(trading_sessions_between(SESSION, end))
+    assert [row["symbol"] for row in manifest["candidates"]] == expected_symbols
+    assert {row["average_dollar_volume_20d"] for row in manifest["candidates"]} == {20_000_000}
+    # Names are neither eligibility nor fingerprint inputs, even when they sound like products.
+    with database.connect() as connection:
+        connection.execute("UPDATE assets SET name='Crypto ETF Stock Trust Fund'")
+    again = discover_orb_universe(database, config, SESSION, end)
+    assert [row.symbol for row in again.candidates] == expected_symbols
+    assert again.source_fingerprint == manifest["source_fingerprint"]
+    assert len(calls) == 2
+
+
+def test_asset_class_filter_precedes_top100_and_absence_never_replaces_rank101(tmp_path, config):
+    equities = ("SPY",) + tuple(f"Z{i:03}" for i in range(100))
+    database = seed_market(tmp_path, equities + ("COIN", "MYSTERY"), complete_native=False)
+    with database.connect() as connection:
+        connection.execute("UPDATE assets SET asset_class='CRYPTO' WHERE symbol='COIN'")
+        connection.execute("UPDATE assets SET asset_class='UNKNOWN' WHERE symbol='MYSTERY'")
+        connection.execute("UPDATE bars SET volume=999999999 WHERE symbol IN ('COIN','MYSTERY')")
+    for symbol in equities:
+        absence(database, symbol)
+    prepared = prepare_orb_data(database, config, SESSION, SESSION)
+    assert prepared.ready
+    assert [row.symbol for row in prepared.candidates] == list(equities[:100])
+    assert [row.daily_universe_rank for row in prepared.candidates] == list(range(1, 101))
+    assert prepared.daily_qualification["sessions"][0]["liquid_survivors"] == 101
+    assert len(prepared.coverage) == 100
+    assert {row["status"] for row in prepared.coverage} == {"PROVIDER_CONFIRMED_ABSENT"}
+    assert equities[100] not in {row.symbol for row in prepared.candidates}
 
 
 def test_daily_thresholds_exact_boundary_and_missing_warmup_not_forward_filled(tmp_path, config):

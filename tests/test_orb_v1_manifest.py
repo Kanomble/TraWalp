@@ -40,6 +40,8 @@ def test_preflight_exports_exact_top100_and_daily_evidence_without_native_spool(
     manifest = json.loads(paths["orb_candidates"].read_text())
     assert paths["orb_candidates"].name == "pre_orb_candidates.json"
     assert manifest["candidate_count"] == 100
+    assert manifest["manifest_version"] == 2
+    assert manifest["universe_definition"]["security_scope"] == "ALPACA_TRADABLE_US_EQUITY"
     assert [row["symbol"] for row in manifest["candidates"]] == list(symbols[:100])
     assert [row["daily_universe_rank"] for row in manifest["candidates"]] == list(range(1, 101))
     assert set(manifest["candidates"][0]) == {
@@ -121,6 +123,7 @@ def test_manifest_reuses_candidates_after_native_data_added_without_daily_discov
         ("market_data_adjustment", "split"),
         ("extended_hours", True),
         ("manifest_version", 999),
+        ("manifest_version", 1),
         ("source_fingerprint", "stale"),
         ("candidate_count", 100),
     ],
@@ -194,7 +197,7 @@ def test_candidate_and_fingerprint_tampering_rejects(tmp_path, config, monkeypat
 
 
 @pytest.mark.parametrize(
-    "mutation", ["daily_selected", "daily_unselected", "membership", "identity", "quarantine"]
+    "mutation", ["daily_selected", "daily_unselected", "membership", "asset_class", "unknown_class"]
 )
 def test_local_selection_input_changes_invalidate_manifest(tmp_path, config, monkeypatch, mutation):
     database = seed_market(tmp_path, ("AAA", "BBB"))
@@ -211,10 +214,12 @@ def test_local_selection_input_changes_invalidate_manifest(tmp_path, config, mon
     elif mutation == "membership":
         with database.connect() as connection:
             connection.execute("UPDATE assets SET tradable=0 WHERE symbol='BBB'")
-    elif mutation == "identity":
-        database.set_sync_value("sec_reference", "ticker_to_cik", {"AAA": "0000000999"})
     else:
-        database.set_sync_value("sec_identity_conflicts", "AAA", {"status": "unresolved"})
+        with database.connect() as connection:
+            connection.execute(
+                "UPDATE assets SET asset_class=? WHERE symbol='BBB'",
+                ("CRYPTO" if mutation == "asset_class" else "UNKNOWN",),
+            )
     monkeypatch.setattr(orb_v1_data, "discover_orb_universe", forbidden)
     with pytest.raises(ValueError, match="ORB_CANDIDATE_MANIFEST_MISMATCH"):
         validate(database, config, tmp_path, paths["orb_candidates"])
@@ -234,6 +239,38 @@ def test_same_session_daily_and_irrelevant_config_do_not_invalidate_manifest(
     monkeypatch.setattr(orb_v1_data, "discover_orb_universe", forbidden)
     summary, _ = validate(database, config, tmp_path, paths["orb_candidates"])
     assert summary["candidate_source"] == "MANIFEST"
+
+
+def test_sec_changes_do_not_invalidate_asset_manifest_or_trigger_rediscovery(
+    tmp_path, config, monkeypatch
+):
+    database = seed_market(tmp_path)
+    _, paths = preflight(database, config, tmp_path)
+    with database.connect() as connection:
+        connection.execute("DELETE FROM companies")
+    database.set_sync_value("sec_reference", "ticker_to_cik", {"AAA": "0000000999"})
+    database.set_sync_value("sec_identity_conflicts", "AAA", {"status": "unresolved"})
+    monkeypatch.setattr(orb_v1_data, "discover_orb_universe", forbidden)
+    summary, _ = validate(database, config, tmp_path, paths["orb_candidates"])
+    assert summary["candidate_source"] == "MANIFEST"
+    assert summary["candidate_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "before,after", [("CRYPTO", "US_EQUITY"), ("UNKNOWN", "US_EQUITY"), ("CRYPTO", "UNKNOWN")]
+)
+def test_excluded_asset_class_drift_invalidates_manifest(
+    tmp_path, config, monkeypatch, before, after
+):
+    database = seed_market(tmp_path, ("AAA", "BBB"))
+    with database.connect() as connection:
+        connection.execute("UPDATE assets SET asset_class=? WHERE symbol='BBB'", (before,))
+    _, paths = preflight(database, config, tmp_path)
+    with database.connect() as connection:
+        connection.execute("UPDATE assets SET asset_class=? WHERE symbol='BBB'", (after,))
+    monkeypatch.setattr(orb_v1_data, "discover_orb_universe", forbidden)
+    with pytest.raises(ValueError, match="ORB_CANDIDATE_MANIFEST_MISMATCH"):
+        validate(database, config, tmp_path, paths["orb_candidates"])
 
 
 @pytest.mark.parametrize(

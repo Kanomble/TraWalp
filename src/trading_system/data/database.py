@@ -52,7 +52,8 @@ class Database:
                 CREATE TABLE IF NOT EXISTS assets (
                     symbol TEXT PRIMARY KEY, name TEXT NOT NULL, exchange TEXT,
                     tradable INTEGER NOT NULL, fractionable INTEGER NOT NULL,
-                    shortable INTEGER NOT NULL, updated_at TEXT NOT NULL
+                    shortable INTEGER NOT NULL, updated_at TEXT NOT NULL,
+                    asset_class TEXT NOT NULL DEFAULT 'UNKNOWN'
                 );
                 CREATE TABLE IF NOT EXISTS companies (
                     cik TEXT PRIMARY KEY, symbol TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
@@ -100,19 +101,37 @@ class Database:
                 );
                 """
             )
+            if "asset_class" not in {
+                row["name"] for row in connection.execute("PRAGMA table_info(assets)")
+            }:
+                connection.execute(
+                    "ALTER TABLE assets ADD COLUMN asset_class TEXT NOT NULL DEFAULT 'UNKNOWN'"
+                )
             _migrate_daily_bars(connection)
 
     def upsert_assets(self, assets: Iterable[TradableAsset]) -> int:
         rows = [
-            (a.symbol, a.name, a.exchange, a.tradable, a.fractionable, a.shortable, _now())
+            (
+                a.symbol,
+                a.name,
+                a.exchange,
+                a.tradable,
+                a.fractionable,
+                a.shortable,
+                _now(),
+                a.asset_class,
+            )
             for a in assets
         ]
         with self.connect() as connection:
             connection.executemany(
-                """INSERT INTO assets VALUES (?, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO assets
+                (symbol,name,exchange,tradable,fractionable,shortable,updated_at,asset_class)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(symbol) DO UPDATE SET name=excluded.name, exchange=excluded.exchange,
                 tradable=excluded.tradable, fractionable=excluded.fractionable,
-                shortable=excluded.shortable, updated_at=excluded.updated_at""",
+                shortable=excluded.shortable, updated_at=excluded.updated_at,
+                asset_class=excluded.asset_class""",
                 rows,
             )
         return len(rows)
@@ -146,6 +165,7 @@ class Database:
                 asset.fractionable,
                 asset.shortable,
                 now,
+                asset.asset_class,
             )
             for asset in current
         ]
@@ -170,10 +190,13 @@ class Database:
                 ((symbol,) for symbol in symbols),
             )
             connection.executemany(
-                """INSERT INTO assets VALUES (?, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO assets
+                (symbol,name,exchange,tradable,fractionable,shortable,updated_at,asset_class)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(symbol) DO UPDATE SET name=excluded.name, exchange=excluded.exchange,
                 tradable=excluded.tradable, fractionable=excluded.fractionable,
-                shortable=excluded.shortable, updated_at=excluded.updated_at""",
+                shortable=excluded.shortable, updated_at=excluded.updated_at,
+                asset_class=excluded.asset_class""",
                 rows,
             )
             deactivated = connection.execute(
@@ -210,10 +233,14 @@ class Database:
         return [str(row["symbol"]) for row in rows]
 
     def list_tradable_assets(self) -> list[TradableAsset]:
+        """Keep generic membership, including legacy rows with unknown asset class.
+
+        SELECT * permits read-only consumers to open a pre-migration database;
+        only explicit initialization/sync migrates or refreshes its metadata.
+        """
         with self.connect() as connection:
             rows = connection.execute(
-                """SELECT symbol,name,exchange,tradable,fractionable,shortable
-                FROM assets WHERE tradable=1 ORDER BY symbol"""
+                "SELECT * FROM assets WHERE tradable=1 ORDER BY symbol"
             ).fetchall()
         return [
             TradableAsset(
@@ -223,6 +250,7 @@ class Database:
                 tradable=bool(row["tradable"]),
                 fractionable=bool(row["fractionable"]),
                 shortable=bool(row["shortable"]),
+                asset_class=dict(row).get("asset_class", "UNKNOWN"),
             )
             for row in rows
         ]

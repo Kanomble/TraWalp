@@ -12,7 +12,7 @@ from trading_system.backtest.orb_v1 import OrbCandidate
 from trading_system.backtest.research_definitions import ORB_V1
 from trading_system.data.market_sessions import daily_warmup_start, trading_sessions_between
 
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
 MISMATCH = "ORB_CANDIDATE_MANIFEST_MISMATCH"
 
 
@@ -30,13 +30,20 @@ def fingerprint(payload):
 def orb_universe_definition(config):
     return {
         "name": ORB_V1.universe_name,
+        "asset_universe": "CURRENT_ALPACA_TRADABLE_US_EQUITY",
+        "security_scope": "ALPACA_TRADABLE_US_EQUITY",
+        "individual_stocks_only": False,
+        "etfs_etps_may_be_included": True,
+        "direct_crypto_allowed": False,
+        "unknown_asset_class_allowed": False,
+        "execution_eligibility_germany": "NOT_EVALUATED",
         "membership": "CURRENT_UNIVERSE_ONLY",
         "survivorship": "NOT_SURVIVORSHIP_CLEAN",
         "top_n": ORB_V1.top_n,
         "previous_close_min": config.universe.min_price,
         "average_dollar_volume_20d_min": config.universe.min_avg_dollar_volume_20d,
         "ranking": "20 completed Daily sessions through T-1: mean(close * volume) DESC, symbol ASC",
-        "identity_conflicts": "EXCLUDED",
+        "sec_identity_required": False,
         "intraday_absence_replacement": False,
     }
 
@@ -56,22 +63,37 @@ def manifest_contract(config, start, end):
     }
 
 
-def selection_basis(database, start, end):
+def selection_basis(database, config, start, end):
     sessions = trading_sessions_between(start, end)
     if not sessions:
         raise ValueError("ORB_NO_REQUESTED_TRADING_SESSIONS")
     first = daily_warmup_start(sessions[0], ORB_V1.daily_lookback_sessions + 1)
     history = trading_sessions_between(first, sessions[-1])
-    companies = database.list_tradable_companies()
-    conflicts = database.unresolved_sec_identity_conflict_symbols()
+    # One current asset load per run, before any Daily ranking; no SEC or provider reads.
+    assets = database.list_tradable_assets()
+    classes = Counter(asset.asset_class for asset in assets)
     return {
+        "universe_definition": orb_universe_definition(config),
         "sessions": [s.isoformat() for s in sessions],
         "history_sessions": [s.isoformat() for s in history],
-        "tradable_companies": sorted((company.symbol, company.cik) for company in companies),
-        "identity_conflicts": sorted(conflicts),
-        "company_identity_map": database.company_symbol_to_cik(),
-        "sec_identity_reference": database.sync_value("sec_reference", "ticker_to_cik"),
-        "symbols": sorted({company.symbol for company in companies} - conflicts),
+        "tradable_assets": sorted(
+            (asset.symbol, asset.asset_class, asset.tradable) for asset in assets
+        ),
+        "asset_scope_diagnostics": {
+            "tradable_assets_total": len(assets),
+            "us_equity_assets_considered": classes["US_EQUITY"],
+            "crypto_assets_excluded": classes["CRYPTO"],
+            "unknown_asset_class_excluded": classes["UNKNOWN"],
+            "other_asset_classes_excluded": sum(
+                count
+                for key, count in classes.items()
+                if key not in {"US_EQUITY", "CRYPTO", "UNKNOWN"}
+            ),
+            "tradable_assets_by_class": dict(sorted(classes.items())),
+        },
+        "symbols": sorted(
+            asset.symbol for asset in assets if asset.tradable and asset.asset_class == "US_EQUITY"
+        ),
     }
 
 
@@ -126,12 +148,12 @@ def load_candidate_manifest(path, database, config, start, end):
         for key, expected in manifest_contract(config, start, end).items():
             if _canonical(payload.get(key)) != _canonical(expected):
                 raise ValueError(key)
-        basis = selection_basis(database, start, end)
+        basis = selection_basis(database, config, start, end)
         digest = selection_digest(basis)
         for _ in iter_selection_batches(database, basis, digest):
             pass
         if payload.get("source_fingerprint") != digest.hexdigest():
-            raise ValueError("local membership/identity/Daily source fingerprint")
+            raise ValueError("local asset membership/class/Daily source fingerprint")
         sessions = [date.fromisoformat(s) for s in basis["sessions"]]
         session_set = set(sessions)
         history = [date.fromisoformat(s) for s in basis["history_sessions"]]
@@ -177,6 +199,10 @@ def load_candidate_manifest(path, database, config, start, end):
         evidence = payload["daily_qualification"]
         if evidence["ready"] is not True or evidence["required_completed_sessions"] != 20:
             raise ValueError("Daily qualification")
+        if any(
+            evidence.get(key) != value for key, value in basis["asset_scope_diagnostics"].items()
+        ):
+            raise ValueError("asset scope diagnostics")
         if [row["session"] for row in evidence["sessions"]] != basis["sessions"] or any(
             row["selected"] != ranks[date.fromisoformat(row["session"])]
             for row in evidence["sessions"]

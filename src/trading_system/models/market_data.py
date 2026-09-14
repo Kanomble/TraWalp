@@ -52,6 +52,7 @@ class MarketDataBar(BaseModel):
             raise ValueError("bar timestamp must be timezone-aware")
         return value.astimezone(UTC)
 
+
 # Backward-compatible import name. Existing Daily code receives timeframe="1d" by default.
 DailyBar = MarketDataBar
 
@@ -71,6 +72,14 @@ class TradableAsset(BaseModel):
     tradable: bool
     fractionable: bool
     shortable: bool = False
+    asset_class: str = "UNKNOWN"
+
+    @field_validator("asset_class", mode="before")
+    @classmethod
+    def normalize_asset_class(cls, value: object) -> str:
+        """Preserve provider classes; missing metadata never implies US equity."""
+        value = getattr(value, "value", value)
+        return str(value).strip().upper() if value is not None and str(value).strip() else "UNKNOWN"
 
 
 class MarketSnapshot(BaseModel):
