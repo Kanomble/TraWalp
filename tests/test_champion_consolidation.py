@@ -235,24 +235,103 @@ def test_execution_session_future_close_does_not_change_entry(market, config):
     )
 
 
-def test_missing_tenth_session_bar_exposes_existing_exit_limitation(market, config):
-    # Audit evidence, not a claim that missing-data execution is paper-ready.
+@pytest.fixture
+def missing_tenth_session_bar(market, config):
+    """Remove only the held symbol's bar after verifying the nominal day-10 exit."""
     database, sessions = market
+    baseline = run(market, config).positions[0]
+    assert baseline.symbol == "AAA"
+    assert baseline.entry_date == sessions[1]
+    assert baseline.exit_date == sessions[10]
+    assert baseline.holding_days == 10
+    assert baseline.exit_reason == "time_exit"
     with database.connect() as connection:
         connection.execute(
             "DELETE FROM bars WHERE symbol=? AND timestamp LIKE ?",
             ("AAA", f"{sessions[10]}%"),
         )
-    position = run(market, config).positions[0]
+    return market
+
+
+def test_missing_daily_bar_preserves_historical_compatibility_behavior(
+    missing_tenth_session_bar,
+    config,
+):
+    """HISTORICAL_COMPATIBILITY_BEHAVIOR; not the future paper/shadow data policy."""
+    database, sessions = missing_tenth_session_bar
+    result = BacktestEngine(
+        database,
+        config,
+        screen_source=Screens(sessions[0], (record("BBB"), record())),
+        require_complete_daily_position_bars=False,
+    ).run(
+        sessions[0],
+        sessions[-1],
+        variant=FROZEN_CHAMPION_F.variant,
+        preset=FROZEN_CHAMPION_F.preset,
+    )
+    assert len(result.positions) == 1
+    position = result.positions[0]
+    assert position.entry_date == sessions[1]
+    assert (
+        next(point for point in result.equity_curve if point.date == sessions[10]).active_positions
+        == 1
+    )
+    assert not any(trade.exit_date == sessions[10] for trade in result.trades)
     assert position.exit_date == sessions[11]
     assert position.holding_days == 11
-    with pytest.raises(ValueError, match="DAILY_POSITION_DATA_UNAVAILABLE"):
+    assert position.exit_reason == "time_exit"
+    assert position.exit_reference_price == 100
+
+
+def test_missing_daily_bar_strict_mode_fails_closed(missing_tenth_session_bar, config):
+    database, sessions = missing_tenth_session_bar
+    with pytest.raises(
+        ValueError,
+        match=f"DAILY_POSITION_DATA_UNAVAILABLE on {sessions[10]}: AAA",
+    ):
         BacktestEngine(
             database,
             config,
-            screen_source=Screens(sessions[0], (record(),)),
+            screen_source=Screens(sessions[0], (record("BBB"), record())),
             require_complete_daily_position_bars=True,
-        ).run(sessions[0], sessions[-1], variant=FROZEN_CHAMPION_F.variant)
+        ).run(
+            sessions[0],
+            sessions[-1],
+            variant=FROZEN_CHAMPION_F.variant,
+            preset=FROZEN_CHAMPION_F.preset,
+        )
+
+
+def test_champion_wrapper_preserves_historical_missing_daily_bar_semantics(
+    missing_tenth_session_bar,
+    config,
+):
+    """Historical/research wrapper only; CC-01 remains a PRE_PAPER_BLOCKER."""
+    database, sessions = missing_tenth_session_bar
+    historical = BacktestEngine(
+        database,
+        config,
+        screen_source=Screens(sessions[0], (record("BBB"), record())),
+        require_complete_daily_position_bars=False,
+    ).run(
+        sessions[0],
+        sessions[-1],
+        variant=FROZEN_CHAMPION_F.variant,
+        preset=FROZEN_CHAMPION_F.preset,
+    )
+    champion = run_champion_backtest(
+        database,
+        config,
+        sessions[0],
+        sessions[-1],
+        screen_source=Screens(sessions[0], (record("BBB"), record())),
+    )
+    assert champion.positions[0].exit_date == sessions[11]
+    assert champion.positions == historical.positions
+    assert champion.trades == historical.trades
+    assert champion.equity_curve == historical.equity_curve
+    assert champion.configuration == historical.configuration
 
 
 @pytest.mark.parametrize(

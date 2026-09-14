@@ -98,20 +98,38 @@ absence of an importer is insufficient evidence against manual/dynamic use.
 
 | ID | Severity | Evidence / disposition |
 |---|---|---|
-| CC-01 | HIGH | `backtest/engine.py::run` skips management when a held symbol lacks a Daily bar; `_backtest_sessions` also omits sessions absent from the entire local bar table. Fixture proves a missing day-10 held bar causes day-11 `time_exit`. Final liquidation can use a stale last available bar. Existing strict held-bar guard is opt-in. **No correction applied:** changing exit/data rejection behavior can alter historical champion results. Requires a separate approved data-policy milestone before shadow execution. |
+| CC-01 | HIGH | **OPEN / PRE_PAPER_BLOCKER.** `backtest/engine.py::run` skips management when a held symbol lacks a Daily bar; `_backtest_sessions` also omits sessions absent from the entire local bar table. Fixture proves a missing day-10 held bar causes day-11 `time_exit`. Final liquidation can use a stale last available bar. Existing strict held-bar guard is opt-in. **No correction applied:** changing exit/data rejection behavior can alter historical champion results. Requires a separate approved data-policy milestone before shadow execution. |
 | CC-02 | MEDIUM | `data/database.py::list_tradable_companies`, `backtest/universe_provenance.py`, peer contexts use current tradable/SIC identities, not a versioned historical universe. Survivorship and research-selection bias remain unresolved; disclosed, not relabeled OOS. |
 | CC-03 | MEDIUM | `models/fundamentals.py::FundamentalFact.filed` is a date; `data/database.py::facts_available_as_of` uses `filed <= as_of`. Intraday acceptance/publication timing cannot be proven for same-date filings. No confirmed future-close leak was found; timing granularity remains a research/paper limitation. |
 | CC-04 | MEDIUM | `engine.run` calls `bars_on_session`; `_atr_as_of` reads symbol history during holding updates, even with inactive ATR trailing. `diagnostics.add_post_exit_diagnostics` reads per closed position; `Screener.run/_prepare` reads per company. Existing optimized feature preparation batches queries. No new SQL loop introduced; consolidation deferred. |
-| CC-05 | LOW | `tests/test_screen_strategies.py::test_score_variant_comparison_is_exact_a_through_f_on_configured_management` assumes hybrid contains only C. Existing registry also contains `F-intraday/F-intraday-dynamic`. Both test expectation and family composition predate this audit; the retained test fails. Family membership was not changed to satisfy the stale assertion. |
+| CC-05 | LOW | **RESOLVED.** The score-comparison test conflated configured A-F with an outdated three-entry, C-only hybrid family. It now derives configured runs from `SCREEN_STRATEGY_DEFINITIONS` and verifies exactly A/configured through F/configured. A separate test checks hybrid dispatch against `research_family_runs`, retains F-intraday and distinguishes it from configured runs. No registry contents, family membership or historical IDs changed. |
 | CC-06 | LOW | Legacy `ACTIVE_RESEARCH`/`CHAMPION_CONTROL` fields and `F_REGIME_CAPACITY_RESEARCH_STATUS = "historical research hypothesis"` remain report-compatibility metadata. Current decisions now live in a separate explicit map; old artifacts are not rewritten. |
 | CC-07 | LOW | `config.load_settings` caches mutable Pydantic settings; some legacy research maps/sets are mutable globals. Inspected runners copy experiment configs/use instance state, and champion tests prove no mutation. No demonstrated leakage found; broader immutability work deferred. |
 | CC-08 | INFO | Legacy C defaults and generic capacity 5 are intentional compatibility defaults. Explicit champion workflow and guard now make their distinction reviewable. No score/gate/default-economics change. |
 | CC-09 | INFO | Eager CLI/registry dependencies previously loaded rejected research code. Deferred calls/imports and shared immutable metadata now isolate normal champion execution; original import aliases preserved. |
 
-No BLOCKER was identified. No HIGH trading-correctness fix was performed: CC-01
+No BLOCKER-severity finding was identified. No HIGH trading-correctness fix was performed: CC-01
 does not satisfy the requirement to preserve historical economics. There were no
 new strategy definitions, confirmed forward-close dependencies in selection/sizing,
 or network calls discovered inside the inspected execution loops.
+
+### CC-01: OPEN
+
+Severity: **HIGH**
+
+Milestone: **PRE_PAPER_BLOCKER**
+
+Historical backtest semantics are intentionally preserved. With
+`require_complete_daily_position_bars=False`, a missing held-symbol Daily bar on
+nominal holding day 10 leaves the position open; it exits at the next represented
+executable session's close (day 11 in the fixture). `run_champion_backtest()` retains
+that historical/research behavior. With the strict option `True`, the same fixture
+raises `DAILY_POSITION_DATA_UNAVAILABLE` on day 10.
+
+Before any shadow/paper order-execution service is implemented, missing Daily bars
+for held positions must receive an explicit fail-closed or reconciliation policy.
+The historical wrapper must not be reused blindly as a paper execution policy.
+**No economics change was performed. Historical compatibility behavior remains frozen.**
 
 ## 6. Network/data boundary
 
@@ -181,26 +199,28 @@ models, tests, schemas, migrations and report artifacts remain available.
 
 ## 10. Verification and remaining technical debt
 
-Final focused result: **196 distinct tests passed; 1 pre-existing stale assertion
-failed (CC-05)**. This includes all **38 new champion audit tests**.
+Follow-up focused result: **94 passed, 0 failed**, covering both affected test files.
+**CC-05: RESOLVED.** No registry or runtime code was changed for this patch.
 
 | Focused run | Result |
 |---|---|
-| Champion audit, position manager, screen strategies, AI export, champion validation tests | 125 passed; 1 stale hybrid-family assertion failed (before the last two new audit tests were added) |
-| Selected capacity/regime/lifecycle/I1/R1/L5 reproduction and local-only CLI checks | 34 passed |
-| Final champion audit, feature/PIT tests, selected engine precedence/offline and first-hour compatibility fixtures | 73 passed, including all 38 new audit tests; overlaps the first run |
-| Final CLI default/conflict regression, including abbreviated flags | 1 passed; already counted above |
+| `tests/test_screen_strategies.py` and `tests/test_champion_consolidation.py` | 94 passed, 0 failed in 5.18 seconds |
 
-Ruff passed on all 14 changed Python files. Formatting passed on 13 whole modified
-files and the three edited regions of `validation.py`, preserving its unrelated
-existing formatting. `git diff --check` passed. The only warning was the existing
-transitive `websockets.legacy` deprecation. The full test suite was not run.
+The missing-bar regressions separately verify historical compatibility with the
+strict flag disabled, the strict error on day 10, and unchanged champion-wrapper
+positions, trades, equity and configuration compared with the non-strict engine.
+The nominal complete-data day-10 exit is verified before removing the fixture bar.
 
-The stale hybrid-family test is reported as a failure, not silently skipped or
-treated as a regression in the frozen champion. No historical run was used to
-validate cleanup. Disposable fixture databases/reports were removed after testing.
+Ruff and formatting checks passed on the two modified Python test files;
+`git diff --check` passed. The only warning was the existing transitive
+`websockets.legacy` deprecation. No full suite, network/provider operation,
+historical backtest, lifecycle/intraday validation or profiling was run.
+Disposable fixture databases/reports were removed after testing.
 
-Changed-file inventory (including completed pre-existing consolidation edits):
+Follow-up files: `tests/test_screen_strategies.py`,
+`tests/test_champion_consolidation.py`, and this audit report.
+
+Original consolidation changed-file inventory (including completed pre-existing edits):
 
 - `.gitignore`, `README.md`, `reports/champion_consolidation_audit.md`.
 - `src/trading_system/champion.py`, `cli.py`, `ai/export.py`, `models/screening.py`.
@@ -211,13 +231,13 @@ Changed-file inventory (including completed pre-existing consolidation edits):
 
 Outstanding: CC-01 data policy; historical universe/filing timestamp provenance;
 durable shadow state and reconciliation; existing per-loop reads; mutable legacy
-configuration/registry surfaces; historical report-helper duplication; stale family
-assertion and legacy status labels. No expensive historical validation was attempted.
+configuration/registry surfaces; historical report-helper duplication and legacy
+status labels. CC-05 is resolved; CC-01 remains mandatory before paper/shadow
+execution. No expensive historical validation was attempted.
 
 ## 11. Recommended next engineering milestone
 
-Build a local-only shadow intent/state ledger for the frozen champion, with a
-fail-closed session-data policy, deterministic intent IDs, restart recovery and
-synthetic replay tests. Keep broker submission disabled. Treat any change to the
-historical missing-bar economics as a separate explicit decision; do not silently
-change the frozen research baseline.
+**New independent strategy research.** Keep the frozen champion unchanged.
+CC-01 remains OPEN / HIGH / PRE_PAPER_BLOCKER and must be addressed in a dedicated
+data/execution-policy task before any paper/shadow order-execution service is
+implemented. That future policy must not silently change historical champion economics.

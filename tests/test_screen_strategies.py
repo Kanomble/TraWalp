@@ -4,7 +4,7 @@ import pytest
 
 from trading_system.backtest import engine as engine_module
 from trading_system.backtest.engine import evaluate_variant_entry
-from trading_system.backtest.research_registry import research_metadata
+from trading_system.backtest.research_registry import research_family_runs, research_metadata
 from trading_system.backtest.screen_strategies import (
     SCREEN_STRATEGY_DEFINITIONS,
     ScreenEntryPolicy,
@@ -279,19 +279,37 @@ def test_f_frozen_gate_failures_are_explicit(updates: dict, reason: str) -> None
 
 
 def test_score_variant_comparison_is_exact_a_through_f_on_configured_management() -> None:
-    assert engine_module._comparison_runs(StrategyComparisonKind.SCORE_VARIANTS) == tuple(
-        (variant, PositionManagementPreset.CONFIGURED) for variant in StrategyVariant
+    runs = engine_module._comparison_runs(StrategyComparisonKind.SCORE_VARIANTS)
+    assert runs == tuple(
+        (definition.variant, PositionManagementPreset.CONFIGURED)
+        for definition in SCREEN_STRATEGY_DEFINITIONS
     )
+    assert [f"{variant.value}/{preset.value}" for variant, preset in runs] == [
+        "A/configured",
+        "B/configured",
+        "C/configured",
+        "D/configured",
+        "E/configured",
+        "F/configured",
+    ]
+
+
+def test_hybrid_comparison_uses_the_registered_mixed_research_family() -> None:
     hybrid = engine_module._comparison_runs(StrategyComparisonKind.RESEARCH_INTRADAY_HYBRID)
-    assert {variant for variant, _ in hybrid} == {StrategyVariant.FULL}
-    assert len(hybrid) == 3
+    assert hybrid == research_family_runs(StrategyComparisonKind.RESEARCH_INTRADAY_HYBRID)
+    assert (
+        StrategyVariant.QUALITY_VALUE_MOMENTUM,
+        PositionManagementPreset.INTRADAY_DYNAMIC,
+    ) in hybrid
+    # Historical intraday compositions are separate from the configured A-F comparison.
+    assert set(hybrid).isdisjoint(
+        engine_module._comparison_runs(StrategyComparisonKind.SCORE_VARIANTS)
+    )
 
 
 @pytest.mark.parametrize("command", ["backtest", "audit-candidates"])
 @pytest.mark.parametrize("variant", list("ABCDEF"))
-def test_cli_research_variant_choices_accept_a_through_f(
-    command: str, variant: str
-) -> None:
+def test_cli_research_variant_choices_accept_a_through_f(command: str, variant: str) -> None:
     args = _parser().parse_args(
         [command, "--start", "2024-01-02", "--end", "2024-01-05", "--variant", variant]
     )
