@@ -13,6 +13,7 @@ from trading_system.ai.schemas import (
     AIFundamentalMetrics,
     AIRiskMetrics,
     AIScoreSummary,
+    AIStrategy,
     AITechnicalMetrics,
 )
 from trading_system.models.screening import ScreenRecord, ScreenReport
@@ -55,6 +56,11 @@ def build_ai_candidate_export(
     return AICandidateExport(
         generated_at=timestamp,
         screen_as_of=report.as_of,
+        strategy=(
+            AIStrategy(name=report.strategy_label, description="Frozen champion candidate ranking")
+            if report.strategy_label
+            else AIStrategy()
+        ),
         candidate_count=len(candidates),
         candidates=candidates,
     )

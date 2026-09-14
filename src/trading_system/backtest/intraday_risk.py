@@ -4,9 +4,17 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from trading_system.backtest.position_manager import ExitReason, PositionAction, PositionDecision
+from trading_system.backtest.research_definitions import (
+    F_INTRADAY_RISK_RESEARCH_FAMILY as F_INTRADAY_RISK_RESEARCH_FAMILY,
+)
+from trading_system.backtest.research_definitions import (
+    F_INTRADAY_RISK_VARIANTS as F_INTRADAY_RISK_VARIANTS,
+)
+from trading_system.backtest.research_definitions import (
+    IntradayRiskVariant as IntradayRiskVariant,
+)
 from trading_system.models.market_data import BarTimeframe
 
-F_INTRADAY_RISK_RESEARCH_FAMILY = "research-f-intraday-risk-v1"
 SUPPORT_NOTE = (
     "Future native coverage membership defines a paired research sample only, never a "
     "production trading signal. Only supported R0_FULL entry signals belong to the sample. "
@@ -14,19 +22,6 @@ SUPPORT_NOTE = (
 )
 
 
-@dataclass(frozen=True, slots=True)
-class IntradayRiskVariant:
-    research_id: str
-    label: str
-    common_support: bool = False
-    overlay: bool = False
-
-
-F_INTRADAY_RISK_VARIANTS = (
-    IntradayRiskVariant("F-INTRADAY-RISK-R0_FULL", "R0_FULL"),
-    IntradayRiskVariant("F-INTRADAY-RISK-R0_COMMON_SUPPORT", "R0_COMMON_SUPPORT", True),
-    IntradayRiskVariant("F-INTRADAY-RISK-R1_COMMON_SUPPORT", "R1_COMMON_SUPPORT", True, True),
-)
 RISK_EVENT_FIELDS = (
     "strategy",
     "position_id",

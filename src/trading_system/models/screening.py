@@ -40,6 +40,7 @@ class ScreenRecord(BaseModel):
 
 class ScreenReport(BaseModel):
     model_config = ConfigDict(frozen=True)
+    strategy_label: str | None = None
     as_of: date
     requested_as_of: date | None = None
     effective_market_session: date | None = None

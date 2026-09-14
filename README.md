@@ -1,5 +1,41 @@
 # TraWalp Trading System
 
+## Frozen champion and completed research
+
+Current frozen champion: **F / configured / C1** (`portfolio.max_positions = 1`).
+The canonical reference is `backtest/research_registry.py::FROZEN_CHAMPION_F`.
+Scoring, gates, ranking and sizing are unchanged: Daily entry at the next session open,
+configured ATR/max stop, 12% target, hard maximum of 10 sessions, 5 bps slippage and
+0 bps commission. Missing local bars remain an execution limitation; see the audit below.
+
+Use the explicit champion workflow with the checked-in `config/strategy.yaml`:
+
+```bash
+python -m trading_system.cli screen --champion
+python -m trading_system.cli export-ai --champion
+python -m trading_system.cli backtest --champion --start YYYY-MM-DD --end YYYY-MM-DD
+```
+
+These commands use the same F entry evaluator and reject execution-setting drift.
+Champion screen reports go to `reports/champion/`; screen JSON and AI exports identify
+`F/configured/C1`. Candidate ranks precede portfolio allocation and are not order instructions.
+Unqualified `screen`, `export-ai`, and `explain` retain the legacy screen; generic `backtest`
+retains C/configured and explicit research selections. `--champion` cannot be combined with
+`--variant` or `--strategy`. There is no paper/shadow execution entry point yet.
+
+Rejected research: static capacity > 1, regime-aware capacity, lifecycle extensions including
+L5 (rejected after forward holdout), I1 opening-weakness veto, and R1 intraday risk containment.
+All six completed research families are `REJECTED`; older controls/hypotheses are `ARCHIVED`.
+Historical research commands and exact strategy IDs remain available for reproducibility.
+Legacy serialized `ACTIVE_RESEARCH` / `CHAMPION_CONTROL` roles describe historical registry
+metadata; current decisions are recorded separately in `RESEARCH_FAMILY_STATUS`.
+
+Historical results use the **current local tradable universe**; survivorship bias remains
+unresolved. Research periods are not clean OOS unless explicitly established as such.
+The L5 forward period is **FORWARD HOLDOUT / RESEARCH**, not clean OOS.
+See [champion consolidation audit](reports/champion_consolidation_audit.md) for execution
+precedence, retained risks, removal decisions and paper/shadow readiness.
+
 Ein modularer Research-Unterbau für die Strategie **High Quality + Attractive Valuation +
 Price Dislocation + Recovery Signal**. Die erste Zielversion ist ausschließlich für Screening,
 Backtests, Dry Runs und Alpaca Paper Trading vorgesehen. Live-Trading ist weder implementiert

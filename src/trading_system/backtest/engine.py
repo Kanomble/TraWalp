@@ -8,7 +8,7 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import pandas as pd
 
@@ -23,26 +23,7 @@ from trading_system.backtest.diagnostics import (
     calculate_position_metrics,
     finalize_position,
 )
-from trading_system.backtest.entry_quality import (
-    EntryQualityStatus,
-    entry_session_range,
-    missing_session_timestamps,
-    next_executable_bar,
-    opening_weakness_decision,
-)
 from trading_system.backtest.features import HistoricalFeatureScreenSource
-from trading_system.backtest.first_hour_pullback import (
-    F4_STOP_DISTANCE_PCT,
-    SwingHighDetector,
-    plan_first_hour_pullback,
-)
-from trading_system.backtest.intraday_diagnostics import add_intraday_forward_diagnostics
-from trading_system.backtest.lifecycle import (
-    EntryCapacityProvider,
-    LifecycleContextProvider,
-    LifecyclePositionManager,
-    LifecyclePreset,
-)
 from trading_system.backtest.metrics import calculate_metrics, maximum_drawdown
 from trading_system.backtest.position_manager import (
     ExitReason,
@@ -98,6 +79,11 @@ from trading_system.models.market_data import BarTimeframe, DailyBar
 from trading_system.models.screening import ScreenRecord, ScreenReport
 from trading_system.strategy.screener import Screener
 from trading_system.technical.indicators import atr as calculate_atr
+
+if TYPE_CHECKING:
+    from trading_system.backtest.first_hour_pullback import SwingHighDetector
+    from trading_system.backtest.lifecycle import EntryCapacityProvider, LifecycleContextProvider
+    from trading_system.backtest.research_definitions import LifecyclePreset
 
 LOGGER = logging.getLogger(__name__)
 
@@ -459,6 +445,14 @@ class BacktestEngine:
     ) -> BacktestResult:
         if start > end:
             raise ValueError("Backtest start must not be after end")
+        if self.opening_weakness_veto or self.entry_common_support:
+            from trading_system.backtest.entry_quality import (
+                EntryQualityStatus,
+                entry_session_range,
+                missing_session_timestamps,
+                next_executable_bar,
+                opening_weakness_decision,
+            )
         if self.intraday_risk is not None and (
             variant is not StrategyVariant.QUALITY_VALUE_MOMENTUM
             or preset is not PositionManagementPreset.CONFIGURED
@@ -507,6 +501,13 @@ class BacktestEngine:
         opening_survivor_gate = preset in OPENING_SURVIVOR_GATE_PRESETS
         first_hour_pullback_entry = preset in FIRST_HOUR_PULLBACK_ENTRY_PRESETS
         f4_swing_management = preset in F4_SWING_MANAGEMENT_PRESETS
+        if f4_swing_management:
+            from trading_system.backtest.first_hour_pullback import SwingHighDetector
+
+        if intraday_monitoring:
+            from trading_system.backtest.intraday_diagnostics import (
+                add_intraday_forward_diagnostics,
+            )
         daily_managed_first_hour_entry = first_hour_pullback_entry and not intraday_monitoring
         native_intraday_loop = intraday_monitoring or confirmed_entry or first_hour_pullback_entry
         execution_timeframe = (
@@ -527,9 +528,12 @@ class BacktestEngine:
         )
         self._position_sequence = 0
         self.entry_quality_events = []
-        if self.lifecycle_preset is not None and (
+        lifecycle_management = self.lifecycle_preset is not None and (
             self.lifecycle_preset.conditional_extension or self.lifecycle_preset.defer_profit_target
-        ):
+        )
+        if lifecycle_management:
+            from trading_system.backtest.lifecycle import LifecyclePositionManager
+
             if self.lifecycle_context is None:
                 raise ValueError("Lifecycle decisions require a PIT context provider")
             self.position_manager = LifecyclePositionManager(
@@ -604,7 +608,7 @@ class BacktestEngine:
             return closed
 
         for index, session in enumerate(sessions):
-            if isinstance(self.position_manager, LifecyclePositionManager):
+            if lifecycle_management:
                 self.position_manager.start_session(session)
             final_session = index == len(sessions) - 1
             active_symbols = set(positions) | {order.record.symbol for order in pending}
@@ -1768,6 +1772,8 @@ class BacktestEngine:
         session: date,
         skipped: Counter[str],
     ) -> dict[datetime, list[_PendingEntry]]:
+        from trading_system.backtest.first_hour_pullback import plan_first_hour_pullback
+
         scheduled: dict[datetime, list[_PendingEntry]] = {}
         counter_prefix = (
             "f5"
@@ -2335,6 +2341,9 @@ class BacktestEngine:
         entry_atr: float | None = None,
         warmup_history: list[DailyBar] | None = None,
     ) -> tuple[PositionState | None, float, str | None]:
+        if self.current_preset in F4_SWING_MANAGEMENT_PRESETS:
+            from trading_system.backtest.first_hour_pullback import F4_STOP_DISTANCE_PCT
+
         if self.execution_context_observer is not None:
             self.execution_context_observer(order.signal_date, order.record.symbol, positions)
         if len(positions) >= self.config.portfolio.max_positions:

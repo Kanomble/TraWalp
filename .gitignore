@@ -214,6 +214,7 @@ data/*.sqlite3*
 reports/*.csv
 reports/*.json
 reports/*
+!reports/champion_consolidation_audit.md
 
 # PyPI configuration file
 .pypirc

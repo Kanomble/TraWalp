@@ -10,6 +10,9 @@ from enum import StrEnum
 
 import pandas as pd
 
+from trading_system.backtest.research_definitions import (
+    RegimeCapacityRule as RegimeCapacityRule,
+)
 from trading_system.models.market_data import DailyBar
 from trading_system.technical.indicators import momentum, sma
 
@@ -26,15 +29,6 @@ class MarketRegimeState(StrEnum):
     RISK_OFF = "RISK_OFF"
     UNAVAILABLE = "UNAVAILABLE"
     STATIC_CONTROL = "STATIC_CONTROL"
-
-
-class RegimeCapacityRule(StrEnum):
-    """The four frozen rules admitted by the registered research family."""
-
-    CONTROL_C1 = "CONTROL_C1"
-    CONTROL_C5 = "CONTROL_C5"
-    REGIME_SMA200 = "REGIME_SMA200"
-    REGIME_SMA200_MOM126 = "REGIME_SMA200_MOM126"
 
 
 @dataclass(frozen=True, slots=True)

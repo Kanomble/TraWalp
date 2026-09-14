@@ -19,7 +19,10 @@ from trading_system.backtest.peer_context import (
 )
 from trading_system.backtest.progress import ProgressPhase
 from trading_system.backtest.report import _atomic_csv, _atomic_text
-from trading_system.backtest.research_registry import FROZEN_CHAMPION_F
+from trading_system.backtest.research_registry import (
+    F_L5_FORWARD_RESEARCH_FAMILY,
+    FROZEN_CHAMPION_F,
+)
 from trading_system.backtest.validation import (
     _field_union,
     calendar_stability,
@@ -30,7 +33,6 @@ from trading_system.backtest.validation import (
 from trading_system.data.market_sessions import daily_warmup_start
 from trading_system.fundamentals.peers import normalize_sic
 
-F_L5_FORWARD_RESEARCH_FAMILY = "research-f-lifecycle-l5-forward-v1"
 FORWARD_START = date(2024, 8, 13)
 # These are the registered canonical presets, not new lifecycle implementations.
 FORWARD_VARIANTS = (

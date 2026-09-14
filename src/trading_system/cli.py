@@ -7,17 +7,13 @@ import json
 import logging
 import sys
 from datetime import UTC, date, datetime, timedelta
+from importlib import import_module
 from pathlib import Path
 
 from alpaca.data.enums import Adjustment, DataFeed
 
 from trading_system.ai.export import NoAICandidatesError, export_ai_candidates
 from trading_system.backtest.candidate_audit import run_candidate_audit
-from trading_system.backtest.capacity_validation import (
-    export_f_capacity_research,
-    format_f_capacity_research_summary,
-    run_f_capacity_research,
-)
 from trading_system.backtest.engine import (
     BacktestEngine,
     StrategyComparisonPreparation,
@@ -27,51 +23,6 @@ from trading_system.backtest.engine import (
     comparison_intraday_prefetch_metadata,
     prefetch_comparison_intraday_data,
     prepare_strategy_comparison,
-)
-from trading_system.backtest.intraday_hybrid import (
-    annotate_intraday_hybrid_coverage,
-    export_intraday_hybrid_comparison,
-)
-from trading_system.backtest.intraday_isolation import (
-    annotate_intraday_isolation_coverage,
-    export_intraday_isolation_comparison,
-)
-from trading_system.backtest.intraday_next import (
-    annotate_intraday_next_coverage,
-    export_intraday_next_comparison,
-)
-from trading_system.backtest.intraday_risk_validation import (
-    build_f_intraday_risk_preflight,
-    export_f_intraday_risk,
-    risk_output_paths,
-    run_f_intraday_risk,
-)
-from trading_system.backtest.l5_forward_validation import (
-    export_f_l5_forward,
-    l5_forward_output_paths,
-    run_f_l5_forward,
-    validate_forward_window,
-)
-from trading_system.backtest.lifecycle_daily_preflight import (
-    build_f_lifecycle_daily_preflight,
-    export_f_lifecycle_daily_preflight,
-)
-from trading_system.backtest.lifecycle_validation import (
-    build_f_intraday_entry_preflight,
-    export_f_intraday_entry_preflight,
-    export_f_lifecycle_research,
-    research_output_paths,
-    run_f_intraday_entry,
-    run_f_lifecycle_v2,
-)
-from trading_system.backtest.preflight import (
-    build_compare_preflight,
-    export_compare_preflight,
-)
-from trading_system.backtest.regime_capacity_validation import (
-    export_f_regime_capacity_research,
-    format_f_regime_capacity_research_summary,
-    run_f_regime_capacity_research,
 )
 from trading_system.backtest.report import (
     export_backtest,
@@ -84,20 +35,12 @@ from trading_system.backtest.report import (
     format_comparison_table,
     format_data_qualification_header,
 )
+from trading_system.backtest.research_registry import FROZEN_CHAMPION_F, validate_champion_config
 from trading_system.backtest.universe_provenance import (
     audit_universe_provenance,
     export_universe_provenance_audit,
 )
-from trading_system.backtest.validation import (
-    export_champion_f_exact_loso,
-    export_champion_f_validation,
-    export_extended_validation,
-    format_champion_f_validation_summary,
-    format_extended_validation_summary,
-    run_champion_f_exact_loso,
-    run_champion_f_validation,
-    run_extended_validation,
-)
+from trading_system.champion import run_champion_backtest, screen_champion
 from trading_system.config import StrategyConfig, load_settings
 from trading_system.data.alpaca_client import AlpacaDataClient
 from trading_system.data.daily_history import warmup_coverage_at
@@ -137,6 +80,173 @@ from trading_system.strategy.reporting import (
     format_screen_table,
 )
 from trading_system.strategy.screener import Screener
+
+
+def _deferred_research_call(module: str, name: str):
+    """Preserve CLI callable/monkeypatch compatibility without importing runners.
+
+    Only invocation resolves the explicit research dependency. Core screening,
+    AI export, ordinary backtests and --help never initialize research diagnostics.
+    """
+
+    def invoke(*args, **kwargs):
+        return getattr(import_module(module), name)(*args, **kwargs)
+
+    return invoke
+
+
+build_compare_preflight = _deferred_research_call(
+    "trading_system.backtest.preflight", "build_compare_preflight"
+)
+export_compare_preflight = _deferred_research_call(
+    "trading_system.backtest.preflight", "export_compare_preflight"
+)
+
+
+export_f_capacity_research = _deferred_research_call(
+    "trading_system.backtest.capacity_validation", "export_f_capacity_research"
+)
+
+format_f_capacity_research_summary = _deferred_research_call(
+    "trading_system.backtest.capacity_validation", "format_f_capacity_research_summary"
+)
+
+run_f_capacity_research = _deferred_research_call(
+    "trading_system.backtest.capacity_validation", "run_f_capacity_research"
+)
+
+annotate_intraday_hybrid_coverage = _deferred_research_call(
+    "trading_system.backtest.intraday_hybrid", "annotate_intraday_hybrid_coverage"
+)
+
+export_intraday_hybrid_comparison = _deferred_research_call(
+    "trading_system.backtest.intraday_hybrid", "export_intraday_hybrid_comparison"
+)
+
+annotate_intraday_isolation_coverage = _deferred_research_call(
+    "trading_system.backtest.intraday_isolation", "annotate_intraday_isolation_coverage"
+)
+
+export_intraday_isolation_comparison = _deferred_research_call(
+    "trading_system.backtest.intraday_isolation", "export_intraday_isolation_comparison"
+)
+
+annotate_intraday_next_coverage = _deferred_research_call(
+    "trading_system.backtest.intraday_next", "annotate_intraday_next_coverage"
+)
+
+export_intraday_next_comparison = _deferred_research_call(
+    "trading_system.backtest.intraday_next", "export_intraday_next_comparison"
+)
+
+build_f_intraday_risk_preflight = _deferred_research_call(
+    "trading_system.backtest.intraday_risk_validation", "build_f_intraday_risk_preflight"
+)
+
+export_f_intraday_risk = _deferred_research_call(
+    "trading_system.backtest.intraday_risk_validation", "export_f_intraday_risk"
+)
+
+risk_output_paths = _deferred_research_call(
+    "trading_system.backtest.intraday_risk_validation", "risk_output_paths"
+)
+
+run_f_intraday_risk = _deferred_research_call(
+    "trading_system.backtest.intraday_risk_validation", "run_f_intraday_risk"
+)
+
+export_f_l5_forward = _deferred_research_call(
+    "trading_system.backtest.l5_forward_validation", "export_f_l5_forward"
+)
+
+l5_forward_output_paths = _deferred_research_call(
+    "trading_system.backtest.l5_forward_validation", "l5_forward_output_paths"
+)
+
+run_f_l5_forward = _deferred_research_call(
+    "trading_system.backtest.l5_forward_validation", "run_f_l5_forward"
+)
+
+validate_forward_window = _deferred_research_call(
+    "trading_system.backtest.l5_forward_validation", "validate_forward_window"
+)
+
+build_f_lifecycle_daily_preflight = _deferred_research_call(
+    "trading_system.backtest.lifecycle_daily_preflight", "build_f_lifecycle_daily_preflight"
+)
+
+export_f_lifecycle_daily_preflight = _deferred_research_call(
+    "trading_system.backtest.lifecycle_daily_preflight", "export_f_lifecycle_daily_preflight"
+)
+
+build_f_intraday_entry_preflight = _deferred_research_call(
+    "trading_system.backtest.lifecycle_validation", "build_f_intraday_entry_preflight"
+)
+
+export_f_intraday_entry_preflight = _deferred_research_call(
+    "trading_system.backtest.lifecycle_validation", "export_f_intraday_entry_preflight"
+)
+
+export_f_lifecycle_research = _deferred_research_call(
+    "trading_system.backtest.lifecycle_validation", "export_f_lifecycle_research"
+)
+
+research_output_paths = _deferred_research_call(
+    "trading_system.backtest.lifecycle_validation", "research_output_paths"
+)
+
+run_f_intraday_entry = _deferred_research_call(
+    "trading_system.backtest.lifecycle_validation", "run_f_intraday_entry"
+)
+
+run_f_lifecycle_v2 = _deferred_research_call(
+    "trading_system.backtest.lifecycle_validation", "run_f_lifecycle_v2"
+)
+
+export_f_regime_capacity_research = _deferred_research_call(
+    "trading_system.backtest.regime_capacity_validation", "export_f_regime_capacity_research"
+)
+
+format_f_regime_capacity_research_summary = _deferred_research_call(
+    "trading_system.backtest.regime_capacity_validation",
+    "format_f_regime_capacity_research_summary",
+)
+
+run_f_regime_capacity_research = _deferred_research_call(
+    "trading_system.backtest.regime_capacity_validation", "run_f_regime_capacity_research"
+)
+
+export_champion_f_exact_loso = _deferred_research_call(
+    "trading_system.backtest.validation", "export_champion_f_exact_loso"
+)
+
+export_champion_f_validation = _deferred_research_call(
+    "trading_system.backtest.validation", "export_champion_f_validation"
+)
+
+export_extended_validation = _deferred_research_call(
+    "trading_system.backtest.validation", "export_extended_validation"
+)
+
+format_champion_f_validation_summary = _deferred_research_call(
+    "trading_system.backtest.validation", "format_champion_f_validation_summary"
+)
+
+format_extended_validation_summary = _deferred_research_call(
+    "trading_system.backtest.validation", "format_extended_validation_summary"
+)
+
+run_champion_f_exact_loso = _deferred_research_call(
+    "trading_system.backtest.validation", "run_champion_f_exact_loso"
+)
+
+run_champion_f_validation = _deferred_research_call(
+    "trading_system.backtest.validation", "run_champion_f_validation"
+)
+
+run_extended_validation = _deferred_research_call(
+    "trading_system.backtest.validation", "run_extended_validation"
+)
 
 
 def configure_logging(verbose: bool = False) -> None:
@@ -278,9 +388,17 @@ def _parser() -> argparse.ArgumentParser:
     screen = commands.add_parser("screen", help="Run the local point-in-time daily screen")
     screen.add_argument("--as-of", type=date.fromisoformat, default=date.today())
     screen.add_argument("--limit", type=int, default=None)
+    screen.add_argument(
+        "--champion", action="store_true", help="Use the frozen F/configured/C1 workflow"
+    )
     backtest = commands.add_parser("backtest", help="Run a point-in-time simulated portfolio")
     backtest.add_argument("--start", type=date.fromisoformat, required=True)
     backtest.add_argument("--end", type=date.fromisoformat, required=True)
+    backtest.add_argument(
+        "--champion",
+        action="store_true",
+        help="Use frozen F/configured/C1; cannot be combined with --variant or --strategy",
+    )
     backtest.add_argument(
         "--variant",
         choices=[variant.value for variant in StrategyVariant],
@@ -478,6 +596,9 @@ def _parser() -> argparse.ArgumentParser:
     export_ai.add_argument("--as-of", type=date.fromisoformat, default=date.today())
     export_ai.add_argument("--limit", type=_positive_int, default=20)
     export_ai.add_argument("--output", type=Path)
+    export_ai.add_argument(
+        "--champion", action="store_true", help="Export the frozen champion ranking"
+    )
     explain = commands.add_parser("explain", help="Explain one symbol's current screen result")
     explain.add_argument("symbol")
     explain.add_argument("--as-of", type=date.fromisoformat, default=date.today())
@@ -493,10 +614,26 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    parser = _parser()
+    args = parser.parse_args(arguments)
+    if (
+        getattr(args, "champion", False)
+        and args.command == "backtest"
+        and any(
+            arg.startswith("--")
+            and any(
+                option.startswith(arg.split("=", 1)[0]) for option in ("--variant", "--strategy")
+            )
+            for arg in arguments
+        )
+    ):
+        parser.error("--champion cannot be combined with --variant or --strategy")
     configure_logging(args.verbose)
     try:
         settings = load_settings(args.config)
+        if getattr(args, "champion", False):
+            validate_champion_config(settings.strategy)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
@@ -902,8 +1039,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "screen":
         _warn_data_freshness(database.dataset_states())
-        report = Screener(database, settings.strategy).run(args.as_of)
-        csv_path, json_path = export_report(report, settings.strategy.storage.reports_path)
+        report = (
+            screen_champion(database, settings.strategy, args.as_of)
+            if args.champion
+            else Screener(database, settings.strategy).run(args.as_of)
+        )
+        directory = settings.strategy.storage.reports_path
+        if args.champion:
+            directory = directory / "champion"
+            print(f"Frozen champion: {FROZEN_CHAMPION_F.production_label}")
+        csv_path, json_path = export_report(report, directory)
         print(format_screen_table(report, limit=args.limit))
         print(
             f"\nRequested as-of: {report.requested_as_of}"
@@ -915,11 +1060,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "backtest":
         try:
-            result = BacktestEngine(database, settings.strategy).run(
-                args.start,
-                args.end,
-                variant=StrategyVariant(args.variant),
-                preset=PositionManagementPreset(args.strategy),
+            result = (
+                run_champion_backtest(database, settings.strategy, args.start, args.end)
+                if args.champion
+                else BacktestEngine(database, settings.strategy).run(
+                    args.start,
+                    args.end,
+                    variant=StrategyVariant(args.variant),
+                    preset=PositionManagementPreset(args.strategy),
+                )
             )
             paths = export_backtest(
                 result,
@@ -1428,7 +1577,11 @@ def main(argv: list[str] | None = None) -> int:
         print("\n" + "\n".join(f"{name}: {path}" for name, path in paths.items()))
         return 0
     if args.command == "export-ai":
-        report = Screener(database, settings.strategy).run(args.as_of)
+        report = (
+            screen_champion(database, settings.strategy, args.as_of)
+            if args.champion
+            else Screener(database, settings.strategy).run(args.as_of)
+        )
         try:
             result = export_ai_candidates(report, limit=args.limit, output_path=args.output)
         except NoAICandidatesError as exc:

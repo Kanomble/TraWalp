@@ -6,33 +6,20 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from enum import StrEnum
 
+from trading_system.backtest.research_definitions import (
+    F_INTRADAY_COMMON_SUPPORT_VARIANTS as F_INTRADAY_COMMON_SUPPORT_VARIANTS,
+)
+from trading_system.backtest.research_definitions import (
+    F_INTRADAY_ENTRY_RESEARCH_FAMILY as F_INTRADAY_ENTRY_RESEARCH_FAMILY,
+)
+from trading_system.backtest.research_definitions import (
+    F_INTRADAY_ENTRY_VARIANTS as F_INTRADAY_ENTRY_VARIANTS,
+)
+from trading_system.backtest.research_definitions import (
+    EntryQualityPreset as EntryQualityPreset,
+)
 from trading_system.data.market_sessions import regular_session_bounds
 from trading_system.models.market_data import BarTimeframe, DailyBar
-
-F_INTRADAY_ENTRY_RESEARCH_FAMILY = "research-f-intraday-entry-quality"
-
-
-@dataclass(frozen=True, slots=True)
-class EntryQualityPreset:
-    research_id: str
-    label: str
-    opening_weakness_veto: bool = False
-    common_support: bool = False
-
-
-F_INTRADAY_ENTRY_VARIANTS = (
-    EntryQualityPreset("F-INTRADAY-ENTRY-I0", "F-entry-control"),
-    EntryQualityPreset("F-INTRADAY-ENTRY-I1", "F-entry-opening-weakness-veto", True),
-)
-
-# Validation runs; retain the discovery identities above for existing candidate manifests.
-F_INTRADAY_COMMON_SUPPORT_VARIANTS = (
-    EntryQualityPreset("F-INTRADAY-ENTRY-I0_FULL", "I0_FULL"),
-    EntryQualityPreset(
-        "F-INTRADAY-ENTRY-I0_COMMON_SUPPORT", "I0_COMMON_SUPPORT", common_support=True
-    ),
-    EntryQualityPreset("F-INTRADAY-ENTRY-I1_COMMON_SUPPORT", "I1_COMMON_SUPPORT", True, True),
-)
 
 
 class EntryQualityStatus(StrEnum):

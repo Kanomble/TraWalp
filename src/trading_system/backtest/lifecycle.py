@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import StrEnum
 from typing import Protocol
@@ -13,6 +12,15 @@ from trading_system.backtest.position_manager import (
     PositionDecision,
     PositionManager,
     PositionState,
+)
+from trading_system.backtest.research_definitions import (
+    F_LIFECYCLE_RESEARCH_FAMILY as F_LIFECYCLE_RESEARCH_FAMILY,
+)
+from trading_system.backtest.research_definitions import (
+    F_LIFECYCLE_VARIANTS as F_LIFECYCLE_VARIANTS,
+)
+from trading_system.backtest.research_definitions import (
+    LifecyclePreset as LifecyclePreset,
 )
 from trading_system.config import StrategyConfig
 from trading_system.data.market_sessions import trading_sessions_between
@@ -39,28 +47,6 @@ class LifecycleContextProvider(Protocol):
     def trend(self, symbol: str, session: date) -> TrendHealthState: ...
 
     def peer_state(self, symbol: str, session: date) -> PeerTrendState: ...
-
-
-@dataclass(frozen=True, slots=True)
-class LifecyclePreset:
-    research_id: str
-    label: str
-    max_hold_days: int | None = None
-    conditional_extension: bool = False
-    require_peers: bool = False
-    defer_profit_target: bool = False
-
-
-F_LIFECYCLE_RESEARCH_FAMILY = "research-f-lifecycle-v2"
-F_LIFECYCLE_VARIANTS = (
-    LifecyclePreset("F-LIFECYCLE-L0", "F-lifecycle-control"),
-    LifecyclePreset("F-LIFECYCLE-L1", "F-lifecycle-hold15", 15),
-    LifecyclePreset("F-LIFECYCLE-L2", "F-lifecycle-hold20", 20),
-    LifecyclePreset("F-LIFECYCLE-L3", "F-lifecycle-hold30", 30),
-    LifecyclePreset("F-LIFECYCLE-L4", "F-lifecycle-conditional-hold20", 20, True),
-    LifecyclePreset("F-LIFECYCLE-L5", "F-lifecycle-hold20-peer-confirmed", 20, True, True),
-    LifecyclePreset("F-LIFECYCLE-L6", "F-lifecycle-dynamic-profit-peer", 20, False, True, True),
-)
 
 
 def lifecycle_strategy_config(config: StrategyConfig, preset: LifecyclePreset) -> StrategyConfig:

@@ -33,7 +33,7 @@ from trading_system.backtest.report import (
     _trade_fields,
     export_comparison,
 )
-from trading_system.backtest.research_registry import FROZEN_CHAMPION_F
+from trading_system.backtest.research_registry import FROZEN_CHAMPION_F, validate_champion_config
 from trading_system.backtest.universe_provenance import audit_universe_provenance
 from trading_system.config import StrategyConfig
 from trading_system.data.database import Database
@@ -1254,6 +1254,7 @@ def run_champion_f_validation(
 ) -> ChampionFValidationBundle:
     """Run diagnostics for the unchanged F/configured composition."""
 
+    validate_champion_config(config)
     if forward_only:
         validate_champion_f_forward_period(requested_start, requested_end)
     if config.backtest.slippage_bps != 5 or config.backtest.commission_bps != 0:
@@ -1354,6 +1355,7 @@ def run_champion_f_exact_loso(
 ) -> ChampionFExactLosoBundle:
     """Rerun F/configured after excluding each symbol before ranking/allocation."""
 
+    validate_champion_config(config)
     if config.backtest.slippage_bps != 5 or config.backtest.commission_bps != 0:
         raise ValueError("exact champion-f LOSO requires the frozen 5 bps / 0 bps baseline")
     preparation = prepare_strategy_comparison(

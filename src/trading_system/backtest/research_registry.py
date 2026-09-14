@@ -4,17 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from enum import StrEnum
+from types import MappingProxyType
 
-from trading_system.backtest.entry_quality import (
+from trading_system.backtest.research_definitions import (
     F_INTRADAY_ENTRY_RESEARCH_FAMILY,
     F_INTRADAY_ENTRY_VARIANTS,
-)
-from trading_system.backtest.intraday_risk import (
     F_INTRADAY_RISK_RESEARCH_FAMILY,
     F_INTRADAY_RISK_VARIANTS,
+    F_LIFECYCLE_RESEARCH_FAMILY,
+    F_LIFECYCLE_VARIANTS,
+    RegimeCapacityRule,
 )
-from trading_system.backtest.lifecycle import F_LIFECYCLE_RESEARCH_FAMILY, F_LIFECYCLE_VARIANTS
-from trading_system.backtest.market_regime import RegimeCapacityRule
 from trading_system.backtest.screen_strategies import SCREEN_STRATEGY_DEFINITIONS
 from trading_system.models.backtest import (
     PositionManagementPreset,
@@ -39,7 +40,7 @@ class StrategyResearchMetadata:
 
 @dataclass(frozen=True, slots=True)
 class FrozenResearchChampion:
-    """Research identity and temporal boundary; never strategy configuration."""
+    """Canonical champion identity and frozen execution contract; never rewrites config."""
 
     validation_target: str
     forward_validation_target: str
@@ -47,6 +48,21 @@ class FrozenResearchChampion:
     variant: StrategyVariant
     preset: PositionManagementPreset
     development_cutoff: date
+    max_positions: int = 1
+    max_position_pct: float = 1.0
+    risk_per_trade: float = 0.01
+    atr_stop_multiple: float = 2.0
+    atr_period: int = 14
+    max_stop_loss_pct: float = 0.10
+    profit_target_pct: float = 0.12
+    hard_max_hold_sessions: int = 10
+    slippage_bps: float = 5.0
+    commission_bps: float = 0.0
+
+    @property
+    def production_label(self) -> str:
+        # Keep the existing F/configured report label unchanged.
+        return f"{self.label}/C{self.max_positions}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +148,96 @@ F_REGIME_CAPACITY_RESEARCH_VARIANTS: tuple[FRegimeCapacityResearchVariant, ...] 
         adaptive=True,
     ),
 )
+
+
+class ResearchStatus(StrEnum):
+    """Current decisions, separate from legacy serialized ResearchLifecycle roles."""
+
+    ACTIVE = "ACTIVE"
+    CHAMPION = "CHAMPION"
+    REJECTED = "REJECTED"
+    ARCHIVED = "ARCHIVED"
+
+
+# Do not import the forward runner merely to look up its identity/status.
+F_L5_FORWARD_RESEARCH_FAMILY = "research-f-lifecycle-l5-forward-v1"
+RESEARCH_FAMILY_STATUS = MappingProxyType(
+    {
+        FROZEN_CHAMPION_F.production_label: ResearchStatus.CHAMPION,
+        F_CAPACITY_RESEARCH_FAMILY: ResearchStatus.REJECTED,
+        F_REGIME_CAPACITY_RESEARCH_FAMILY: ResearchStatus.REJECTED,
+        F_LIFECYCLE_RESEARCH_FAMILY: ResearchStatus.REJECTED,
+        F_INTRADAY_ENTRY_RESEARCH_FAMILY: ResearchStatus.REJECTED,
+        F_INTRADAY_RISK_RESEARCH_FAMILY: ResearchStatus.REJECTED,
+        F_L5_FORWARD_RESEARCH_FAMILY: ResearchStatus.REJECTED,
+        # Historical controls/hypotheses remain callable; ARCHIVED does not infer
+        # an economic rejection of variants without a supplied research decision.
+        "intraday-control": ResearchStatus.ARCHIVED,
+        "intraday-isolation": ResearchStatus.ARCHIVED,
+        "intraday-next": ResearchStatus.ARCHIVED,
+        "intraday-hybrid": ResearchStatus.ARCHIVED,
+        "f-entry": ResearchStatus.ARCHIVED,
+        "d1-d5-archive": ResearchStatus.ARCHIVED,
+        "historical-position-management": ResearchStatus.ARCHIVED,
+        "configured-controls": ResearchStatus.ARCHIVED,
+        "screen-strategy-research": ResearchStatus.ARCHIVED,
+    }
+)
+
+
+def validate_champion_config(config) -> None:
+    """Reject drift at explicitly champion-labelled entry points; generic research is free.
+
+    This guard never normalizes or changes settings. Valid frozen runs keep identical
+    economics, and internal cost-stress reruns remain explicitly separate experiments.
+    """
+    from trading_system.backtest.presets import position_management_preset
+    from trading_system.models.market_data import BarTimeframe
+
+    champion = FROZEN_CHAMPION_F
+    expected = {
+        "portfolio": ("max_positions", "max_position_pct"),
+        "risk": ("risk_per_trade", "atr_stop_multiple", "max_stop_loss_pct"),
+        "backtest": ("profit_target_pct", "slippage_bps", "commission_bps"),
+    }
+    for section, names in expected.items():
+        for name in names:
+            if getattr(getattr(config, section), name) != getattr(champion, name):
+                raise ValueError(
+                    f"Frozen champion requires {section}.{name}={getattr(champion, name)}"
+                )
+    management = position_management_preset(
+        config.position_management,
+        champion.preset,
+        legacy_max_holding_days=config.backtest.max_holding_days,
+    )
+    if (
+        BarTimeframe(management.bar_timeframe) is not BarTimeframe.DAY_1
+        or not management.stop_loss.enabled
+        or management.stop_loss.percent is not None
+        or management.atr_trailing_stop.atr_period != champion.atr_period
+        or not management.take_profit.enabled
+        or management.take_profit.percent not in (None, champion.profit_target_pct)
+        or not management.max_hold.enabled
+        or management.max_hold.mode != "hard"
+        or management.max_hold.days != champion.hard_max_hold_sessions
+        or not management.reentry.enabled
+        or management.reentry.cooldown_days != 0
+        or any(
+            getattr(management, name).enabled
+            for name in (
+                "trailing_stop",
+                "atr_trailing_stop",
+                "signal_decay",
+                "partial_take_profit",
+                "portfolio_rotation",
+                "profit_lock",
+            )
+        )
+    ):
+        raise ValueError(
+            "Frozen champion requires configured Daily ATR/max stop, target and hard hold=10"
+        )
 
 
 def _metadata(
