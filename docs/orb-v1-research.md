@@ -5,14 +5,97 @@ research decision. The single definition is `research_definitions.py::ORB_V1`.
 The independent family registry does not add a Daily StrategyVariant or a management
 preset. F/configured/C1 remains the frozen champion. Results never promote ORB.
 
+**Operational hold: `ORB_STOCK_CLASSIFICATION_SOURCE_UNAVAILABLE`.** The offline
+security-scope audit below found no reliable individual-stock discriminator in the
+existing sources. Runtime implementation stopped at that prerequisite, as required;
+the current code does **not** enforce the intended stocks-only universe. The family
+registry status above is unchanged and does not authorize a historical run. Do not
+run ORB preflight, remediation or outcome validation until classification is resolved.
+
+## Security-scope correction and source audit
+
+The first historical preflight for **2024-01-02 through 2026-08-12** was discarded
+before remediation because ETFs/funds were found in the candidate universe,
+including SPY, QQQ, DIA, GLD, SLV, IBIT and ETHA. This is a methodology correction
+before ORB outcome validation, not post-result strategy tuning.
+**No ORB trade outcomes had been evaluated when the universe correction was made.**
+The intended scope is corrected here; its runtime enforcement remains blocked.
+
+The 2026-09-14 audit inspected repository code, the installed Alpaca SDK model,
+the actual local SQLite schema and cached SEC submissions for the examples below.
+It made no network/provider requests and read no historical bars or trade outcomes.
+
+| Existing source | Finding |
+| --- | --- |
+| `alpaca.trading.models.Asset` / `AssetClass` | The installed model exposes `asset_class`, trading flags and optional `attributes`, but no explicit stock/ETF/fund/ETN product type. `US_EQUITY` includes the contaminated instruments. The documented attributes concern PTP tax treatment, not an affirmative common-stock classification. |
+| `data/alpaca_client.py::list_tradable_us_equities()` and `data/sync.py::_sync_assets()` | Select active, tradable `US_EQUITY` assets and reconcile that snapshot without a security-type filter. |
+| `models/market_data.py::TradableAsset` and SQLite `assets` | Store symbol, name, exchange, tradable/fractionable/shortable flags (plus the table's update timestamp). No authoritative security-type field is being dropped by this adapter. |
+| `models/fundamentals.py::CompanyIdentity` and SQLite `companies` | CIK, symbol, name and issuer SIC metadata establish company identity/industry, not the listed instrument's product type. SEC identity does not imply individual stock. |
+| Cached SEC `submissions` | Retain `entityType`, SIC and filer `category`, but `entityType="operating"` also occurs for commodity and crypto trusts. See the local counterexamples below. |
+| Existing classification helpers | `classify_unmapped_asset()` uses names/symbols for sync diagnostics and is inadmissible for this filter. `is_financial_or_reit()` / `is_reit()` classify industry groups; no existing deterministic SEC pooled-vehicle security classifier was found. |
+
+Actual retained SEC evidence (not runtime rules or a symbol blacklist):
+
+| Symbols | Cached `entityType` | Cached SIC |
+| --- | --- | --- |
+| AAPL | `operating` | `3571` |
+| MSFT | `operating` | `7372` |
+| GLD, SLV, IBIT, ETHA | `operating` | `6221` (Commodity Contracts Brokers & Dealers) |
+| QQQ | `investment` | Empty |
+| SPY, DIA | `other` | Empty |
+
+Thus `entityType="operating"` is demonstrably insufficient. Industry exclusions or
+the absence of an investment flag cannot affirm that an instrument is common stock;
+issuer metadata also cannot distinguish an issuer's equity from its other products.
+No authoritative classification source was selected. Missing security evidence is
+`UNKNOWN`, never implicit stock eligibility. No speculative metadata column, schema
+migration, stock-universe helper or heuristic was added. Generic
+`Database.list_tradable_companies()` retains its existing semantics.
+
+These discarded artifacts **must NOT be reused or migrated**:
+
+- `orb_v1_preflight_2024-01-02_2026-08-12_v1_orb_candidates.json`
+- `orb_v1_preflight_2024-01-02_2026-08-12_v1_intraday_requirements.json`
+
+Their files are retained unchanged as research records. This audit-only change does
+not bump the runtime manifest version or mechanically invalidate their checksums.
+Before any new run, the implementation must enforce the rule below, increment the
+ORB compatibility version, and fingerprint authoritative security classification,
+current tradable membership, company/identity basis, Daily selection inputs and the
+stocks-only definition. Classification drift must produce
+`ORB_CANDIDATE_MANIFEST_MISMATCH`, with no rediscovery fallback. Classification must
+be loaded once per run before batched Daily selection, with stock/non-stock/unknown
+and identity-conflict diagnostics. These implementation and regression checks remain
+pending an authoritative source; the existing coverage/cache/spool paths are unchanged.
+
 ## Frozen hypothesis and execution
 
-Each requested XNYS session uses the current locally stored tradable **company**
-membership, excluding unresolved identity conflicts. For each symbol, require 20
+The intended universe is **`ORB_LIQUID_TOP100_STOCKS`**: current locally tradable
+**individual equities only**, with SEC/company identity and no unresolved identity
+conflict. Only explicit `COMMON_STOCK` / `OPERATING_EQUITY` classification is eligible.
+ETF, ETN, closed/open-end fund, commodity trust, crypto ETF/trust, other pooled
+vehicles and `UNKNOWN` are excluded. This rule is ORB-specific; it does not alter F
+screening, ranking, configured management, historical backtests or other families.
+The current runtime still uses `ORB_LIQUID_TOP100` and the generic company join;
+it must not be presented as implementing this corrected definition.
+
+The eventual summary and manifest must explicitly report:
+
+```text
+security_scope = INDIVIDUAL_STOCKS_ONLY
+etfs_allowed = false
+funds_allowed = false
+unknown_security_type_allowed = false
+```
+
+For each eligible stock and requested XNYS session, require 20
 consecutive valid completed Daily sessions ending at T-1, previous close at least
-`universe.min_price`, and mean(close × volume) at least
-`universe.min_avg_dollar_volume_20d`. Sort that dollar-volume mean descending, symbol
-ascending; select the first 100 (`ORB_LIQUID_TOP100`), or all survivors if fewer qualify.
+`universe.min_price` (existing configured value: $5), and mean(close × volume) at least
+`universe.min_avg_dollar_volume_20d` (existing configured value: $10M). Sort that
+dollar-volume mean descending, symbol ascending; select the first 100 stocks, or all
+survivors if fewer qualify. Security filtering occurs **before** ADV ranking, so
+excluding a raw rank-1 ETF can admit a stock formerly ranked 101. After the daily
+stocks-only Top-100 is frozen, provider absence never admits stock rank 101.
 No current snapshots, market cap, sector/SIC/REIT, F scores or technical gates enter
 this selection. Missing Daily windows are counted explicitly; no stale close or
 forward fill supplies a window. Preflight is not ready if a requested session has
@@ -58,39 +141,33 @@ using its partial outcomes would change the observation set. Coverage ratio is
 fully present selected symbol-sessions divided by all selected symbol-sessions.
 Coverage by symbol/month and provider absence counts remain visible in the summary.
 
-The following commands are for **manual execution after review**. Substitute dates
-and use fresh stems; existing report files are refused before discovery.
+The following is the exact fresh manual preflight command reserved for **after an
+authoritative classifier and the stocks-only implementation are completed**. It is
+not ready to run with the current code. Existing report files are refused before
+discovery; use this new stem rather than either discarded artifact.
 
 ```powershell
-python -m trading_system.cli preflight-orb-v1 `
-  --start YYYY-MM-DD `
-  --end YYYY-MM-DD `
-  --output-stem orb_v1_preflight
+.\.venv\Scripts\python.exe -m trading_system.cli preflight-orb-v1 `
+  --start 2024-01-02 `
+  --end 2026-08-12 `
+  --output-stem orb_v1_stocks_preflight_2024-01-02_2026-08-12_v2
 ```
 
-Only if the requirements report identifies gaps or failed provider checks:
-
-```powershell
-python -m trading_system.cli sync-intraday `
-  --start YYYY-MM-DD `
-  --end YYYY-MM-DD `
-  --timeframes 15m `
-  --candidates-report reports/orb_v1_preflight_intraday_requirements.json `
-  --candidate-gaps-only `
-  --output-stem orb_v1_intraday_sync
-```
+Do not run `sync-intraday` until that fresh stocks-only preflight has been reviewed.
 
 ORB manifests explicitly require zero intraday warmup and regular hours; the sync
 dispatch checks their feed/adjustment and 15m contract. Other candidate reports keep
 their existing warmup behavior. Explicit extended-hours remediation is refused for
-ORB. The configured feed is never changed. After qualification:
+ORB. The configured feed is never changed. The remaining workflow documentation
+describes existing mechanics, subject to the operational hold above. After review
+and qualification, validation must consume the newly generated stocks-only manifest:
 
 ```powershell
 python -m trading_system.cli validate-orb-v1 `
-  --start YYYY-MM-DD `
-  --end YYYY-MM-DD `
-  --candidate-manifest reports/orb_v1_preflight_orb_candidates.json `
-  --output-stem orb_v1_validation
+  --start 2024-01-02 `
+  --end 2026-08-12 `
+  --candidate-manifest reports/orb_v1_stocks_preflight_2024-01-02_2026-08-12_v2_orb_candidates.json `
+  --output-stem orb_v1_stocks_validation_2024-01-02_2026-08-12_v2
 ```
 
 The candidate manifest is the authoritative bridge from preflight to validation.
@@ -214,3 +291,13 @@ Focused synthetic verification covers frozen ORB economics, manifest compatibili
 and refusal paths, skipped discovery, native query plans/counts, bounded spool,
 grid reuse and remediation compatibility. No real historical ORB preflight, sync,
 validation, provider requests or network operations were run for this patch.
+
+For the 2026-09-14 audit-only correction, 16 existing offline regression cases passed:
+the frozen definition, T-1 Top-100/identity/no-absence-replacement behavior, incompatible
+manifest rejection, same-session Daily exclusion from fingerprints, and indexed
+native-only batched reads. These verify existing behavior, not stocks-only enforcement.
+New classification, classification-drift and stock-filter-before-ranking regressions
+remain blocked with the runtime implementation. No Python files changed, so Ruff and
+the Python formatter were not applicable. The documentation diff passed whitespace
+checks. The shared schema/models, F champion, ORB economics and all runtime paths
+remain unchanged.
