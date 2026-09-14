@@ -347,7 +347,15 @@ def test_daily_thresholds_exact_boundary_and_missing_warmup_not_forward_filled(t
     assert not prepared.candidates
     assert prepared.daily_qualification["sessions"][0]["unavailable_daily_windows"] == 2
     with pytest.raises(ValueError, match="ORB_DATA_UNAVAILABLE"):
-        run_orb_v1(database, config, SESSION, SESSION, tmp_path, stem="missing_daily")
+        run_orb_v1(
+            database,
+            config,
+            SESSION,
+            SESSION,
+            tmp_path,
+            stem="missing_daily",
+            rediscover_candidates=True,
+        )
 
 
 @pytest.mark.parametrize("status", ["LOCAL_MISSING_FETCHABLE", "PROVIDER_CHECK_FAILED"])
@@ -362,7 +370,9 @@ def test_local_missing_or_provider_failure_blocks_validation(tmp_path, config, s
     assert json.loads(paths["intraday_requirements"].read_text())["discovery_complete"]
     assert next(csv.DictReader(paths["coverage"].open()))["status"] == status
     with pytest.raises(ValueError, match="ORB_DATA_UNAVAILABLE"):
-        run_orb_v1(database, config, SESSION, SESSION, tmp_path, stem="blocked")
+        run_orb_v1(
+            database, config, SESSION, SESSION, tmp_path, stem="blocked", rediscover_candidates=True
+        )
     assert not (tmp_path / "blocked_summary.json").exists()
 
 
@@ -398,8 +408,8 @@ def test_complete_present_partial_absent_coverage_report_and_spool_only_simulati
         assert prepared.ready
         assert prepared.performance["native_bars_loaded"] == 27
         assert (
-            prepared.performance["coverage_sql_queries"] == 3
-        )  # observations + two batched SELECTs
+            prepared.performance["coverage_sql_queries"] == 2
+        )  # observations + one native SELECT, no unused Daily close lookup
         monkeypatch.setattr(sqlite3, "connect", forbidden)
         monkeypatch.setattr(Database, "bars_between", forbidden)
         events = simulate_prepared_orb(prepared, spool)
@@ -488,6 +498,7 @@ def test_cli_local_read_only_no_initialization_or_network(tmp_path, config, monk
     assert (
         cli.main(
             [command, "--start", str(SESSION), "--end", str(SESSION), "--output-stem", command]
+            + (["--rediscover-candidates"] if command == "validate-orb-v1" else [])
         )
         == 0
     )
@@ -569,7 +580,9 @@ def test_empty_liquid_universe_is_reported_without_portfolio_metrics(
 ):
     database = seed_market(tmp_path)
     setattr(config.universe, field, value)
-    summary, paths = run_orb_v1(database, config, SESSION, SESSION, tmp_path, stem="empty")
+    summary, paths = run_orb_v1(
+        database, config, SESSION, SESSION, tmp_path, stem="empty", rediscover_candidates=True
+    )
     assert summary["ready_for_local_validation"]
     assert summary["metrics"]["eligible_symbol_sessions"] == 0
     assert summary["metrics"]["mean_net_return"] is None
@@ -596,7 +609,9 @@ def test_all_event_counters_and_signed_concentration(tmp_path, config):
     rows = native("STOP")
     rows[3] = bar(3, symbol="STOP", opening=103, high=104, low=99, close=103)
     database.upsert_bars(rows)
-    summary, paths = run_orb_v1(database, config, SESSION, SESSION, tmp_path, stem="counters")
+    summary, paths = run_orb_v1(
+        database, config, SESSION, SESSION, tmp_path, stem="counters", rediscover_candidates=True
+    )
     metrics = summary["metrics"]
     expected = {
         "eligible_symbol_sessions": 6,

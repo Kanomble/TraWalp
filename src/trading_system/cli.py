@@ -544,12 +544,12 @@ def _parser() -> argparse.ArgumentParser:
         research.add_argument("--start", type=date.fromisoformat, required=True)
         research.add_argument("--end", type=date.fromisoformat, required=True)
         research.add_argument("--output-stem", required=True)
-        if name == "validate-f-intraday-entry":
+        if name in {"validate-f-intraday-entry", "validate-orb-v1"}:
             discovery = research.add_mutually_exclusive_group(required=True)
             discovery.add_argument(
                 "--candidate-manifest",
                 type=Path,
-                help="Reuse the compatible intraday_candidates.json from preflight",
+                help="Reuse the compatible candidate manifest from preflight",
             )
             discovery.add_argument(
                 "--rediscover-candidates",
@@ -653,6 +653,8 @@ def main(argv: list[str] | None = None) -> int:
                 settings.strategy.storage.reports_path,
                 stem=args.output_stem,
                 preflight=args.command == "preflight-orb-v1",
+                candidate_manifest=getattr(args, "candidate_manifest", None),
+                rediscover_candidates=getattr(args, "rediscover_candidates", False),
             )
             print(
                 f"{summary['research_family']}: {summary['status']}; "

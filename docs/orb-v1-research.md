@@ -38,8 +38,9 @@ attempt exists. Entry costs multiply reference by 1.0005; exit costs multiply it
 ## Local qualification and remediation
 
 Preflight discovers the Daily universe and exact full regular-session native 15m
-requirements, without evaluating ORB outcomes. It exports a summary, coverage CSV,
-and sync-compatible `_intraday_requirements.json`. Coverage uses existing durable
+requirements, without evaluating ORB outcomes or creating a native simulation spool.
+It exports a summary, coverage CSV, sync-compatible `_intraday_requirements.json`,
+and reusable `_orb_candidates.json`. Coverage uses existing durable
 provider observations, matched to symbol, date, timeframe, configured feed,
 adjustment, regular hours and the exact missing timestamps.
 
@@ -88,13 +89,47 @@ ORB. The configured feed is never changed. After qualification:
 python -m trading_system.cli validate-orb-v1 `
   --start YYYY-MM-DD `
   --end YYYY-MM-DD `
+  --candidate-manifest reports/orb_v1_preflight_orb_candidates.json `
   --output-stem orb_v1_validation
 ```
 
-Validation rebuilds the same deterministic universe from the then-current local
-Daily/member data and freshly qualifies coverage. Keep the preflight requirements,
-configuration and local dataset snapshot for reproduction; membership, Daily or
-identity changes between runs can change requirements. Validation never auto-syncs.
+The candidate manifest is the authoritative bridge from preflight to validation.
+It contains schema version, family/ID, exact dates, frozen strategy and universe
+definitions, configured price/ADV thresholds, feed/adjustment, regular-hours flag,
+candidate count, Daily qualification evidence, source fingerprint and integrity
+fingerprint. Candidate rows contain only session, symbol, previous session, rank,
+previous close and ADV20; **no intraday bars** are stored.
+
+SHA-256 fingerprints use deterministic canonical JSON. Discovery hashes its input
+rows as it processes them. Reuse verifies current tradable-company membership,
+issuer mappings, identity conflicts/reference, calendar sessions and all relevant
+Daily high/low/close/volume rows through T-1, including histories below the liquidity
+thresholds or rank 100. This is a bounded Daily content check, **not** a repeat of
+liquidity calculations/ranking. No call to `discover_orb_universe()` occurs.
+Candidate content and Daily evidence are also integrity-checked and structurally
+validated. These are reproducibility checksums, not signed attestations.
+
+Any incompatible, stale or corrupt manifest fails with
+`ORB_CANDIDATE_MANIFEST_MISMATCH`; there is no fallback rediscovery. Intraday bars
+and provider coverage observations are deliberately outside the fingerprint so
+remediation can add data. Coverage is always freshly qualified. Sync still consumes
+only `_intraday_requirements.json`; it does not require the candidate manifest.
+Preserve the manifest, configuration and local input snapshot for reproduction.
+Manifest reuse does not resolve survivorship bias or make a period clean OOS.
+
+Validation requires exactly one of `--candidate-manifest` or
+`--rediscover-candidates`. The explicit research-only fallback is:
+
+```powershell
+python -m trading_system.cli validate-orb-v1 `
+  --start YYYY-MM-DD `
+  --end YYYY-MM-DD `
+  --rediscover-candidates `
+  --output-stem orb_v1_rediscovered
+```
+
+Rediscovery rebuilds the current local Top-100 and is less reproducible across
+changing local datasets. It is never the default. Validation never auto-syncs.
 
 ## Reports and interpretation
 
@@ -104,6 +139,8 @@ Validation produces `<stem>_summary.json` and eight CSVs: `_orb_events`, `_trade
 outcome; `signal_status=BREAKOUT_CONFIRMED` preserves confirmation on consumed
 attempts. All requested decision, entry, stop, exit, cost and excursion fields are
 present, with empty fields for unavailable observations.
+Summary provenance includes `candidate_source` (`MANIFEST` or `REDISCOVERED`),
+`candidate_manifest_path`, `candidate_manifest_fingerprint`, and `candidate_count`.
 
 Returns are fractions, not percentages. Gross return is exit reference / entry
 reference − 1; net return is exit fill / entry fill − 1. R return is net per-share
@@ -127,13 +164,30 @@ right-exclusive except the final bucket includes 15:45. They never alter trading
 rules. Signed top-symbol PnL shares can exceed 100% when other symbols lose; shares
 are null when total net PnL is nonpositive. Counts per day are included in summary
 stability data. Empty groups retain valid headers and null unavailable statistics.
+The existing eligible-session breakout percentage is unchanged. The additional
+`percentage_of_observable_sessions_breaking_out` is 100 × breakout signals / fully
+observable symbol-sessions, or null with no observable sessions. Provider-absent
+sessions remain in the eligible denominator and are excluded from the observable
+denominator. This diagnostic never affects signals or trade selection.
 
 Daily reads use bounded symbol batches and rolling sums. Exact native requirements
-use the shared batched loader and a run-owned temporary `NativeEntrySessions` spool,
-with a bounded LRU cache. The simulation accepts no database/provider object and
-performs **zero SQLite queries**. Reports expose discovery, verification, preparation,
-simulation and diagnostics seconds, actual coverage SELECT count, native bars
-loaded and cache peak. Preflight records zero for stages it does not execute.
+use `Database.iter_native_session_batches`: one indexed regular-session native 15m
+SELECT per batch of at most 200 pairs, plus the provider-observation lookup for
+coverage. There is no unused previous-Daily-close SELECT. The existing entry
+coverage loader remains unchanged for other research families. A bounded pure
+calendar cache shares immutable expected timestamp tuples between coverage and
+native validation, keyed by session/timeframe/extended-hours; it stores no prices
+or research state. Duplicate/off-grid/OHLC checks remain intact.
+
+Validation uses the run-owned `NativeEntrySessions` spool with a bounded LRU cache.
+The simulation accepts no database/provider object and performs **zero SQLite
+queries**. Reports retain all existing performance fields and add
+`candidate_manifest_load_seconds` and `candidate_discovery_seconds`. Manifest runs
+record zero discovery time; their measured load time includes source fingerprint
+verification. Rediscovery records zero manifest-load time. Coverage query counts
+exclude that separate source verification. Native bars loaded, cache peak, and
+verification/preparation/simulation/diagnostics times remain reported; preflight
+records zero for stages it does not execute. No historical speedup is claimed.
 Shared backtest package exports are deferred so importing ORB/shared utilities
 does not initialize the F engine; the existing exported objects are unchanged.
 
@@ -156,7 +210,7 @@ does not initialize the F engine; the existing exported objects are unchanged.
   its missing-Daily-bar policy was not changed. Paper/shadow execution remains a
   separate future engineering milestone.
 
-Implementation verification: 158 focused synthetic/regression tests passed across
-`test_orb_v1.py`, `test_screen_strategies.py`, `test_champion_consolidation.py`, and
-`test_intraday_remediation.py`. No real historical ORB preflight, sync, validation,
-provider requests or network operations were run during implementation.
+Focused synthetic verification covers frozen ORB economics, manifest compatibility
+and refusal paths, skipped discovery, native query plans/counts, bounded spool,
+grid reuse and remediation compatibility. No real historical ORB preflight, sync,
+validation, provider requests or network operations were run for this patch.

@@ -3,8 +3,10 @@
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from enum import StrEnum
+from functools import lru_cache
 
 from trading_system.backtest.research_definitions import ORB_V1
+from trading_system.data.intraday_remediation import _expected_timestamps
 from trading_system.data.market_sessions import regular_session_bounds
 from trading_system.models.market_data import BarTimeframe, validate_market_bar
 
@@ -80,14 +82,15 @@ def event_for(candidate: OrbCandidate) -> dict:
     return row
 
 
+@lru_cache(maxsize=2048)
+def expected_native_timestamps(session, timeframe, extended_hours):
+    """Immutable, bounded pure-calendar cache; contains no research outcomes or prices."""
+    return _expected_timestamps(session, timeframe, extended_hours=extended_hours)
+
+
 def validate_native_session(symbol, session, bars):
     """Reject invalid/duplicate/off-grid bars; never repair or resample them."""
-    opening, closing = regular_session_bounds(session)
-    expected = set()
-    timestamp = opening
-    while timestamp < closing:
-        expected.add(timestamp)
-        timestamp += BarTimeframe.MINUTES_15.duration
+    expected = frozenset(expected_native_timestamps(session, BarTimeframe.MINUTES_15, False))
     seen = set()
     for bar in bars:
         validate_market_bar(bar)

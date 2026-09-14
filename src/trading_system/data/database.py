@@ -684,6 +684,45 @@ class Database:
             ).fetchall()
         return [_bar_from_row(row) for row in rows]
 
+    def iter_native_session_batches(self, requirements, *, batch_size=200):
+        """One native 15m SELECT per bounded batch of exact (symbol, session) pairs.
+
+        Regular hours, read-only, with requirements driving indexed timestamp ranges.
+        No Daily lookup; callers already own any previous-close evidence they need.
+        """
+        from trading_system.data.market_sessions import regular_session_bounds
+
+        if not 1 <= batch_size <= 200:
+            raise ValueError("native session batch_size must be between 1 and 200")
+        unique = sorted(set(requirements))
+        bounds = {session: regular_session_bounds(session) for session in {s for _, s in unique}}
+        with self.read_only() as connection:
+            connection.execute("BEGIN")
+            for offset in range(0, len(unique), batch_size):
+                batch = unique[offset : offset + batch_size]
+                placeholders = ",".join("(?,?,?,?)" for _ in batch)
+                parameters = []
+                native = {key: [] for key in batch}
+                for symbol, session in batch:
+                    opening, closing = bounds[session]
+                    parameters.extend((symbol, session.isoformat(), _iso(opening), _iso(closing)))
+                rows = connection.execute(
+                    f"""WITH requirements(symbol,session,start,end) AS (VALUES {placeholders})
+                    SELECT bars.symbol,bars.timeframe,bars.timestamp,bars.open,bars.high,
+                    bars.low,bars.close,bars.volume,bars.trade_count,bars.vwap,
+                    requirements.session AS required_session
+                    FROM requirements CROSS JOIN bars ON bars.symbol=requirements.symbol
+                    AND bars.timeframe='15m' AND bars.timestamp>=requirements.start
+                    AND bars.timestamp<requirements.end
+                    ORDER BY bars.timestamp,bars.symbol""",
+                    parameters,
+                ).fetchall()
+                for row in rows:
+                    native[row["symbol"], date.fromisoformat(row["required_session"])].append(
+                        _bar_from_row(row)
+                    )
+                yield native, len(rows)
+
     def iter_entry_coverage_batches(self, requirements, *, batch_size=200):
         """Two SELECTs per bounded batch of exact (symbol, signal, execution) requirements.
 

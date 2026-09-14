@@ -2,6 +2,7 @@
 
 import json
 from collections import Counter, defaultdict
+from contextlib import nullcontext
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +19,8 @@ from trading_system.backtest.orb_v1 import (
     simulate_orb_session,
 )
 from trading_system.backtest.orb_v1_data import orb_requirements_report, prepare_orb_data
+from trading_system.backtest.orb_v1_manifest import candidate_manifest as build_candidate_manifest
+from trading_system.backtest.orb_v1_manifest import orb_universe_definition
 from trading_system.backtest.progress import ProgressPhase
 from trading_system.backtest.report import _atomic_csv, _atomic_text
 
@@ -144,6 +147,9 @@ def build_diagnostics(prepared, events):
         percentage_of_eligible_sessions_breaking_out=100 * signal_count / len(events)
         if events
         else None,
+        percentage_of_observable_sessions_breaking_out=(
+            100 * signal_count / observable if observable else None
+        ),
         percentage_of_breakouts_stopped=(
             100 * counts[OrbStatus.EXECUTED_STOP] / signal_count if signal_count else None
         ),
@@ -264,20 +270,12 @@ def summary_definition(prepared, config, *, preflight):
         "requested_start": prepared.requested_start.isoformat(),
         "requested_end": prepared.requested_end.isoformat(),
         "preflight_only": preflight,
+        "candidate_source": prepared.candidate_source,
+        "candidate_manifest_path": prepared.candidate_manifest_path,
+        "candidate_manifest_fingerprint": prepared.candidate_manifest_fingerprint,
+        "candidate_count": len(prepared.candidates),
         "strategy_definition": asdict(ORB_V1),
-        "universe_definition": {
-            "name": ORB_V1.universe_name,
-            "membership": "CURRENT_UNIVERSE_ONLY",
-            "survivorship": "NOT_SURVIVORSHIP_CLEAN",
-            "top_n": ORB_V1.top_n,
-            "previous_close_min": config.universe.min_price,
-            "average_dollar_volume_20d_min": config.universe.min_avg_dollar_volume_20d,
-            "ranking": (
-                "20 completed Daily sessions through T-1: mean(close * volume) DESC, symbol ASC"
-            ),
-            "identity_conflicts": "EXCLUDED",
-            "intraday_absence_replacement": False,
-        },
+        "universe_definition": orb_universe_definition(config),
         "opening_range_definition": "One native 09:30–09:45 America/New_York bar: high and low",
         "signal_definition": ORB_V1.signal,
         "entry_definition": ORB_V1.entry,
@@ -356,7 +354,7 @@ def orb_output_paths(directory, stem, *, preflight):
     ):
         raise ValueError("ORB output stem must be a plain filename stem")
     names = (
-        ("summary", "coverage", "intraday_requirements")
+        ("summary", "coverage", "intraday_requirements", "orb_candidates")
         if preflight
         else (
             "summary",
@@ -370,9 +368,9 @@ def orb_output_paths(directory, stem, *, preflight):
             "coverage",
         )
     )
+    json_reports = {"summary", "intraday_requirements", "orb_candidates"}
     paths = {
-        name: Path(directory)
-        / f"{stem}_{name}.{'json' if name in {'summary', 'intraday_requirements'} else 'csv'}"
+        name: Path(directory) / f"{stem}_{name}.{'json' if name in json_reports else 'csv'}"
         for name in names
     }
     existing = next((path for path in paths.values() if path.exists()), None)
@@ -381,13 +379,40 @@ def orb_output_paths(directory, stem, *, preflight):
     return paths
 
 
-def run_orb_v1(database, config, start, end, directory, *, stem, preflight=False):
+def run_orb_v1(
+    database,
+    config,
+    start,
+    end,
+    directory,
+    *,
+    stem,
+    preflight=False,
+    candidate_manifest=None,
+    rediscover_candidates=False,
+):
     paths = orb_output_paths(directory, stem, preflight=preflight)
-    with NativeEntrySessions() as native:
+    if preflight:
+        if candidate_manifest is not None or rediscover_candidates:
+            raise ValueError("ORB preflight always discovers candidates")
+    elif (candidate_manifest is not None) == rediscover_candidates:
+        raise ValueError(
+            "ORB validation requires exactly one candidate manifest or explicit rediscovery"
+        )
+    with nullcontext() if preflight else NativeEntrySessions() as native:
         with ProgressPhase("orb_v1_progress", "local_data_qualification"):
             prepared = prepare_orb_data(
-                database, config, start, end, native_sessions=None if preflight else native
+                database,
+                config,
+                start,
+                end,
+                native_sessions=native,
+                candidate_manifest=candidate_manifest,
             )
+        if preflight:
+            manifest = build_candidate_manifest(prepared, config)
+            prepared.candidate_manifest_path = str(paths["orb_candidates"])
+            prepared.candidate_manifest_fingerprint = manifest["fingerprint"]
         summary = summary_definition(prepared, config, preflight=preflight)
         tables = {"coverage": prepared.coverage}
         if preflight:
@@ -427,6 +452,7 @@ def run_orb_v1(database, config, start, end, directory, *, stem, preflight=False
                 fields += ("rank", "share_of_total_net_pnl")
             _atomic_csv(paths[name], rows, list(fields))
         if preflight:
+            _atomic_text(paths["orb_candidates"], json.dumps(manifest, indent=2, allow_nan=False))
             _atomic_text(
                 paths["intraday_requirements"], json.dumps(requirements, indent=2, allow_nan=False)
             )

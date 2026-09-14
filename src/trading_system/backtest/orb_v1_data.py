@@ -8,17 +8,26 @@ from decimal import Decimal
 from itertools import groupby
 from time import perf_counter
 
-from trading_system.backtest.orb_v1 import ORB_V1, OrbCandidate, validate_native_session
+from trading_system.backtest.orb_v1 import (
+    ORB_V1,
+    OrbCandidate,
+    expected_native_timestamps,
+    validate_native_session,
+)
+from trading_system.backtest.orb_v1_manifest import (
+    iter_selection_batches,
+    load_candidate_manifest,
+    selection_basis,
+    selection_digest,
+)
 from trading_system.data.database import Database
 from trading_system.data.intraday_remediation import (
     PROVIDER_OBSERVATION_SOURCE,
     CandidateIntradayRequirement,
     IntradayRequirementStatus,
     _classify_missing,
-    _expected_timestamps,
     _observation_key,
 )
-from trading_system.data.market_sessions import daily_warmup_start, trading_sessions_between
 from trading_system.models.market_data import BarTimeframe
 
 
@@ -52,6 +61,10 @@ class OrbPreparation:
     daily_qualification: dict
     coverage: list[dict] = field(default_factory=list)
     performance: dict = field(default_factory=dict)
+    source_fingerprint: str | None = None
+    candidate_source: str = "REDISCOVERED"
+    candidate_manifest_path: str | None = None
+    candidate_manifest_fingerprint: str | None = None
 
     @property
     def ready(self):
@@ -68,24 +81,22 @@ def discover_orb_universe(database, config, start, end) -> OrbPreparation:
     each batch. Missing/duplicate/invalid Daily observations cannot supply a window.
     """
     started = perf_counter()
-    sessions = trading_sessions_between(start, end)
-    if not sessions:
-        raise ValueError("ORB_NO_REQUESTED_TRADING_SESSIONS")
-    # The installed calendar's sessions_window includes its anchor. Request the
-    # anchor plus 20 prior sessions; leave historical callers of the helper alone.
-    first = daily_warmup_start(sessions[0], ORB_V1.daily_lookback_sessions + 1)
-    history = trading_sessions_between(first, sessions[-1])
+    basis = selection_basis(database, start, end)
+    digest = selection_digest(basis)
+    sessions = [date.fromisoformat(s) for s in basis["sessions"]]
+    history = [date.fromisoformat(s) for s in basis["history_sessions"]]
+    first = history[0]
     session_set = set(sessions)
     next_session = dict(zip(history, history[1:], strict=False))
-    conflicts = database.unresolved_sec_identity_conflict_symbols()
-    symbols = sorted({company.symbol for company in database.list_tradable_companies()} - conflicts)
+    conflicts = basis["identity_conflicts"]
+    symbols = basis["symbols"]
     top = {session: [] for session in sessions}
     complete = dict.fromkeys(sessions, 0)
     survivors = dict.fromkeys(sessions, 0)
     invalid_daily_bars = 0
     minimum_price = Decimal(str(config.universe.min_price))
     minimum_volume = Decimal(str(config.universe.min_avg_dollar_volume_20d))
-    for batch in database.iter_bar_value_batches(symbols, first, history[-2], batch_size=100):
+    for batch in iter_selection_batches(database, basis, digest):
         for symbol, rows in groupby(batch, key=lambda row: row[0]):
             daily = {}
             for _, timestamp, high, low, close, volume in rows:
@@ -154,24 +165,54 @@ def discover_orb_universe(database, config, start, end) -> OrbPreparation:
             for session in sessions
         ],
     }
+    seconds = perf_counter() - started
     return OrbPreparation(
         start,
         end,
         sessions,
         candidates,
         daily_qualification,
-        performance={"daily_universe_discovery_seconds": perf_counter() - started},
+        performance={
+            "daily_universe_discovery_seconds": seconds,
+            "candidate_discovery_seconds": seconds,
+            "candidate_manifest_load_seconds": 0.0,
+        },
+        source_fingerprint=digest.hexdigest(),
     )
 
 
-def prepare_orb_data(database, config, start, end, *, native_sessions=None) -> OrbPreparation:
+def prepare_orb_data(
+    database, config, start, end, *, native_sessions=None, candidate_manifest=None
+) -> OrbPreparation:
     """Qualify exact requirements once; optionally spool only fully observable sessions.
 
     Preflight omits the spool and never evaluates breakout prices. Validation uses
     the same qualification, writing native batches to an owned bounded-memory spool.
     """
     database = OrbReadOnlyDatabase(database.path)
-    prepared = discover_orb_universe(database, config, start, end)
+    if candidate_manifest is None:
+        prepared = discover_orb_universe(database, config, start, end)
+    else:
+        started = perf_counter()
+        payload, candidates, sessions = load_candidate_manifest(
+            candidate_manifest, database, config, start, end
+        )
+        prepared = OrbPreparation(
+            start,
+            end,
+            sessions,
+            candidates,
+            payload["daily_qualification"],
+            performance={
+                "daily_universe_discovery_seconds": 0.0,
+                "candidate_discovery_seconds": 0.0,
+                "candidate_manifest_load_seconds": perf_counter() - started,
+            },
+            source_fingerprint=payload["source_fingerprint"],
+            candidate_source="MANIFEST",
+            candidate_manifest_path=str(candidate_manifest),
+            candidate_manifest_fingerprint=payload["fingerprint"],
+        )
     before_queries = database.sql_queries
     started = perf_counter()
     observations = database.sync_values(PROVIDER_OBSERVATION_SOURCE)
@@ -179,14 +220,18 @@ def prepare_orb_data(database, config, start, end, *, native_sessions=None) -> O
     preparation_seconds = 0.0
     loaded = 0
     candidates_by_key = {(row.symbol, row.session): row for row in prepared.candidates}
-    batches = iter(database.iter_entry_coverage_batches(row.key for row in prepared.candidates))
+    batches = iter(
+        database.iter_native_session_batches(
+            (row.symbol, row.session) for row in prepared.candidates
+        )
+    )
     while True:
         started = perf_counter()
         batch = next(batches, None)
         preparation_seconds += perf_counter() - started
         if batch is None:
             break
-        native, _, native_count, _ = batch
+        native, native_count = batch
         loaded += native_count
         for key, bars in native.items():
             started = perf_counter()
@@ -197,9 +242,7 @@ def prepare_orb_data(database, config, start, end, *, native_sessions=None) -> O
                 BarTimeframe.MINUTES_15,
                 (ORB_V1.research_id,),
             )
-            expected = _expected_timestamps(
-                candidate.session, BarTimeframe.MINUTES_15, extended_hours=False
-            )
+            expected = expected_native_timestamps(candidate.session, BarTimeframe.MINUTES_15, False)
             present = {bar.timestamp for bar in bars}
             missing = tuple(timestamp for timestamp in expected if timestamp not in present)
             status, reason = _classify_missing(
