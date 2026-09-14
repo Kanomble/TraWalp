@@ -310,9 +310,16 @@ def _parser() -> argparse.ArgumentParser:
     )
     daily_history.add_argument("--start", type=date.fromisoformat, required=True)
     daily_history.add_argument("--end", type=date.fromisoformat, required=True)
-    daily_history.add_argument(
+    daily_scope = daily_history.add_mutually_exclusive_group()
+    daily_scope.add_argument(
         "--symbols",
         help="Optional comma-separated symbols; omit for the current tradable company universe",
+    )
+    daily_scope.add_argument(
+        "--universe",
+        choices=("companies", "us-equity"),
+        default="companies",
+        help="Daily-history scope: companies (default) or local tradable Alpaca US_EQUITY assets",
     )
     daily_history.add_argument(
         "--full-window",
@@ -1017,6 +1024,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.end,
                 incremental=not args.full_window,
                 include_benchmark=True,
+                universe=args.universe,
             )
             result["required_daily_warmup_sessions"] = required_daily_warmup_sessions(
                 settings.strategy

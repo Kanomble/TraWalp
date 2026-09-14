@@ -29,9 +29,30 @@ run. `--full-window` deliberately requests the complete interval again. IPOs and
 can validly start after the requested first session; they are reported as
 `symbols_without_older_data`, not as sync errors.
 
-The current tradable, SEC-identified company universe is selected automatically when `--symbols`
-is omitted. SPY is always added independently for benchmark coverage. Explicit comma-separated
-symbols are useful for a smoke test.
+The default scope remains the current tradable, SEC-identified company universe.
+`--universe companies` explicitly selects the same behavior. Both this scope and the existing
+comma-separated `--symbols` path retain the SEC identity guards and independently added SPY
+benchmark. `--symbols` and `--universe` are mutually exclusive CLI options.
+
+`--universe us-equity` instead loads local tradable assets once, selects only stored
+`tradable=true` and `asset_class="US_EQUITY"`, then supplies sorted unique symbols to the same
+batched Daily-history pipeline. No SEC/company identity or conflict lookup applies to this scope.
+ETFs/ETPs are included when their stored class qualifies. CRYPTO, UNKNOWN, US_OPTION and every
+other class are excluded; names and ticker formatting play no role. No additional benchmark is
+injected: SPY participates only if it meets the same asset rule.
+
+The JSON result and persisted Daily sync state include `universe_scope`. In US-equity mode it
+reports `universe=US_EQUITY`, `tradable_assets_total`, `selected_us_equity_symbols`,
+`unknown_asset_class_excluded` and `other_asset_classes_excluded`; the last count includes crypto
+and options. The scope is also logged before requests begin. An empty selection fails without
+falling back to companies or requesting the benchmark. Missing asset metadata is not inferred;
+refresh it only through an explicit `python -m trading_system.cli sync-assets` when needed.
+
+The new selector changes only membership supplied to the existing sync: interval verification,
+incremental edge/correction requests, `--full-window`, feed/adjustment, Daily timeframe,
+validation, batching, upserts and errors retain their existing behavior. It has no ORB dependency.
+For the broader Daily-history request and subsequent ORB V3 preflight, follow the
+[manual ORB workflow](orb-v1-research.md#local-qualification-and-remediation).
 
 ```powershell
 # Small real-provider smoke
@@ -80,7 +101,8 @@ fewer than 250, and no prior history. A young listing is not expected to pass th
 
 ## SPY benchmark history
 
-The Daily backfill always requests SPY even when it is not a normal company-universe member.
+The default/company and explicit-symbol Daily backfills request SPY even when it is not a normal
+company-universe member. The US-equity scope instead follows its local asset eligibility rule.
 `data-status` shows its first and last Daily dates separately. Backtests continue to slice SPY to
 their actual start and end before calculating close-to-close return, CAGR, and drawdown; older SPY
 warmup bars therefore cannot alter the requested-period benchmark return.

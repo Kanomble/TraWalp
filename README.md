@@ -51,6 +51,14 @@ candidate-gap remediation can acquire native data. See the
 [ORB V1 research guide](docs/orb-v1-research.md) for the frozen definition, coverage
 rules, report units, feed limitations, and PowerShell commands.
 
+Daily-history sync keeps the current company universe by default (`--universe companies`).
+Use `sync-daily-history --universe us-equity` explicitly for all locally tradable Alpaca
+US_EQUITY assets, including ETFs/ETPs without SEC company identity. `--symbols` remains a
+separate, mutually exclusive scope. Before ORB intraday remediation, follow the
+[Daily sync and fresh V3 preflight workflow](docs/orb-v1-research.md#local-qualification-and-remediation):
+request Daily history from 2023-12-01 through 2026-08-12, then regenerate and review V3.
+Later listings can legitimately retain missing historical windows.
+
 Ein modularer Research-Unterbau für die Strategie **High Quality + Attractive Valuation +
 Price Dislocation + Recovery Signal**. Die erste Zielversion ist ausschließlich für Screening,
 Backtests, Dry Runs und Alpaca Paper Trading vorgesehen. Live-Trading ist weder implementiert

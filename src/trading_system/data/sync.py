@@ -1122,11 +1122,20 @@ class DataSynchronizer:
         *,
         incremental: bool = True,
         include_benchmark: bool = True,
+        universe: str = "companies",
     ) -> dict[str, Any]:
-        """Backfill an explicit inclusive Daily range with bidirectional edge gaps."""
+        """Backfill Daily history; the default retains company/SEC and benchmark rules.
+
+        US-equity scope uses only current local asset membership, without SEC guards
+        or an additional benchmark. It never refreshes asset metadata automatically.
+        """
 
         if start > end:
             raise ValueError("Daily history start must not be after end")
+        if universe not in {"companies", "us-equity"}:
+            raise ValueError("Daily history universe must be companies or us-equity")
+        if universe == "us-equity" and requested_symbols is not None:
+            raise ValueError("Daily history explicit symbols and us-equity universe are exclusive")
         return self._run_stage(
             "daily_history",
             lambda: self._sync_daily_history(
@@ -1135,6 +1144,7 @@ class DataSynchronizer:
                 end,
                 incremental=incremental,
                 include_benchmark=include_benchmark,
+                universe=universe,
             ),
         )
 
@@ -1146,18 +1156,41 @@ class DataSynchronizer:
         *,
         incremental: bool,
         include_benchmark: bool,
+        universe: str,
     ) -> dict[str, Any]:
         if self.alpaca is None:
             raise ValueError("Alpaca client is required for Daily-history synchronization")
-        selected = (
-            {company.symbol for company in self.database.list_tradable_companies()}
-            if requested_symbols is None
-            else {symbol.strip().upper() for symbol in requested_symbols if symbol.strip()}
-        )
-        if include_benchmark:
-            selected.add("SPY")
-        identity_conflicts = self.database.unresolved_sec_identity_conflict_symbols()
-        skipped = sorted((selected - {"SPY"}) & identity_conflicts)
+        scope: dict[str, Any] = {
+            "universe": "SYMBOLS" if requested_symbols is not None else "COMPANIES"
+        }
+        if universe == "us-equity":
+            assets = [asset for asset in self.database.list_tradable_assets() if asset.tradable]
+            selected = {
+                asset.symbol.strip().upper()
+                for asset in assets
+                if asset.asset_class == "US_EQUITY" and asset.symbol.strip()
+            }
+            scope = {
+                "universe": "US_EQUITY",
+                "tradable_assets_total": len(assets),
+                "selected_us_equity_symbols": len(selected),
+                "unknown_asset_class_excluded": sum(a.asset_class == "UNKNOWN" for a in assets),
+                "other_asset_classes_excluded": sum(
+                    a.asset_class not in {"US_EQUITY", "UNKNOWN"} for a in assets
+                ),
+            }
+            LOGGER.info("DAILY HISTORY scope=%s", scope)
+            skipped = []
+        else:
+            selected = (
+                {company.symbol for company in self.database.list_tradable_companies()}
+                if requested_symbols is None
+                else {symbol.strip().upper() for symbol in requested_symbols if symbol.strip()}
+            )
+            if include_benchmark:
+                selected.add("SPY")
+            identity_conflicts = self.database.unresolved_sec_identity_conflict_symbols()
+            skipped = sorted((selected - {"SPY"}) & identity_conflicts)
         symbols = sorted(selected - set(skipped))
         if not symbols:
             raise ValueError("Daily-history sync symbol selection is empty")
@@ -1215,6 +1248,7 @@ class DataSynchronizer:
         last_received: datetime | None = None
         counts: dict[str, Any] = {
             "timeframe": BarTimeframe.DAY_1.value,
+            "universe_scope": scope,
             "requested_start": start.isoformat(),
             "requested_end": end.isoformat(),
             "incremental": incremental,

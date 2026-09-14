@@ -144,19 +144,51 @@ using its partial outcomes would change the observation set. Coverage ratio is
 fully present selected symbol-sessions divided by all selected symbol-sessions.
 Coverage by symbol/month and provider absence counts remain visible in the summary.
 
-The fresh manual preflight command is below. Legacy local rows need their class
-populated by the normal explicit asset sync before they can contribute candidates;
-this patch does not refresh the real database. Existing report files are refused
-before discovery. Use this new stem rather than either discarded artifact.
+The V2 preflight is retained as diagnostic evidence: it considered 13,419 current
+US_EQUITY assets and selected 65,500 instrument-sessions, while only roughly
+4,800-5,900 assets per historical session had complete Daily windows. The previous
+Daily store primarily served the narrower company universe. Before intraday
+remediation, request Daily history for the complete current asset scope.
+
+The next **manual** step is the existing incremental Daily-history pipeline with
+its explicit local US-equity selector. December 1 supplies the 20-session Daily
+warmup before the requested January 2, 2024 research start:
+
+```powershell
+.\.venv\Scripts\python.exe -m trading_system.cli sync-daily-history `
+  --start 2023-12-01 `
+  --end 2026-08-12 `
+  --universe us-equity
+```
+
+The default `sync-daily-history` scope remains companies; `--universe companies`
+is equivalent, and `--symbols` remains available separately. The new scope reads
+local tradable US_EQUITY metadata once without SEC membership or identity guards.
+It never runs `sync-assets` automatically. Legacy UNKNOWN rows need an explicit
+normal asset sync before they can be selected.
+
+Do not expect all current instruments to have history back to December 2023.
+Later IPOs/listings and provider history limits legitimately leave missing windows.
+The goal is a provider-history request (or an existing successful verification)
+for every eligible symbol over the interval, not `unavailable_daily_windows = 0`.
+Review request errors and completion; a failed request does not establish absence.
+The first unverified interval is requested in full by the existing incremental
+semantics, so `--full-window` is not needed for this workflow.
+
+After Daily sync completes, generate a fresh preflight with the new V3 stem:
 
 ```powershell
 .\.venv\Scripts\python.exe -m trading_system.cli preflight-orb-v1 `
   --start 2024-01-02 `
   --end 2026-08-12 `
-  --output-stem orb_v1_us_equity_preflight_2024-01-02_2026-08-12_v2
+  --output-stem orb_v1_us_equity_preflight_2024-01-02_2026-08-12_v3
 ```
 
-Do not run `sync-intraday` until that fresh US_EQUITY preflight has been reviewed.
+Do not run `sync-intraday` until this V3 preflight has been reviewed. The V2 artifacts
+remain diagnostic evidence but must not drive intraday remediation after Daily
+coverage is expanded. Do not migrate them. V3 is a fresh artifact stem, not a change
+to candidate manifest version 2, ORB selection rules or trading economics. These
+manual commands were not run as part of this enhancement.
 
 ORB manifests explicitly require zero intraday warmup and regular hours; the sync
 dispatch checks their feed/adjustment and 15m contract. Other candidate reports keep
@@ -168,8 +200,8 @@ and its native coverage qualified, validation consumes the new US_EQUITY manifes
 python -m trading_system.cli validate-orb-v1 `
   --start 2024-01-02 `
   --end 2026-08-12 `
-  --candidate-manifest reports/orb_v1_us_equity_preflight_2024-01-02_2026-08-12_v2_orb_candidates.json `
-  --output-stem orb_v1_us_equity_validation_2024-01-02_2026-08-12_v2
+  --candidate-manifest reports/orb_v1_us_equity_preflight_2024-01-02_2026-08-12_v3_orb_candidates.json `
+  --output-stem orb_v1_us_equity_validation_2024-01-02_2026-08-12_v3
 ```
 
 The candidate manifest is the authoritative bridge from preflight to validation.

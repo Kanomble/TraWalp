@@ -202,7 +202,9 @@ class RoutedSynchronizer:
         self.called = "bars"
         return {"records_updated": 1}
 
-    def sync_daily_history(self, symbols, start, end, *, incremental, include_benchmark):
+    def sync_daily_history(
+        self, symbols, start, end, *, incremental, include_benchmark, universe="companies"
+    ):
         self.called = "daily_history"
         return {
             "symbols": symbols,
