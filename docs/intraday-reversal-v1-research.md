@@ -1,8 +1,46 @@
 # Intraday Reversal V1: frozen independent research hypothesis
 
-`research-intraday-reversal-v1` / `INTRADAY-REVERSAL-V1-15M-LONG` is **ACTIVE** research.
+`research-intraday-reversal-v1` / `INTRADAY-REVERSAL-V1-15M-LONG` is **REJECTED** research.
 This hypothesis was frozen before any Intraday Reversal V1 trade outcomes were evaluated.
 Synthetic specification tests are not historical outcome evaluation.
+
+## Final research decision
+
+Intraday Reversal V1 does not demonstrate a robust tradeable cross-sectional
+mean-reversion edge. The aggregate gross edge is approximately zero and does not
+survive the frozen transaction-cost assumptions.
+
+The completed validation for **2024-01-02 through 2026-08-12**, supplied with this
+research decision, used **65,500 candidate symbol-sessions**:
+
+| Measure | Result |
+| --- | --- |
+| Signals | 6,096 |
+| Executed trades | 5,790 |
+| Gross expectancy | Approximately +0.00515% per trade |
+| Gross profit factor | Approximately 1.0067 |
+| Net expectancy | Approximately -0.09480% per trade |
+| Net profit factor | Approximately 0.8836 |
+| Win rate | Approximately 48.12% |
+| Modeled cost drag | Approximately 0.09996% per trade |
+
+Signal disposition: `EXECUTED_SESSION_CLOSE=5,790`,
+`PROVIDER_CONFIRMED_ABSENT=297`, `NO_ENTRY_NO_NEXT_BAR=9`.
+`SESSION_UNOBSERVABLE_CROSS_SECTION` affected 100 candidate rows in one session.
+All calendar-year results and all three chronological thirds were net negative.
+Stronger first-hour loser extremity did not produce a clean monotonic reversal effect.
+
+No parameters were changed after outcome inspection. No profitable symbol, rank or
+month slice is promoted into Reversal V1.1. There is no bottom-5%, 5%-10%, selected-symbol,
+May-2026 or lower-slippage variant. The implementation and completed candidate manifest,
+coverage, events, sessions, trades, monthly/yearly tables, chronological thirds,
+signal-rank buckets, symbol concentration and summary remain unchanged research evidence.
+
+Explicit reproduction remains available, without recommendation or champion promotion.
+Pre-rejection manifests with `status=ACTIVE` remain compatible when all other contract
+and source inputs match; no historical artifact is rewritten or migrated. The definition
+and workflow below record the original hypothesis and support reproduction, not a new
+recommendation to continue this rejected family. No historical job was rerun for this decision.
 
 **Research question:** Among the day's most liquid US-listed instruments, extreme
 relative losers during the first trading hour may exhibit short-term mean reversion
@@ -181,9 +219,9 @@ sector, volatility, news or fundamental filters are added. There are no alternat
 timeframes, observation windows, quantiles, management variants or short-winner leg.
 Evaluate V1 unchanged before proposing a separate future hypothesis.
 
-## Next manual step
+## Historical reproduction workflow
 
-Only the new local preflight is the next step. Use a fresh stem:
+For explicitly requested reproduction of rejected V1, use a fresh preflight stem:
 
 ```powershell
 .\.venv\Scripts\python.exe -m trading_system.cli preflight-intraday-reversal-v1 `

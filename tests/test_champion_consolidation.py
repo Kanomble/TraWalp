@@ -426,6 +426,7 @@ def test_registry_preserves_exact_rejected_family_ids_and_legacy_roles():
     }
     assert rejected == {
         "research-orb-v1",
+        "research-intraday-reversal-v1",
         "research-f-capacity",
         "research-f-regime-capacity",
         "research-f-lifecycle-v2",

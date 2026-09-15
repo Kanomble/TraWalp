@@ -168,7 +168,7 @@ def test_definition_is_one_immutable_independent_hypothesis():
     assert asdict(REVERSAL_V1) == {
         "research_family": "research-intraday-reversal-v1",
         "research_id": "INTRADAY-REVERSAL-V1-15M-LONG",
-        "status": "ACTIVE",
+        "status": "REJECTED",
         "universe_name": "REVERSAL_LIQUID_TOP100_US_EQUITY",
         "top_n": 100,
         "daily_lookback_sessions": 20,
@@ -196,7 +196,7 @@ def test_definition_is_one_immutable_independent_hypothesis():
     with pytest.raises(FrozenInstanceError):
         REVERSAL_V1.minimum_cross_section = 79
     assert INDEPENDENT_RESEARCH_FAMILIES[REVERSAL_V1.research_family] == (REVERSAL_V1,)
-    assert RESEARCH_FAMILY_STATUS[REVERSAL_V1.research_family] == "ACTIVE"
+    assert RESEARCH_FAMILY_STATUS[REVERSAL_V1.research_family] == "REJECTED"
     assert RESEARCH_FAMILY_STATUS[ORB_V1.research_family] == ORB_V1.status == "REJECTED"
     assert ORB_V1.exits == ("STOP", "SESSION_CLOSE") and ORB_V1.slippage_bps == 5
 

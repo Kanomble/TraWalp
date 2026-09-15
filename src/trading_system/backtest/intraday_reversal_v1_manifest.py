@@ -45,4 +45,5 @@ def load_candidate_manifest(path, database, config, start, end):
         REVERSAL_V1,
         manifest_contract(config, start, end),
         mismatch=MISMATCH,
+        allowed_statuses=("ACTIVE", "REJECTED"),
     )

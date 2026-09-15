@@ -167,7 +167,7 @@ def test_manifest_contract_drift_even_with_rehashed_payload(
         ("minimum_cross_section", 79),
         ("first_hour_bars", 3),
         ("exits", ["STOP", "SESSION_CLOSE"]),
-        ("status", "REJECTED"),
+        ("status", "CHAMPION"),
     ],
 )
 def test_strategy_contract_has_no_hidden_variants(tmp_path, config, field, value):
@@ -227,7 +227,7 @@ def test_cli_uses_only_read_only_database_and_no_provider(tmp_path, config, monk
     assert cli.main(arguments) == 0
     assert connections
     summary = json.loads((tmp_path / "cli_summary.json").read_text())
-    assert summary["status"] == "ACTIVE"
+    assert summary["status"] == "REJECTED"
     assert summary["automatic_champion_selection"] is False
     assert summary["universe_definition"]["execution_eligibility_germany"] == "NOT_EVALUATED"
 
@@ -261,6 +261,22 @@ def test_existing_reports_are_never_overwritten(tmp_path, config):
     with pytest.raises(FileExistsError):
         preflight(db, config, tmp_path)
     assert before == {name: path.read_bytes() for name, path in paths.items()}
+
+
+def test_pre_rejection_manifest_remains_reproducible(tmp_path, config, monkeypatch):
+    db = seed_market(tmp_path)
+    _, paths = preflight(db, config, tmp_path)
+    path = paths["reversal_candidates"]
+    payload = json.loads(path.read_text())
+    payload["strategy_definition"]["status"] = "ACTIVE"
+    payload["fingerprint"] = fingerprint(payload)
+    path.write_text(json.dumps(payload))
+    before = path.read_bytes()
+    monkeypatch.setattr(data, "discover_reversal_universe", forbidden)
+    summary, _ = validate(db, config, tmp_path, path)
+    assert summary["status"] == "REJECTED"
+    assert summary["metrics"]["executed_trades"] == 10
+    assert path.read_bytes() == before
 
 
 def test_preflight_first_hour_coverage_is_independent_of_later_fetchable_gaps(tmp_path, config):

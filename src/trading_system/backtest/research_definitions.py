@@ -110,7 +110,7 @@ ORB_V1 = OrbDefinition()
 class IntradayReversalDefinition:
     research_family: str = "research-intraday-reversal-v1"
     research_id: str = "INTRADAY-REVERSAL-V1-15M-LONG"
-    status: str = "ACTIVE"
+    status: str = "REJECTED"
     universe_name: str = "REVERSAL_LIQUID_TOP100_US_EQUITY"
     top_n: int = 100
     daily_lookback_sessions: int = 20
