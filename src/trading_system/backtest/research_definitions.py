@@ -143,7 +143,7 @@ INTRADAY_REVERSAL_V1 = IntradayReversalDefinition()
 class MarketIntradayMomentumDefinition:
     research_family: str = "research-market-intraday-momentum-v1"
     research_id: str = "MARKET-INTRADAY-MOMENTUM-V1-15M-SPY"
-    status: str = "ACTIVE"
+    status: str = "REJECTED"
     symbol: str = "SPY"
     asset_class: str = "US_EQUITY"
     tradable_required: bool = True

@@ -25,7 +25,7 @@ retains C/configured and explicit research selections. `--champion` cannot be co
 
 Rejected research: static capacity > 1, regime-aware capacity, lifecycle extensions including
 L5 (rejected after forward holdout), I1 opening-weakness veto, and R1 intraday risk containment.
-Those six families, ORB V1 and Intraday Reversal V1 are `REJECTED`;
+Those six families, ORB V1, Intraday Reversal V1 and Market Intraday Momentum V1 are `REJECTED`;
 older controls/hypotheses are `ARCHIVED`.
 Historical research commands and exact strategy IDs remain available for reproducibility.
 Legacy serialized `ACTIVE_RESEARCH` / `CHAMPION_CONTROL` roles describe historical registry
@@ -81,7 +81,7 @@ for the exact hypothesis, coverage and manifest contracts, diagnostics and repro
 ## Independent market intraday momentum V1
 
 `research-market-intraday-momentum-v1` / **MARKET-INTRADAY-MOMENTUM-V1-15M-SPY** is
-**ACTIVE** research, frozen before outcome evaluation. SPY's first 30-minute sign determines
+**REJECTED** research, with its original pre-outcome definition preserved. SPY's first 30-minute sign determines
 LONG or SHORT exposure only during the final 30 minutes of the official XNYS session;
 exactly zero means no signal. Native 15m, 5 bps adverse slippage per fill, zero commission
 and borrow fees, no stop/target, and no proxy substitution are frozen. Only the first two
@@ -89,8 +89,8 @@ and final two bars are required; missing midday bars are irrelevant.
 
 The [market momentum guide](docs/market-intraday-momentum-v1-research.md) documents the
 independent hypothesis, local manifest/coverage contract, short and German/EU execution
-caveats, and exact next preflight command. Review that output before deciding on sync or
-validation. Positive results never automatically promote a research family to champion,
+caveats, rejection evidence and explicit historical reproduction workflow.
+Rejected research is not a candidate for champion,
 paper trading or live trading. F, rejected ORB and rejected Reversal economics remain unchanged.
 
 Ein modularer Research-Unterbau für die Strategie **High Quality + Attractive Valuation +

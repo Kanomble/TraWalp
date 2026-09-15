@@ -1,7 +1,46 @@
 # Market Intraday Momentum V1: frozen independent hypothesis
 
 `research-market-intraday-momentum-v1` / `MARKET-INTRADAY-MOMENTUM-V1-15M-SPY`
-is **ACTIVE** research.
+is **REJECTED** research.
+
+## Final research decision
+
+Market Intraday Momentum V1 does not demonstrate a robust predictive relationship
+between SPY's first-30-minute direction and its final-30-minute direction. The aggregate
+signal is slightly negative even before modeled costs.
+
+The completed validation for **2024-01-02 through 2026-08-12**, supplied with this
+decision, recorded:
+
+| Measure | Result |
+| --- | --- |
+| Candidate sessions | 655 |
+| Morning observable sessions | 654 |
+| Signals / executed trades | 649 / 648 |
+| LONG / SHORT signals | 350 / 299 |
+| Gross expectancy / profit factor | Approximately -0.00420% / 0.9451 |
+| Net expectancy / profit factor | Approximately -0.10420% / 0.2646 |
+| Win rate / directional hit rate | Approximately 24.85% / 48.15% |
+| Modeled cost drag | Approximately 0.10000% per trade |
+| Pearson / Spearman correlation | Approximately +0.0197 / -0.0190 |
+| OLS slope / R-squared | Approximately +0.0164 / 0.00039 |
+
+LONG gross expectancy was approximately neutral; SHORT gross expectancy was negative.
+2024 and 2026 were gross-negative. Only the middle chronological third was slightly
+gross-positive; the first and final thirds were gross-negative.
+
+No parameters changed after outcome inspection. No magnitude bucket or first-30m
+movement threshold is promoted into a variant. No long-only, short-only, confirmation,
+or morning-reversal follow-up is automatically created. These observations require
+separately frozen hypotheses and independent validation if ever pursued.
+
+All candidate manifests, coverage, sessions, trades, monthly/yearly tables, chronological
+thirds, direction attribution, magnitude buckets and summary remain unchanged evidence.
+The implementation and CLIs remain available only for explicit historical reproduction,
+without recommendation or champion, paper/live or automatic promotion candidacy.
+Pre-rejection ACTIVE manifests remain reproducible when all other semantic/source
+contracts match, without rewriting the historical artifact. No historical job was rerun
+to record this decision.
 
 **This hypothesis was frozen before any Market Intraday Momentum V1 trade outcomes
 were evaluated.** Synthetic specification tests are not historical outcome evaluation.
@@ -200,14 +239,14 @@ Gross/net session-return statistics include arithmetic mean, sample standard dev
 assume independent sessions; serial dependence and fat tails can weaken their interpretation.
 Statistical significance does not replace economic significance after costs.
 
-## Anti-tuning boundary and next manual step
+## Anti-tuning boundary and historical reproduction
 
 No profitable ORB/Reversal symbol/month slice, noon-entry observation, Reversal rank bucket,
 May 2026 behavior, winner whitelist or post-hoc regime enters V1. No VIX, SMA, QQQ confirmation,
 gap, volume, ATR, RSI, VWAP, weekday/month or magnitude filter exists. There are no alternate
 proxies, bar timeframes, observation windows, long-only or short-only variants.
 
-The next manual step is only the new preflight:
+For explicitly requested historical reproduction, use a fresh preflight stem:
 
 ```powershell
 .\.venv\Scripts\python.exe -m trading_system.cli preflight-market-intraday-momentum-v1 `

@@ -106,6 +106,27 @@ def test_manifest_reuse_skips_discovery_after_local_fixture_addition(tmp_path, c
     assert {row["direction"] for row in rows} == {"LONG", "SHORT"}
 
 
+def test_pre_rejection_manifest_remains_reproducible(tmp_path, config, monkeypatch):
+    db = seed_market(tmp_path)
+    _, paths = preflight(db, config, tmp_path)
+    path = paths["momentum_candidates"]
+    payload = json.loads(path.read_text())
+    payload["strategy_definition"]["status"] = "ACTIVE"
+    payload["fingerprint"] = fingerprint(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    original = path.read_bytes()
+    monkeypatch.setattr(data, "discover_market_sessions", forbidden)
+    result, _ = validate(db, config, tmp_path, path)
+    assert result["status"] == "REJECTED"
+    assert result["metrics"]["executed_trades"] == 1
+    assert path.read_bytes() == original
+    payload["strategy_definition"]["status"] = "CHAMPION"
+    payload["fingerprint"] = fingerprint(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match=manifest.MISMATCH):
+        validate(db, config, tmp_path, path, stem="bad_status")
+
+
 @pytest.mark.parametrize(
     "index,status",
     [
@@ -299,7 +320,7 @@ def test_cli_is_read_only_and_cannot_sync_or_request_provider(
         monkeypatch.setattr(data, "discover_market_sessions", forbidden)
     assert cli.main(arguments) == 0 and connections
     result = json.loads((tmp_path / "cli_summary.json").read_text())
-    assert result["status"] == "ACTIVE" and result["market_data_feed"] == "IEX"
+    assert result["status"] == "REJECTED" and result["market_data_feed"] == "IEX"
     assert result["automatic_champion_selection"] is False
     assert result["execution_eligibility_germany"] == "NOT_EVALUATED"
 

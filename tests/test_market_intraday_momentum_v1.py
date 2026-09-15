@@ -128,7 +128,7 @@ def test_exact_frozen_identity_and_economics():
     assert asdict(MOMENTUM_V1) == {
         "research_family": "research-market-intraday-momentum-v1",
         "research_id": "MARKET-INTRADAY-MOMENTUM-V1-15M-SPY",
-        "status": "ACTIVE",
+        "status": "REJECTED",
         "symbol": "SPY",
         "asset_class": "US_EQUITY",
         "tradable_required": True,
@@ -161,7 +161,7 @@ def test_exact_frozen_identity_and_economics():
     with pytest.raises(FrozenInstanceError):
         MOMENTUM_V1.symbol = "QQQ"
     assert INDEPENDENT_RESEARCH_FAMILIES[MOMENTUM_V1.research_family] == (MOMENTUM_V1,)
-    assert RESEARCH_FAMILY_STATUS[MOMENTUM_V1.research_family] == "ACTIVE"
+    assert RESEARCH_FAMILY_STATUS[MOMENTUM_V1.research_family] == "REJECTED"
     assert RESEARCH_FAMILY_STATUS["research-orb-v1"] == "REJECTED"
     assert RESEARCH_FAMILY_STATUS["research-intraday-reversal-v1"] == "REJECTED"
 

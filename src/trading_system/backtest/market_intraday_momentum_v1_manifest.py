@@ -92,7 +92,13 @@ def load_candidate_manifest(path, database, config, start, end):
         if not isinstance(payload, dict) or payload.get("fingerprint") != fingerprint(payload):
             raise ValueError("fingerprint")
         for key, value in manifest_contract(config, start, end).items():
-            if _canonical(payload.get(key)) != _canonical(value):
+            saved = payload.get(key)
+            if key == "strategy_definition" and isinstance(saved, dict):
+                # Preserve pre-decision reproduction after verifying the original checksum.
+                if saved.get("status") not in {"ACTIVE", "REJECTED"}:
+                    raise ValueError("research status")
+                saved = {**saved, "status": value["status"]}
+            if _canonical(saved) != _canonical(value):
                 raise ValueError(key)
         proxy = proxy_basis(database)
         if _canonical(payload["proxy"]) != _canonical(proxy):
