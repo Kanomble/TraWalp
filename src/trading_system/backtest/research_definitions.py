@@ -137,3 +137,41 @@ class IntradayReversalDefinition:
 
 
 INTRADAY_REVERSAL_V1 = IntradayReversalDefinition()
+
+
+@dataclass(frozen=True, slots=True)
+class MarketIntradayMomentumDefinition:
+    research_family: str = "research-market-intraday-momentum-v1"
+    research_id: str = "MARKET-INTRADAY-MOMENTUM-V1-15M-SPY"
+    status: str = "ACTIVE"
+    symbol: str = "SPY"
+    asset_class: str = "US_EQUITY"
+    tradable_required: bool = True
+    calendar: str = "XNYS"
+    timezone: str = "America/New_York"
+    timeframe: str = "15m"
+    extended_hours: bool = False
+    first_window: str = "FIRST_TWO_EXPECTED_NATIVE_REGULAR_BARS"
+    first_30m_return: str = "SECOND_NATIVE_CLOSE / FIRST_NATIVE_OPEN - 1"
+    decision: str = "SECOND_NATIVE_BAR_COMPLETION"
+    direction_rule: str = "POSITIVE_LONG_NEGATIVE_SHORT_EXACT_ZERO_NO_SIGNAL"
+    closing_window: str = "FINAL_TWO_EXPECTED_NATIVE_REGULAR_BARS"
+    entry: str = "OFFICIAL_PENULTIMATE_NATIVE_BAR_OPEN"
+    exits: tuple[str, ...] = ("FINAL_REGULAR_SESSION_CLOSE",)
+    long_slippage_bps: float = 5.0
+    short_slippage_bps: float = 5.0
+    commission_bps: float = 0.0
+    borrow_fee_bps: float = 0.0
+    stop: None = None
+    profit_target: None = None
+    trailing_stop: None = None
+    partial_exit: None = None
+    maximum_attempts_per_session: int = 1
+    overnight: bool = False
+    portfolio_strategy_defined: bool = False
+    automatic_champion_selection: bool = False
+    execution_eligibility_germany: str = "NOT_EVALUATED"
+    short_execution_eligibility: str = "NOT_MODELED"
+
+
+MARKET_INTRADAY_MOMENTUM_V1 = MarketIntradayMomentumDefinition()

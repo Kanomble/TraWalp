@@ -15,6 +15,7 @@ from trading_system.backtest.research_definitions import (
     F_LIFECYCLE_RESEARCH_FAMILY,
     F_LIFECYCLE_VARIANTS,
     INTRADAY_REVERSAL_V1,
+    MARKET_INTRADAY_MOMENTUM_V1,
     ORB_V1,
     RegimeCapacityRule,
 )
@@ -105,6 +106,7 @@ INDEPENDENT_RESEARCH_FAMILIES = MappingProxyType(
     {
         ORB_V1.research_family: (ORB_V1,),
         INTRADAY_REVERSAL_V1.research_family: (INTRADAY_REVERSAL_V1,),
+        MARKET_INTRADAY_MOMENTUM_V1.research_family: (MARKET_INTRADAY_MOMENTUM_V1,),
     }
 )
 # Isolated lifecycle/entry identities are not production management enums or Cartesian runs.
@@ -175,6 +177,9 @@ RESEARCH_FAMILY_STATUS = MappingProxyType(
         FROZEN_CHAMPION_F.production_label: ResearchStatus.CHAMPION,
         ORB_V1.research_family: ResearchStatus(ORB_V1.status),
         INTRADAY_REVERSAL_V1.research_family: ResearchStatus(INTRADAY_REVERSAL_V1.status),
+        MARKET_INTRADAY_MOMENTUM_V1.research_family: ResearchStatus(
+            MARKET_INTRADAY_MOMENTUM_V1.status
+        ),
         F_CAPACITY_RESEARCH_FAMILY: ResearchStatus.REJECTED,
         F_REGIME_CAPACITY_RESEARCH_FAMILY: ResearchStatus.REJECTED,
         F_LIFECYCLE_RESEARCH_FAMILY: ResearchStatus.REJECTED,

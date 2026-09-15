@@ -751,6 +751,50 @@ class Database:
                     )
                 yield native, len(rows)
 
+    def iter_native_timestamp_batches(self, requirements, *, batch_size=200):
+        """Read exact native 15m points with one indexed SELECT per bounded batch.
+
+        Input is (symbol, session, timestamp). Output retains every required point,
+        including missing ones as None, ordered by session/symbol/timestamp. No
+        unrelated native or Daily rows are loaded. Existing session loaders are unchanged.
+        """
+        if not 1 <= batch_size <= 200:
+            raise ValueError("native timestamp batch_size must be between 1 and 200")
+        unique = sorted(set(requirements), key=lambda item: (item[1], item[0], item[2]))
+        with self.read_only() as connection:
+            connection.execute("BEGIN")
+            for offset in range(0, len(unique), batch_size):
+                batch = unique[offset : offset + batch_size]
+                placeholders = ",".join("(?,?,?)" for _ in batch)
+                parameters = [
+                    value
+                    for symbol, session, timestamp in batch
+                    for value in (symbol, session.isoformat(), _iso(timestamp))
+                ]
+                rows = connection.execute(
+                    f"""WITH requirements(symbol,session,timestamp) AS (VALUES {placeholders})
+                    SELECT bars.symbol,bars.timeframe,bars.timestamp,bars.open,bars.high,
+                    bars.low,bars.close,bars.volume,bars.trade_count,bars.vwap,
+                    requirements.session AS required_session
+                    FROM requirements CROSS JOIN bars ON bars.symbol=requirements.symbol
+                    AND bars.timeframe='15m' AND bars.timestamp=requirements.timestamp
+                    ORDER BY requirements.session,bars.symbol,bars.timestamp""",
+                    parameters,
+                ).fetchall()
+                present = {
+                    (row["symbol"], row["required_session"], row["timestamp"]): _bar_from_row(row)
+                    for row in rows
+                }
+                yield [
+                    (
+                        symbol,
+                        session,
+                        timestamp,
+                        present.get((symbol, session.isoformat(), _iso(timestamp))),
+                    )
+                    for symbol, session, timestamp in batch
+                ]
+
     def iter_entry_coverage_batches(self, requirements, *, batch_size=200):
         """Two SELECTs per bounded batch of exact (symbol, signal, execution) requirements.
 

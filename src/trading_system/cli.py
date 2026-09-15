@@ -554,6 +554,14 @@ def _parser() -> argparse.ArgumentParser:
             "validate-intraday-reversal-v1",
             "Local independent first-hour bottom-decile reversal research",
         ),
+        (
+            "preflight-market-intraday-momentum-v1",
+            "Local SPY first/final-30m native window qualification",
+        ),
+        (
+            "validate-market-intraday-momentum-v1",
+            "Local SPY morning-sign/closing-half-hour momentum research",
+        ),
     ):
         research = commands.add_parser(name, help=description)
         research.add_argument("--start", type=date.fromisoformat, required=True)
@@ -563,6 +571,7 @@ def _parser() -> argparse.ArgumentParser:
             "validate-f-intraday-entry",
             "validate-orb-v1",
             "validate-intraday-reversal-v1",
+            "validate-market-intraday-momentum-v1",
         }:
             discovery = research.add_mutually_exclusive_group(required=True)
             discovery.add_argument(
@@ -659,6 +668,40 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
     database = Database(settings.strategy.storage.database_path)
+    if args.command in {
+        "preflight-market-intraday-momentum-v1",
+        "validate-market-intraday-momentum-v1",
+    }:
+        # Dispatch before database initialization or any provider construction.
+        from trading_system.backtest.market_intraday_momentum_v1_research import (
+            run_market_intraday_momentum_v1,
+        )
+
+        try:
+            summary, paths = run_market_intraday_momentum_v1(
+                database,
+                settings.strategy,
+                args.start,
+                args.end,
+                settings.strategy.storage.reports_path,
+                stem=args.output_stem,
+                preflight=args.command == "preflight-market-intraday-momentum-v1",
+                candidate_manifest=getattr(args, "candidate_manifest", None),
+                rediscover_candidates=getattr(args, "rediscover_candidates", False),
+            )
+            print(
+                f"{summary['research_family']}: {summary['status']}; session-level research"
+                f"\nReady for local validation: {summary['ready_for_local_validation']}"
+                f"\nMarket data feed: {summary['market_data_feed']}"
+            )
+            print("\n".join(summary["warnings"]))
+            print("\n".join(f"{name}: {path}" for name, path in paths.items()))
+        except KeyboardInterrupt:
+            return 130
+        except (OSError, ValueError) as exc:
+            print(f"Market momentum research refused: {exc}", file=sys.stderr)
+            return 1
+        return 0
     if args.command in {"preflight-intraday-reversal-v1", "validate-intraday-reversal-v1"}:
         # Local research dispatch precedes initialization and provider construction.
         from trading_system.backtest.intraday_reversal_v1_research import run_intraday_reversal_v1
@@ -987,6 +1030,22 @@ def main(argv: list[str] | None = None) -> int:
                     except ValueError as exc:
                         print(f"Intraday sync refused: {exc}", file=sys.stderr)
                         return 2
+                elif payload.get("research_family") == "research-market-intraday-momentum-v1":
+                    from trading_system.backtest.market_intraday_momentum_v1_data import (
+                        REMEDIATION_NOTE,
+                        momentum_remediation_warmup,
+                    )
+
+                    if args.extended_hours is None:
+                        extended_hours = False
+                    try:
+                        warmup_bars = momentum_remediation_warmup(
+                            payload, settings.strategy, timeframes, extended_hours
+                        )
+                    except ValueError as exc:
+                        print(f"Intraday sync refused: {exc}", file=sys.stderr)
+                        return 2
+                    print(REMEDIATION_NOTE)
                 strategies = payload.get("strategies") or [
                     str(payload.get("research_family", "candidate_report"))
                 ]

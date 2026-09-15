@@ -74,9 +74,24 @@ Costs are 5 bps per side and zero commission, with no stop, target or portfolio 
 
 This is independent of ORB and F. No favorable ORB outcome slices become reversal filters.
 For explicit reproduction, `preflight-intraday-reversal-v1` and human review precede local
-validation comes only after that review and any explicitly authorized candidate-gap
+validation and any explicitly authorized candidate-gap
 remediation. See the [frozen reversal guide](docs/intraday-reversal-v1-research.md)
-for the exact hypothesis, coverage and manifest contracts, diagnostics and next manual command.
+for the exact hypothesis, coverage and manifest contracts, diagnostics and reproduction workflow.
+
+## Independent market intraday momentum V1
+
+`research-market-intraday-momentum-v1` / **MARKET-INTRADAY-MOMENTUM-V1-15M-SPY** is
+**ACTIVE** research, frozen before outcome evaluation. SPY's first 30-minute sign determines
+LONG or SHORT exposure only during the final 30 minutes of the official XNYS session;
+exactly zero means no signal. Native 15m, 5 bps adverse slippage per fill, zero commission
+and borrow fees, no stop/target, and no proxy substitution are frozen. Only the first two
+and final two bars are required; missing midday bars are irrelevant.
+
+The [market momentum guide](docs/market-intraday-momentum-v1-research.md) documents the
+independent hypothesis, local manifest/coverage contract, short and German/EU execution
+caveats, and exact next preflight command. Review that output before deciding on sync or
+validation. Positive results never automatically promote a research family to champion,
+paper trading or live trading. F, rejected ORB and rejected Reversal economics remain unchanged.
 
 Ein modularer Research-Unterbau für die Strategie **High Quality + Attractive Valuation +
 Price Dislocation + Recovery Signal**. Die erste Zielversion ist ausschließlich für Screening,
