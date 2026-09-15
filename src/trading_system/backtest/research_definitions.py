@@ -104,3 +104,36 @@ class OrbDefinition:
 
 
 ORB_V1 = OrbDefinition()
+
+
+@dataclass(frozen=True, slots=True)
+class IntradayReversalDefinition:
+    research_family: str = "research-intraday-reversal-v1"
+    research_id: str = "INTRADAY-REVERSAL-V1-15M-LONG"
+    status: str = "ACTIVE"
+    universe_name: str = "REVERSAL_LIQUID_TOP100_US_EQUITY"
+    top_n: int = 100
+    daily_lookback_sessions: int = 20
+    timeframe: str = "15m"
+    extended_hours: bool = False
+    first_hour_bars: int = 4
+    first_hour_definition: str = "09:30_OPEN_TO_10:15_BAR_CLOSE_AT_10:30_ET"
+    first_hour_return: str = "FOURTH_NATIVE_CLOSE / FIRST_NATIVE_OPEN - 1"
+    minimum_cross_section: int = 80
+    signal_percent: int = 10
+    signal_count_rule: str = "MAX_1_FLOOR_OBSERVABLE_COUNT_TIMES_0.10"
+    ranking: str = "FIRST_HOUR_RETURN_ASC_SYMBOL_ASC"
+    direction: str = "LONG"
+    entry: str = "NEXT_ACTUAL_NATIVE_BAR_OPEN"
+    exits: tuple[str, ...] = ("SESSION_CLOSE",)
+    stop: None = None
+    profit_target: None = None
+    slippage_bps: float = 5.0
+    commission_bps: float = 0.0
+    maximum_attempts_per_symbol_session: int = 1
+    overnight: bool = False
+    portfolio_strategy_defined: bool = False
+    automatic_champion_selection: bool = False
+
+
+INTRADAY_REVERSAL_V1 = IntradayReversalDefinition()

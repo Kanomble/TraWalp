@@ -11,7 +11,7 @@ from test_orb_v1 import config as config
 from test_orb_v1 import offline as offline
 
 from trading_system import cli
-from trading_system.backtest import orb_v1, orb_v1_data, orb_v1_research
+from trading_system.backtest import native_session_grid, orb_v1, orb_v1_data, orb_v1_research
 from trading_system.backtest.native_entries import NativeEntrySessions
 from trading_system.backtest.orb_v1_data import prepare_orb_data
 from trading_system.backtest.orb_v1_manifest import fingerprint
@@ -406,7 +406,7 @@ def test_expected_grid_cache_reused_across_coverage_validation_and_simulation(
     tmp_path, config, monkeypatch
 ):
     database = seed_market(tmp_path, ("AAA", "BBB"))
-    original = orb_v1._expected_timestamps
+    original = native_session_grid._expected_timestamps
     calls = []
 
     def counted(session, timeframe, *, extended_hours):
@@ -414,7 +414,7 @@ def test_expected_grid_cache_reused_across_coverage_validation_and_simulation(
         return original(session, timeframe, extended_hours=extended_hours)
 
     orb_v1.expected_native_timestamps.cache_clear()
-    monkeypatch.setattr(orb_v1, "_expected_timestamps", counted)
+    monkeypatch.setattr(native_session_grid, "_expected_timestamps", counted)
     with NativeEntrySessions() as spool:
         prepared = prepare_orb_data(database, config, SESSION, SESSION, native_sessions=spool)
         simulate_prepared_orb(prepared, spool)

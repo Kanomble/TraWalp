@@ -1,14 +1,19 @@
 """The single frozen ORB hypothesis. Pure native-bar simulation, independent of F."""
 
-from dataclasses import asdict, dataclass
-from datetime import date, timedelta
+from dataclasses import asdict
+from datetime import timedelta
 from enum import StrEnum
-from functools import lru_cache
 
+from trading_system.backtest.liquid_universe import LiquidityCandidate as OrbCandidate
+from trading_system.backtest.native_session_grid import (
+    expected_native_timestamps as expected_native_timestamps,
+)
+from trading_system.backtest.native_session_grid import (
+    validate_native_session as _validate_native_session,
+)
 from trading_system.backtest.research_definitions import ORB_V1
-from trading_system.data.intraday_remediation import _expected_timestamps
 from trading_system.data.market_sessions import regular_session_bounds
-from trading_system.models.market_data import BarTimeframe, validate_market_bar
+from trading_system.models.market_data import BarTimeframe as BarTimeframe
 
 
 class OrbStatus(StrEnum):
@@ -19,20 +24,6 @@ class OrbStatus(StrEnum):
     EXECUTED_STOP = "EXECUTED_STOP"
     EXECUTED_SESSION_CLOSE = "EXECUTED_SESSION_CLOSE"
     PROVIDER_CONFIRMED_ABSENT = "PROVIDER_CONFIRMED_ABSENT"
-
-
-@dataclass(frozen=True, slots=True)
-class OrbCandidate:
-    session: date
-    symbol: str
-    previous_session: date
-    daily_universe_rank: int
-    previous_close: float
-    average_dollar_volume_20d: float
-
-    @property
-    def key(self):
-        return self.symbol, self.previous_session, self.session
 
 
 EVENT_FIELDS = (
@@ -82,26 +73,8 @@ def event_for(candidate: OrbCandidate) -> dict:
     return row
 
 
-@lru_cache(maxsize=2048)
-def expected_native_timestamps(session, timeframe, extended_hours):
-    """Immutable, bounded pure-calendar cache; contains no research outcomes or prices."""
-    return _expected_timestamps(session, timeframe, extended_hours=extended_hours)
-
-
 def validate_native_session(symbol, session, bars):
-    """Reject invalid/duplicate/off-grid bars; never repair or resample them."""
-    expected = frozenset(expected_native_timestamps(session, BarTimeframe.MINUTES_15, False))
-    seen = set()
-    for bar in bars:
-        validate_market_bar(bar)
-        if (
-            bar.symbol != symbol
-            or bar.timeframe != BarTimeframe.MINUTES_15
-            or bar.timestamp not in expected
-            or bar.timestamp in seen
-        ):
-            raise ValueError(f"ORB_INVALID_NATIVE_BAR: {symbol} {session} {bar.timestamp}")
-        seen.add(bar.timestamp)
+    return _validate_native_session(symbol, session, bars, error_prefix="ORB")
 
 
 def simulate_orb_session(candidate: OrbCandidate, bars) -> dict:

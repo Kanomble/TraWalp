@@ -25,7 +25,7 @@ retains C/configured and explicit research selections. `--champion` cannot be co
 
 Rejected research: static capacity > 1, regime-aware capacity, lifecycle extensions including
 L5 (rejected after forward holdout), I1 opening-weakness veto, and R1 intraday risk containment.
-All six completed research families are `REJECTED`; older controls/hypotheses are `ARCHIVED`.
+Those six families and ORB V1 are `REJECTED`; older controls/hypotheses are `ARCHIVED`.
 Historical research commands and exact strategy IDs remain available for reproducibility.
 Legacy serialized `ACTIVE_RESEARCH` / `CHAMPION_CONTROL` roles describe historical registry
 metadata; current decisions are recorded separately in `RESEARCH_FAMILY_STATUS`.
@@ -58,7 +58,23 @@ US_EQUITY assets, including ETFs/ETPs without SEC company identity. `--symbols` 
 separate, mutually exclusive scope. Before ORB intraday remediation, follow the
 [Daily sync and fresh V3 preflight workflow](docs/orb-v1-research.md#local-qualification-and-remediation):
 request Daily history from 2023-12-01 through 2026-08-12, then regenerate and review V3.
-Later listings can legitimately retain missing historical windows.
+Later listings can legitimately retain missing historical windows. That ORB workflow is
+retained for historical reproducibility, not as a recommendation to continue rejected ORB research.
+
+## Independent intraday research: first-hour reversal V1
+
+`research-intraday-reversal-v1` / **INTRADAY-REVERSAL-V1-15M-LONG** is **ACTIVE** research,
+frozen before any reversal outcome evaluation. Within the current tradable Alpaca
+US_EQUITY Daily liquid Top-100, rank the first four native 15m bars' open-to-close
+return at 10:30 ET. Require at least 80 observable instruments and buy the bottom
+10% (floor), at the next native open; exit only at the final regular native close.
+Costs are 5 bps per side and zero commission, with no stop, target or portfolio allocator.
+
+This is independent of ORB and F. No favorable ORB outcome slices become reversal filters.
+Start with `preflight-intraday-reversal-v1` and human review; manifest-based local
+validation comes only after that review and any explicitly authorized candidate-gap
+remediation. See the [frozen reversal guide](docs/intraday-reversal-v1-research.md)
+for the exact hypothesis, coverage and manifest contracts, diagnostics and next manual command.
 
 Ein modularer Research-Unterbau für die Strategie **High Quality + Attractive Valuation +
 Price Dislocation + Recovery Signal**. Die erste Zielversion ist ausschließlich für Screening,

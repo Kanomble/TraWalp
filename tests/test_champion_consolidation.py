@@ -461,6 +461,9 @@ blocked = {
     "validation", "peer_context", "lifecycle_diagnostics", "intraday_diagnostics",
     "entry_quality", "intraday_risk", "lifecycle", "market_regime", "first_hour_pullback",
     "intraday_isolation", "intraday_next", "intraday_hybrid", "preflight",
+    "orb_v1", "orb_v1_data", "orb_v1_manifest", "orb_v1_research",
+    "intraday_reversal_v1", "intraday_reversal_v1_data", "intraday_reversal_v1_manifest",
+    "intraday_reversal_v1_research", "liquid_universe", "native_candidate_data",
 }
 class Guard(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
