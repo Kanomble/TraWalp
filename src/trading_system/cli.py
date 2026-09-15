@@ -544,6 +544,7 @@ def _parser() -> argparse.ArgumentParser:
             "Local Daily R0 baseline and native position-session coverage",
         ),
         ("validate-f-intraday-risk", "Isolated F/configured/C1 intraday risk containment"),
+        ("analyze-champion-edge-v1", "Local descriptive attribution of frozen F/configured/C1"),
         ("preflight-orb-v1", "Local PIT liquid Top-100 and native 15m data qualification"),
         ("validate-orb-v1", "Local independent ORB-V1-15M-LONG signal-level research"),
         (
@@ -668,6 +669,29 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
     database = Database(settings.strategy.storage.database_path)
+    if args.command == "analyze-champion-edge-v1":
+        from sqlite3 import Error as SQLiteError
+
+        from trading_system.backtest.champion_edge_research import run_champion_edge_v1
+
+        try:
+            summary, paths = run_champion_edge_v1(
+                database,
+                settings.strategy,
+                args.start,
+                args.end,
+                settings.strategy.storage.reports_path,
+                stem=args.output_stem,
+            )
+            print(f"{summary['research_id']}: {summary['run_status']}; diagnostic only")
+            print("\n".join(summary["warnings"]))
+            print("\n".join(f"{name}: {path}" for name, path in paths.items()))
+            return 0 if summary["run_status"] == "COMPLETE" else 1
+        except KeyboardInterrupt:
+            return 130
+        except (OSError, ValueError, SQLiteError) as exc:
+            print(f"Champion edge analysis unavailable: {exc}", file=sys.stderr)
+            return 1
     if args.command in {
         "preflight-market-intraday-momentum-v1",
         "validate-market-intraday-momentum-v1",

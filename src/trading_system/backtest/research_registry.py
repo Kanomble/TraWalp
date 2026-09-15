@@ -8,6 +8,7 @@ from enum import StrEnum
 from types import MappingProxyType
 
 from trading_system.backtest.research_definitions import (
+    F_CHAMPION_EDGE_DECOMPOSITION_V1,
     F_INTRADAY_ENTRY_RESEARCH_FAMILY,
     F_INTRADAY_ENTRY_VARIANTS,
     F_INTRADAY_RISK_RESEARCH_FAMILY,
@@ -101,6 +102,10 @@ FROZEN_CHAMPION_F = FrozenResearchChampion(
 )
 
 F_CAPACITY_RESEARCH_FAMILY = "research-f-capacity"
+# Attribution has no alpha identity, strategy variant or production selection entry.
+DIAGNOSTIC_RESEARCH_FAMILIES = MappingProxyType(
+    {F_CHAMPION_EDGE_DECOMPOSITION_V1.research_family: F_CHAMPION_EDGE_DECOMPOSITION_V1}
+)
 # Independent alpha has no StrategyVariant/management Cartesian product or champion control.
 INDEPENDENT_RESEARCH_FAMILIES = MappingProxyType(
     {
@@ -175,6 +180,7 @@ F_L5_FORWARD_RESEARCH_FAMILY = "research-f-lifecycle-l5-forward-v1"
 RESEARCH_FAMILY_STATUS = MappingProxyType(
     {
         FROZEN_CHAMPION_F.production_label: ResearchStatus.CHAMPION,
+        F_CHAMPION_EDGE_DECOMPOSITION_V1.research_family: ResearchStatus.ACTIVE,
         ORB_V1.research_family: ResearchStatus(ORB_V1.status),
         INTRADAY_REVERSAL_V1.research_family: ResearchStatus(INTRADAY_REVERSAL_V1.status),
         MARKET_INTRADAY_MOMENTUM_V1.research_family: ResearchStatus(

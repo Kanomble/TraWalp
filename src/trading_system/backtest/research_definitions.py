@@ -175,3 +175,20 @@ class MarketIntradayMomentumDefinition:
 
 
 MARKET_INTRADAY_MOMENTUM_V1 = MarketIntradayMomentumDefinition()
+
+
+@dataclass(frozen=True, slots=True)
+class ChampionEdgeDecompositionDefinition:
+    research_family: str = "research-f-champion-edge-decomposition-v1"
+    research_id: str = "F-CHAMPION-EDGE-DECOMPOSITION-V1"
+    status: str = "ACTIVE"
+    kind: str = "DIAGNOSTIC_ONLY"
+    subject: str = "F/configured/C1"
+    forward_horizons: tuple[int, ...] = (1, 3, 5, 10, 20)
+    holding_checkpoints: tuple[int, ...] = (1, 2, 3, 5, 7, 10)
+    quantiles: int = 5
+    automatic_champion_selection: bool = False
+    strategy_modified: bool = False
+
+
+F_CHAMPION_EDGE_DECOMPOSITION_V1 = ChampionEdgeDecompositionDefinition()

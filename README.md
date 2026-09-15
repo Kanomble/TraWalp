@@ -93,6 +93,18 @@ caveats, rejection evidence and explicit historical reproduction workflow.
 Rejected research is not a candidate for champion,
 paper trading or live trading. F, rejected ORB and rejected Reversal economics remain unchanged.
 
+## F champion edge decomposition V1
+
+`analyze-champion-edge-v1` is **diagnostic-only** research over the unchanged
+**F/configured/C1** champion. It captures the PIT candidate funnel, forward-return and
+factor attribution, actual trade exits and holding paths, occupied-slot opportunities,
+cash states, market dependence and concentration. It runs the frozen champion once and
+derives descriptive tables without generating trading rules or recommended settings.
+
+The [decomposition guide](docs/f-champion-edge-decomposition-v1.md) defines the populations,
+local-only source contract, in-sample limitations and exact manual command. Review that
+output before discussing another strategy. Momentum, ORB and Reversal remain rejected.
+
 Ein modularer Research-Unterbau für die Strategie **High Quality + Attractive Valuation +
 Price Dislocation + Recovery Signal**. Die erste Zielversion ist ausschließlich für Screening,
 Backtests, Dry Runs und Alpaca Paper Trading vorgesehen. Live-Trading ist weder implementiert
