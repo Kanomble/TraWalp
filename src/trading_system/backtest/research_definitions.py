@@ -82,7 +82,7 @@ F_INTRADAY_RISK_RESEARCH_FAMILY = "research-f-intraday-risk-v1"
 class OrbDefinition:
     research_family: str = "research-orb-v1"
     research_id: str = "ORB-V1-15M-LONG"
-    status: str = "ACTIVE"
+    status: str = "REJECTED"
     universe_name: str = "ORB_LIQUID_TOP100_US_EQUITY"
     top_n: int = 100
     daily_lookback_sessions: int = 20

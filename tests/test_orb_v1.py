@@ -103,11 +103,11 @@ def native(symbol="AAA", session=SESSION):
     return rows
 
 
-def test_exact_frozen_definition_and_independent_active_registry():
+def test_exact_frozen_definition_and_independent_rejected_registry():
     assert asdict(ORB_V1) == {
         "research_family": "research-orb-v1",
         "research_id": "ORB-V1-15M-LONG",
-        "status": "ACTIVE",
+        "status": "REJECTED",
         "universe_name": "ORB_LIQUID_TOP100_US_EQUITY",
         "top_n": 100,
         "daily_lookback_sessions": 20,
@@ -130,7 +130,7 @@ def test_exact_frozen_definition_and_independent_active_registry():
     with pytest.raises(FrozenInstanceError):
         ORB_V1.top_n = 101
     assert INDEPENDENT_RESEARCH_FAMILIES[ORB_V1.research_family] == (ORB_V1,)
-    assert RESEARCH_FAMILY_STATUS[ORB_V1.research_family] == ResearchStatus.ACTIVE
+    assert RESEARCH_FAMILY_STATUS[ORB_V1.research_family] == ResearchStatus.REJECTED
 
 
 @pytest.mark.parametrize("close", [100, 101])

@@ -38,8 +38,9 @@ precedence, retained risks, removal decisions and paper/shadow readiness.
 
 ## Independent intraday research: ORB V1
 
-`research-orb-v1` / **ORB-V1-15M-LONG** is `ACTIVE`, pending a later human research
-decision. It is independent of F: one native 15-minute long opening-range breakout,
+`research-orb-v1` / **ORB-V1-15M-LONG** is **REJECTED** after the completed validation
+found no robust edge after modeled costs. It remains reproducible and independent of F:
+one native 15-minute long opening-range breakout,
 on the PIT Daily liquid Top-100, with next-bar entry, a frozen opening-range-low stop,
 and session-close liquidation. Costs are 5 bps per fill and zero commission.
 This is a signal-level study with no portfolio allocation, compounding, or automatic

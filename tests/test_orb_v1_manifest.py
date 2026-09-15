@@ -24,6 +24,21 @@ def preflight(database, config, tmp_path, *, end=SESSION, stem="pre"):
     return run_orb_v1(database, config, SESSION, end, tmp_path, stem=stem, preflight=True)
 
 
+def test_pre_rejection_manifest_remains_reproducible(tmp_path, config, monkeypatch):
+    database = seed_market(tmp_path)
+    _, paths = preflight(database, config, tmp_path)
+    path = paths["orb_candidates"]
+    payload = json.loads(path.read_text())
+    payload["strategy_definition"]["status"] = "ACTIVE"
+    payload["fingerprint"] = fingerprint(payload)
+    path.write_text(json.dumps(payload))
+    before = path.read_bytes()
+    monkeypatch.setattr(orb_v1_data, "discover_orb_universe", forbidden)
+    summary, _ = validate(database, config, tmp_path, path)
+    assert summary["status"] == "REJECTED"
+    assert path.read_bytes() == before
+
+
 def validate(database, config, tmp_path, path, *, start=SESSION, end=SESSION, stem="validation"):
     return run_orb_v1(database, config, start, end, tmp_path, stem=stem, candidate_manifest=path)
 

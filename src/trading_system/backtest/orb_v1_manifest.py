@@ -146,7 +146,15 @@ def load_candidate_manifest(path, database, config, start, end):
         if not isinstance(payload, dict) or payload.get("fingerprint") != fingerprint(payload):
             raise ValueError("fingerprint")
         for key, expected in manifest_contract(config, start, end).items():
-            if _canonical(payload.get(key)) != _canonical(expected):
+            actual = payload.get(key)
+            # Research disposition is not an economic input. Retain pre-rejection evidence.
+            if (
+                key == "strategy_definition"
+                and isinstance(actual, dict)
+                and actual.get("status") in {"ACTIVE", "REJECTED"}
+            ):
+                actual = {**actual, "status": expected["status"]}
+            if _canonical(actual) != _canonical(expected):
                 raise ValueError(key)
         basis = selection_basis(database, config, start, end)
         digest = selection_digest(basis)

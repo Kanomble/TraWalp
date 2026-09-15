@@ -1,9 +1,40 @@
 # ORB V1 signal-level research
 
-Family `research-orb-v1`, ID `ORB-V1-15M-LONG`, status **ACTIVE** pending a later human
-research decision. The single definition is `research_definitions.py::ORB_V1`.
+Family `research-orb-v1`, ID `ORB-V1-15M-LONG`, status **REJECTED**.
+The single definition is `research_definitions.py::ORB_V1`.
 The independent family registry does not add a Daily StrategyVariant or a management
 preset. F/configured/C1 remains the frozen champion. Results never promote ORB.
+
+## Final research decision
+
+ORB V1 does not demonstrate a robust tradeable edge after modeled costs.
+The final validation for **2024-01-02 through 2026-08-12**, supplied with the research
+decision, covered 65,500 candidate symbol-sessions: 59,858 observable native sessions
+and 5,642 provider-confirmed absent (approximately 91.386% coverage).
+
+| Measure | Result |
+| --- | --- |
+| Executed trades | 35,331 |
+| Net expectancy | Approximately -0.0795% per trade |
+| Profit factor | Approximately 0.832 |
+| Win rate | Approximately 41.97% |
+| Mean R | Approximately -0.145 R |
+| Gross expectancy | Approximately +0.0205% per trade |
+| Modeled round-trip drag | Approximately 0.10% |
+
+All calendar-year slices and all three chronological thirds were net negative.
+The small aggregate gross edge was regime-concentrated rather than stable.
+No ORB V1 parameter was changed after outcome inspection. Favorable post-hoc symbol,
+time, month, rank or exit slices were **not** promoted into a new ORB variant.
+There is no V1.1, selected-symbol, noon-entry, no-stop or low-slippage ORB extension.
+
+All completed candidate, coverage, remediation, event/trade, monthly/yearly,
+chronological, concentration, entry-time and summary artifacts remain research
+evidence, unchanged. The CLI remains available for explicit reproduction; rejection
+does not recommend ORB or permit automatic champion promotion. Prior candidate
+manifests with `status=ACTIVE` remain compatible when all economic/data inputs match.
+The following methodology history records decisions made before those outcomes;
+it does not reopen the rejected hypothesis. No historical job was rerun for this decision.
 
 ## Finalized research universe and methodology
 
