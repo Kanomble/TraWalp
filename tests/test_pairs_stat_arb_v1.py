@@ -16,6 +16,7 @@ from trading_system import cli
 from trading_system.backtest import pairs_stat_arb_v1 as engine
 from trading_system.backtest import pairs_stat_arb_v1_data as data
 from trading_system.backtest import pairs_stat_arb_v1_research as research
+from trading_system.backtest import pairs_stat_arb_v1_security as security
 from trading_system.backtest.pairs_stat_arb_v1 import (
     PAIRS_V1,
     PairBar,
@@ -66,6 +67,19 @@ def offline(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
     monkeypatch.setattr(requests.Session, "request", forbidden)
     monkeypatch.setattr(cli, "_synchronizer", forbidden)
+
+
+@pytest.fixture(autouse=True)
+def synthetic_security_types(monkeypatch):
+    """Synthetic evidence only; production has no authoritative type adapter yet."""
+    monkeypatch.setattr(
+        security,
+        "local_security_types",
+        lambda database, symbols: {
+            s: security.SecurityTypeEvidence("COMMON_STOCK", True, "SYNTHETIC_TEST_SOURCE")
+            for s in symbols
+        },
+    )
 
 
 @pytest.fixture
@@ -432,7 +446,14 @@ def test_repeated_active_signals_ignored_then_reentry(monkeypatch):
         signal_dates={str(d): d for d in days},
         bars=bars,
         end=END,
-        manifest={"candidates": candidates, "strategy_definition": asdict(PAIRS_V1)},
+        manifest={
+            "candidates": candidates,
+            "strategy_definition": asdict(PAIRS_V1),
+            "discovery_counts": {
+                "company_security_types_complete": True,
+                "selection_membership_resolved": True,
+            },
+        },
     )
     evaluations, signals = simulate_prepared_pairs(prepared)
     assert [r["signal_session"] for r in signals] == [str(days[0]), str(days[5])]
@@ -491,7 +512,14 @@ def test_no_signal_evaluation_produces_no_trade(config):
         signal_dates={str(d): d for d in days},
         bars=bars,
         end=START,
-        manifest={"candidates": candidates, "strategy_definition": asdict(PAIRS_V1)},
+        manifest={
+            "candidates": candidates,
+            "strategy_definition": asdict(PAIRS_V1),
+            "discovery_counts": {
+                "company_security_types_complete": True,
+                "selection_membership_resolved": True,
+            },
+        },
     )
     evaluations, signals = simulate_prepared_pairs(prepared)
     assert len(evaluations) == 1 and evaluations[0]["status"] == "NO_SIGNAL"

@@ -21,9 +21,11 @@ An extreme negative deviation is treated symmetrically.
 
 ## Frozen design
 
-Only current local tradable `US_EQUITY` assets with local company identity and valid
-SIC qualify. SPY is reserved exclusively for diagnostics, even if local company
-identity exists. No ETF blacklist: company/SIC identity supplies the boundary. SIC is
+Only current local tradable `US_EQUITY` assets with local company identity, valid
+SIC, and authoritative **operating-company common-stock** identity qualify.
+Company/SIC identity alone does not establish that security type. SPY is reserved
+exclusively for diagnostics, even if local company identity exists. No symbol
+blacklist or name heuristic supplies the company boundary. SIC is
 normalized to four digits (three-digit codes receive a leading zero); SIC2 is its
 first two digits. `CURRENT_UNIVERSE_ONLY`, `NOT_SURVIVORSHIP_CLEAN`, and
 `CURRENT_LOCAL_SIC_NOT_PIT` apply throughout. SIC classification is current/local
@@ -90,15 +92,69 @@ settings are bound and any conflicting local coverage metadata is rejected;
 missing provenance is prominently reported rather than claimed verified.
 Provider-verified ranges are descriptive only, not proof of a session's absence.
 
-### Coverage qualification (manifest schema 2)
+### Company security type: currently unavailable
 
-An incomplete ADV20 window makes that symbol-session ineligible for ranking. It
-does not, by itself, create a fetch request. `INSUFFICIENT_SELECTION_HISTORY`
-is a non-blocking diagnostic; `unavailable_liquidity_symbol_sessions` remains
-visible. Each symbol has one diagnostic summary with first/last affected signal
-dates and the affected-session count (not a claim that the whole span is missing).
-The classification does not assert a listing date or infer why history is absent.
-Only observations available through each signal session determine eligibility.
+**AUTHORITATIVE_COMPANY_SECURITY_TYPE_UNAVAILABLE.** The current local/provider
+architecture does not supply an authoritative per-security distinction between
+operating-company common stock and ETF/ETP/fund/warrant/unit/other instruments.
+The source audit used repository code and the installed SDK; no network or
+historical pair outcomes were consulted:
+
+- The installed Alpaca `Asset` model exposes broad `asset_class`, exchange,
+  tradability, margin/borrow/fractional flags and attributes. None establishes
+  operating-company common-stock identity. `AlpacaDataClient.list_tradable_us_equities`
+  persists the broad asset class and trading flags in `TradableAsset`/`assets`.
+- The SEC identity/submissions path persists CIK, symbol, name, SIC and SIC
+  description in `CompanyIdentity`/`companies`. Cached raw issuer submissions
+  are not an authoritative mapping from each traded security to common stock;
+  issuer identity or an issuer-level entity type cannot supply that mapping.
+- No other persisted authoritative instrument classification or project-wide
+  security-type classifier was found. Prices, fundamentals, names, symbols and
+  SIC codes are not used to invent one.
+
+The local adapter therefore returns `UNKNOWN` with no source. Preflight exports
+per-symbol identity requirements, freezes no pairs for these unqualified symbols,
+reports `company_only_universe_satisfied=false`, and remains unready. Validation
+and the prepared-data simulation entry point refuse unresolved company identity.
+This is a metadata blocker, not a Daily-bar fetch request.
+
+A safe extension requires an authoritative per-security source, a reviewed
+mapping to `COMMON_STOCK`/`ETF`/`ETP`/`FUND`/`WARRANT`/`UNIT`/`OTHER`/`UNKNOWN`,
+and positive operating-company evidence for common stock. Persist stable
+security/symbol/issuer linkage, source, source version/timestamp and classification
+provenance in a migrated schema; integrate its local reader before manually
+synchronizing that source. Only sourced `COMMON_STOCK` with
+`operating_company=true` may enter. Unknown/missing/unsupported evidence fails
+closed; positively identified non-company securities are excluded.
+An existing Alpaca/SEC metadata sync alone cannot resolve this blocker. No
+unsupported upstream field, schema migration with invented values, config
+override, or manual category file has been introduced. Synthetic tests inject
+explicitly marked evidence at the adapter boundary only.
+
+### Coverage qualification (manifest schema 3)
+
+Apply the preceding-close price gate first: a known close below the configured
+minimum deterministically excludes the symbol without requesting ADV remediation.
+Otherwise every previous-close/ADV20 input must exist. The earliest locally
+observed Daily session **on or before T** distinguishes missing prefix from
+internal gaps. A timestamp-only batch also checks observations before the
+calibration window; an observation after T cannot establish earlier history.
+Invalid/duplicate records remain unusable and are never filled.
+
+Missing sessions before that first observation, or no observations yet, produce
+nonblocking `INSUFFICIENT_SELECTION_HISTORY`; the symbol is not liquidity
+eligible. This is not a claim about its actual listing date. Current names with
+no bars do not generate fake fetch requests. Prefix diagnostics remain bounded
+per-symbol summaries with first/last affected signal dates and counts (not an
+assertion that the whole span is missing).
+
+Missing required selection inputs on/after an established observation produce
+`LOCAL_MISSING_FETCHABLE`, role `LIQUIDITY_SELECTION_INTERNAL_GAP`, scope
+`VALIDATION_BLOCKING_REQUIREMENT`, and `validation_blocking=true`. This includes
+internal holes during initial ADV warmup. The **entire SIC2/session** becomes
+`SELECTION_MEMBERSHIP_UNRESOLVED`; no final names or pairs are frozen there.
+Rank six cannot replace an unresolved member. Unrelated SIC2 groups continue.
+`unavailable_liquidity_symbol_sessions` counts both prefix and internal cases.
 
 `VALIDATION_BLOCKING_REQUIREMENT` covers frozen selected names' ADV/previous-close
 windows, frozen pairs' calibration/observation windows, and eligible pairs'
@@ -107,8 +163,12 @@ history or a possible outcome window remains `LOCAL_MISSING_FETCHABLE` and block
 readiness. A calibration prefix preceding any locally observed history is instead
 `INSUFFICIENT_CALIBRATION_HISTORY`: the pair remains `INCOMPLETE_CALIBRATION`,
 cannot signal, and nonexistent prefix history is not requested. No fill, replacement,
-or future listing information is used. Readiness counts only unresolved blocking
-requirements; insufficient histories remain explicit even when readiness is true.
+or future listing information is used. Readiness requires candidates, complete
+authoritative security-type qualification, resolved selection membership and
+zero unresolved blocking Daily inputs. Prefix diagnostics alone do not prevent
+readiness. Correcting selection inputs requires a new preflight; an unresolved
+manifest cannot authorize validation, even after diagnostics are edited and its
+checksum recomputed.
 
 All current-universe inputs still participate in the membership digest, including
 missing markers. They are described separately as `SOURCE_FINGERPRINT_INPUT`,
@@ -116,16 +176,39 @@ which is not an automatic remediation requirement. The coverage CSV compresses
 present requirements and insufficient calibration prefixes into contiguous official
 session ranges, while preserving each missing required bar as an actionable row.
 The requirements JSON contains compact `required_ranges`, unresolved-only
-`required_sessions`, non-blocking diagnostics, and a compact fingerprint-scope
+`required_sessions`, non-blocking diagnostics, unresolved SIC2/session membership,
+company security-type requirements, and a compact fingerprint-scope
 descriptor. It never enumerates the entire current-universe/history cross product.
+An internal missing bar appears once by symbol/session with SIC2, its first
+observation anchor and **all affected signal sessions**. Its requirement may
+also carry other needed-input roles. Source fingerprints additionally bind
+history anchors and qualified security-type evidence.
 
 Runtime and manifest construction read the same frozen `PAIRS_STAT_ARB_V1`
 definition, including numeric `adv_lookback_sessions=20`, `calibration_sessions=60`,
 `min_correlation=0.70`, `entry_z=2.0`, `long_weight=short_weight=0.50`,
 `slippage_bps=5.0`, `max_hold_sessions=5`, `top_n=5`, and `outcome_tail_sessions=5`.
 No new parameter choices are exposed. Simulation also rejects a prepared manifest
-whose definition differs from the current execution definition. Schema 1 manifests
-must be replaced; this schema correction precedes any historical Pairs preflight.
+whose definition differs from the current execution definition. Schema 3 binds
+`selection_gap_semantics`, `selection_membership_fail_closed=true`,
+`instrument_type_semantics`, and `company_only_requirement`. Schema 1/2 manifests
+are rejected. The earlier historical preflight fingerprint
+`f6985aad8b760cc654bce1c8f6220b6af16bfb78c01d93100f91738f1915a27d`
+is obsolete for validation. This patch follows a historical preflight and precedes
+any historical Pairs outcome evaluation; frozen signal/execution economics remain
+unchanged. Do not reuse the old `_v1` report stem or manifest. The next manual
+preflight uses `_v2` (the report suffix is distinct from manifest schema **3**):
+
+```powershell
+.\.venv\Scripts\python.exe -m trading_system.cli preflight-pairs-stat-arb-v1 `
+  --start 2024-01-02 `
+  --end 2026-08-12 `
+  --output-stem pairs_stat_arb_v1_preflight_2024-01-02_2026-08-12_v2
+```
+
+Until the authoritative source extension is available, this command reports the
+company-security-type blocker. Manually review the new preflight before considering
+any validation; no historical run or synchronization was performed for this patch.
 
 Signals are confined to the requested period. Five official sessions after its
 end are outcome-only. Missing required tail observations yield

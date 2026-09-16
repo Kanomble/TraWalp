@@ -213,6 +213,11 @@ def simulate_prepared_pairs(prepared):
     """No persistence handles: zero SQLite queries, all prices already in memory."""
     if prepared.manifest["strategy_definition"] != asdict(definitions.PAIRS_STAT_ARB_V1):
         raise ValueError("PAIRS_STAT_ARB_MANIFEST_MISMATCH: execution definition changed")
+    qualification = prepared.manifest.get("discovery_counts", {})
+    if not qualification.get("company_security_types_complete"):
+        raise ValueError("AUTHORITATIVE_COMPANY_SECURITY_TYPE_UNAVAILABLE")
+    if not qualification.get("selection_membership_resolved"):
+        raise ValueError("PAIRS_STAT_ARB_SELECTION_MEMBERSHIP_UNRESOLVED")
     indexes = {day: index for index, day in enumerate(prepared.sessions)}
     evaluations, signals = [], []
     grouped = defaultdict(list)

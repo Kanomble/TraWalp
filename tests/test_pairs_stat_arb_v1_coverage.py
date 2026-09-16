@@ -5,15 +5,17 @@ import json
 from datetime import date
 
 import pytest
-from test_pairs_stat_arb_v1 import END, START, seed
+from test_pairs_stat_arb_v1 import END, START, identities, seed, synthetic
 from test_pairs_stat_arb_v1 import config as config
 from test_pairs_stat_arb_v1 import offline as offline
+from test_pairs_stat_arb_v1 import synthetic_security_types as synthetic_security_types
 
 from trading_system.backtest.pairs_stat_arb_v1_data import discover_pairs, prepare_pairs_data
 from trading_system.backtest.pairs_stat_arb_v1_research import (
     run_pairs_stat_arb_v1,
     summary_metadata,
 )
+from trading_system.backtest.pairs_stat_arb_v1_selection import selection_inputs
 from trading_system.models.fundamentals import CompanyIdentity
 from trading_system.models.market_data import TradableAsset
 
@@ -171,3 +173,200 @@ def test_fingerprint_only_missing_inputs_do_not_expand_required_coverage(tmp_pat
     assert expanded.manifest["source_fingerprint"] != baseline.manifest["source_fingerprint"]
     assert len(expanded.coverage) == len(baseline.coverage) + 25  # One diagnostic per extra name.
     assert summary_metadata(expanded, preflight=True)["ready_for_local_validation"] is True
+
+
+def seed_six(tmp_path, *, end=END):
+    db, sessions, days, tail, bars = seed(tmp_path, end=end)
+    # A's ADV is highest; decreasing C-F liquidity makes F the deterministic sixth.
+    for symbol, volume in zip("CDEF", (900_000, 800_000, 700_000, 600_000), strict=True):
+        db.upsert_assets(
+            [
+                TradableAsset(
+                    symbol=symbol,
+                    name=symbol,
+                    tradable=True,
+                    fractionable=False,
+                    asset_class="US_EQUITY",
+                )
+            ]
+        )
+        db.upsert_company(
+            CompanyIdentity(symbol=symbol, name=symbol, cik=f"{ord(symbol):010d}", sic="3571")
+        )
+        with db.connect() as connection:
+            connection.execute(
+                "INSERT INTO bars SELECT ?,timeframe,timestamp,open,high,low,close,?,"
+                "trade_count,vwap FROM bars WHERE symbol='B'",
+                (symbol, volume),
+            )
+    return db, sessions, days, tail, bars
+
+
+def test_internal_gap_blocks_group_never_uses_rank_six_and_exports_once(tmp_path, config):
+    db, sessions, days, *_ = seed_six(tmp_path)
+    # Another SIC2 continues forming pairs while SIC2 35 is unresolved.
+    for symbol, source in (("X", "A"), ("Y", "B")):
+        db.upsert_assets(
+            [
+                TradableAsset(
+                    symbol=symbol,
+                    name=symbol,
+                    tradable=True,
+                    fractionable=False,
+                    asset_class="US_EQUITY",
+                )
+            ]
+        )
+        db.upsert_company(
+            CompanyIdentity(symbol=symbol, name=symbol, cik=f"{ord(symbol):010d}", sic="6021")
+        )
+        with db.connect() as connection:
+            connection.execute(
+                "INSERT INTO bars SELECT ?,timeframe,timestamp,open,high,low,close,volume,"
+                "trade_count,vwap FROM bars WHERE symbol=?",
+                (symbol, source),
+            )
+    baseline = prepare_pairs_data(db, config, START, END, preflight=True)
+    assert [r["symbol"] for r in baseline.manifest["selected"][str(START)]["35"]] == list("ABCDE")
+    missing_day = sessions[sessions.index(START) - 7]
+    with db.connect() as connection:
+        saved = tuple(
+            connection.execute(
+                "SELECT * FROM bars WHERE symbol='A' AND timestamp LIKE ?", (f"{missing_day}%",)
+            ).fetchone()
+        )
+        connection.execute(
+            "DELETE FROM bars WHERE symbol='A' AND timestamp LIKE ?", (f"{missing_day}%",)
+        )
+    summary, paths = run_pairs_stat_arb_v1(
+        db, config, START, END, tmp_path, stem="internal_gap", preflight=True
+    )
+    manifest = json.loads(paths["pair_candidates"].read_text())
+    for groups in manifest["selected"].values():
+        assert "35" not in groups  # Neither A nor rank-six F is frozen for this group.
+        assert [r["symbol"] for r in groups["60"]] == ["X", "Y"]
+    assert all(r["sic2"] == "60" for r in manifest["candidates"])
+    assert summary["unresolved_sic2_sessions"] == len(days)
+    assert not summary["selection_membership_resolved"]
+    assert not summary["ready_for_local_validation"]
+    assert summary["unavailable_liquidity_symbol_sessions"] == len(days)
+    assert summary["selection_history_diagnostics"] == []
+    unresolved = summary["unresolved_selection_membership"]
+    assert all(
+        r["status"] == "SELECTION_MEMBERSHIP_UNRESOLVED" and r["symbols"] == ["A"]
+        for r in unresolved
+    )
+    requirements = json.loads(paths["daily_requirements"].read_text())
+    assert len(requirements["required_sessions"]) == summary["local_missing_data"] == 1
+    gap = requirements["required_sessions"][0]
+    assert gap["symbol"] == "A" and gap["session"] == str(missing_day)
+    assert gap["sic2"] == "35"
+    assert gap["affected_signal_sessions"] == [str(d) for d in days]
+    assert gap["roles"] == "LIQUIDITY_SELECTION_INTERNAL_GAP"
+    assert gap["status"] == "LOCAL_MISSING_FETCHABLE"
+    assert gap["input_scope"] == "VALIDATION_BLOCKING_REQUIREMENT" and gap["validation_blocking"]
+    with paths["coverage"].open(newline="", encoding="utf-8") as handle:
+        exported = [r for r in csv.DictReader(handle) if r["status"] == "LOCAL_MISSING_FETCHABLE"]
+    assert len(exported) == 1 and exported[0]["session"] == str(missing_day)
+    with db.connect() as connection:
+        connection.execute(f"INSERT INTO bars VALUES ({','.join('?' for _ in saved)})", saved)
+    restored = prepare_pairs_data(db, config, START, END, preflight=True)
+    assert restored.manifest["selected"] == baseline.manifest["selected"]
+    assert restored.manifest["discovery_counts"]["unresolved_selection_membership"] == []
+    assert summary_metadata(restored, preflight=True)["ready_for_local_validation"]
+
+
+@pytest.mark.parametrize("offset", [1, 7])
+def test_previous_close_or_adv_internal_gap_is_blocking(tmp_path, config, offset):
+    db, sessions, *_ = seed_six(tmp_path, end=START)
+    missing = sessions[sessions.index(START) - offset]
+    with db.connect() as connection:
+        connection.execute(
+            "DELETE FROM bars WHERE symbol='A' AND timestamp LIKE ?", (f"{missing}%",)
+        )
+    prepared = prepare_pairs_data(db, config, START, START, preflight=True)
+    assert prepared.manifest["selected"][str(START)] == {}
+    assert prepared.manifest["discovery_counts"]["internal_selection_gaps"][0]["session"] == str(
+        missing
+    )
+    assert not summary_metadata(prepared, preflight=True)["ready_for_local_validation"]
+
+
+def test_price_gate_excludes_before_requiring_adv_remediation(tmp_path, config):
+    db, sessions, *_ = seed_six(tmp_path, end=START)
+    with db.connect() as connection:
+        connection.execute(
+            "DELETE FROM bars WHERE symbol='A' AND timestamp LIKE ?", (f"{sessions[53]}%",)
+        )
+        connection.execute(
+            "UPDATE bars SET open=1,high=1,low=1,close=1 WHERE symbol='A' AND timestamp LIKE ?",
+            (f"{sessions[59]}%",),
+        )
+    prepared = prepare_pairs_data(db, config, START, START, preflight=True)
+    assert [r["symbol"] for r in prepared.manifest["selected"][str(START)]["35"]] == list("BCDEF")
+    assert prepared.manifest["discovery_counts"]["internal_selection_gaps"] == []
+    assert prepared.manifest["discovery_counts"]["unavailable_liquidity_symbol_sessions"] == 0
+    assert not any(r["symbol"] == "A" for r in prepared.requirements)
+    assert summary_metadata(prepared, preflight=True)["ready_for_local_validation"]
+
+
+def test_history_before_calibration_still_establishes_internal_gap(tmp_path, config):
+    db, sessions, *_ = seed(tmp_path, end=START)
+    with db.connect() as connection:
+        connection.execute(
+            "INSERT INTO bars SELECT symbol,timeframe,'2020-01-02T00:00:00+00:00',"
+            "open,high,low,close,volume,"
+            "trade_count,vwap FROM bars WHERE symbol='A' AND timestamp LIKE ?",
+            (f"{sessions[0]}%",),
+        )
+        connection.execute(
+            "DELETE FROM bars WHERE symbol='A' AND timestamp>=?", (str(sessions[0]),)
+        )
+    prepared = prepare_pairs_data(db, config, START, START, preflight=True)
+    gaps = prepared.manifest["discovery_counts"]["internal_selection_gaps"]
+    assert len(gaps) == 20 and all(r["symbol"] == "A" for r in gaps)
+    assert not prepared.manifest["discovery_counts"]["selection_history_diagnostics"]
+    assert not summary_metadata(prepared, preflight=True)["ready_for_local_validation"]
+
+
+def test_prefix_and_internal_classification_use_only_observations_through_t(config):
+    sessions, days, _, bars = synthetic()
+    # First observation occurs after the earlier signal. It cannot establish history at T.
+    bars = {(s, d): b for (s, d), b in bars.items() if s != "A" or d >= days[2]}
+    earlier = days[:2]
+    original = selection_inputs(identities(), bars, sessions, earlier, config, {"A": days[2]})
+    truncated = {key: b for key, b in bars.items() if key[1] <= earlier[-1]}
+    assert original == selection_inputs(identities(), truncated, sessions, earlier, config)
+    assert (
+        original[1]["selection_history_diagnostics"][0]["status"]
+        == "INSUFFICIENT_SELECTION_HISTORY"
+    )
+    assert not original[1]["internal_selection_gaps"]
+    # During warmup, a hole AFTER the first observation is still an internal gap.
+    bars.pop(("A", days[3]))
+    inputs, counts = selection_inputs(identities(), bars, sessions, [days[4]], config)
+    assert inputs[str(days[4])] == {}
+    assert counts["internal_selection_gaps"][0]["session"] == str(days[3])
+    truncated = {key: b for key, b in bars.items() if key[1] <= days[4]}
+    assert (inputs, counts) == selection_inputs(
+        identities(), truncated, sessions, [days[4]], config
+    )
+
+
+def test_old_history_anchor_keeps_a_calibration_prefix_gap_blocking(tmp_path, config):
+    db, sessions, *_ = seed(tmp_path, end=START)
+    with db.connect() as connection:
+        connection.execute(
+            "INSERT INTO bars SELECT symbol,timeframe,'2020-01-02T00:00:00+00:00',"
+            "open,high,low,close,volume,trade_count,vwap FROM bars "
+            "WHERE symbol='A' AND timestamp LIKE ?",
+            (f"{sessions[0]}%",),
+        )
+        connection.execute(
+            "DELETE FROM bars WHERE symbol='A' AND timestamp LIKE ?", (f"{sessions[0]}%",)
+        )
+    prepared = prepare_pairs_data(db, config, START, START, preflight=True)
+    gaps = [r for r in prepared.requirements if r["status"] == "LOCAL_MISSING_FETCHABLE"]
+    assert len(gaps) == 1 and gaps[0]["session"] == str(sessions[0])
+    assert gaps[0]["roles"] == "PAIR_CALIBRATION_AND_OBSERVATION"
+    assert not summary_metadata(prepared, preflight=True)["ready_for_local_validation"]

@@ -340,7 +340,13 @@ def summary_metadata(prepared, *, preflight):
         "eligible_correlated_pair_sessions": counts["ELIGIBLE"],
         "calibration_status_counts": dict(counts),
         "local_missing_data": missing,
-        "ready_for_local_validation": bool(candidates) and not missing,
+        "ready_for_local_validation": (
+            bool(candidates)
+            and not missing
+            and manifest["discovery_counts"]["selection_membership_resolved"]
+            and manifest["discovery_counts"]["company_security_types_complete"]
+        ),
+        "manifest_version": manifest["manifest_version"],
         "limitations": [
             "CURRENT_UNIVERSE_ONLY",
             "NOT_SURVIVORSHIP_CLEAN",
@@ -358,7 +364,16 @@ def summary_metadata(prepared, *, preflight):
         "short_availability": "NOT_MODELED",
         "german_eu_execution_eligibility": "NOT_MODELED",
         "signal_z_deferred_to_validation": True,
-        "warnings": WARNINGS,
+        "warnings": WARNINGS
+        + (
+            [
+                "AUTHORITATIVE_COMPANY_SECURITY_TYPE_UNAVAILABLE: company-only membership cannot "
+                "be established. A new authoritative per-security source and persistence adapter "
+                "are required; existing Alpaca/SEC metadata sync is insufficient."
+            ]
+            if not manifest["discovery_counts"]["company_security_types_complete"]
+            else []
+        ),
         **prepared.metadata,
     }
 
@@ -398,7 +413,7 @@ def run_pairs_stat_arb_v1(
             daily_requirements={
                 "research_family": definition.research_family,
                 "research_id": definition.research_id,
-                "requirements_version": 2,
+                "requirements_version": 3,
                 "manifest_fingerprint": prepared.manifest["fingerprint"],
                 "market_data_feed": prepared.manifest["market_data_feed"],
                 "market_data_adjustment": prepared.manifest["market_data_adjustment"],
@@ -413,6 +428,12 @@ def run_pairs_stat_arb_v1(
                 ],
                 "nonblocking_diagnostics": [
                     row for row in prepared.coverage if not row["validation_blocking"]
+                ],
+                "unresolved_selection_membership": prepared.manifest["discovery_counts"][
+                    "unresolved_selection_membership"
+                ],
+                "company_security_type_requirements": prepared.manifest["discovery_counts"][
+                    "security_type_diagnostics"
                 ],
                 "source_fingerprint_inputs": prepared.metadata["source_fingerprint_inputs"],
             },

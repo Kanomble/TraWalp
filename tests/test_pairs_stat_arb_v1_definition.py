@@ -9,6 +9,7 @@ import pytest
 from test_pairs_stat_arb_v1 import END, START, candidate, identities, seed, synthetic
 from test_pairs_stat_arb_v1 import config as config
 from test_pairs_stat_arb_v1 import offline as offline
+from test_pairs_stat_arb_v1 import synthetic_security_types as synthetic_security_types
 
 from trading_system.backtest import pairs_stat_arb_v1 as engine
 from trading_system.backtest import research_definitions as definitions
@@ -67,12 +68,12 @@ def test_discovery_manifest_and_calendar_share_definition(monkeypatch, config):
         for day in sessions
     }
     del bars["A", sessions[56]]  # Inside ordinary ADV20, outside the sentinel's last three.
-    assert "A" not in {
-        r["symbol"]
-        for r in discover_pairs(identities(("A", "B", "C")), bars, sessions, days, config)[0][
+    assert (
+        "35"
+        not in discover_pairs(identities(("A", "B", "C")), bars, sessions, days, config)[0][
             str(START)
-        ]["35"]
-    }
+        ]
+    )
     sentinel = replace(
         definitions.PAIRS_STAT_ARB_V1,
         adv_lookback_sessions=3,

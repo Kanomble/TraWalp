@@ -10,6 +10,11 @@ from pathlib import Path
 from trading_system.backtest import research_definitions as definitions
 from trading_system.backtest.liquid_universe import _canonical, fingerprint
 from trading_system.backtest.pairs_stat_arb_v1 import calibration
+from trading_system.backtest.pairs_stat_arb_v1_security import (
+    COMPANY_ONLY_REQUIREMENT,
+    INSTRUMENT_TYPE_SEMANTICS,
+)
+from trading_system.backtest.pairs_stat_arb_v1_selection import SELECTION_GAP_SEMANTICS
 from trading_system.data.market_sessions import trading_sessions_between
 
 MISMATCH = "PAIRS_STAT_ARB_MANIFEST_MISMATCH"
@@ -48,10 +53,15 @@ def manifest_contract(config, start, end):
         raise ValueError("PAIRS_STAT_ARB_REQUIRES_ADJUSTED_DAILY")
     return {
         "manifest_type": "pairs_stat_arb_v1_manifest",
-        "manifest_version": 2,
+        "manifest_version": 3,
         "coverage_semantics": (
-            "SELECTED_ADV_PAIR_CALIBRATION_ELIGIBLE_OUTCOMES;PREFIX_HISTORY_NONBLOCKING"
+            "SELECTED_ADV_PAIR_CALIBRATION_ELIGIBLE_OUTCOMES;PREFIX_HISTORY_NONBLOCKING;"
+            "INTERNAL_SELECTION_GAPS_BLOCKING"
         ),
+        "selection_gap_semantics": SELECTION_GAP_SEMANTICS,
+        "selection_membership_fail_closed": True,
+        "instrument_type_semantics": INSTRUMENT_TYPE_SEMANTICS,
+        "company_only_requirement": COMPANY_ONLY_REQUIREMENT,
         "source_input_scope": "SOURCE_FINGERPRINT_INPUT_NOT_AUTOMATICALLY_VALIDATION_BLOCKING",
         "hypothesis": HYPOTHESIS,
         "research_family": definition.research_family,
@@ -104,13 +114,19 @@ def load_manifest(path, contract):
         raise ValueError(f"{MISMATCH}: {exc}") from exc
 
 
-def verify_membership(payload, universe, digest, bars, sessions):
+def verify_membership(payload, universe, digest, bars, sessions, discovery_counts):
     """Verify saved membership and calibration; never discover/rank replacement pairs."""
     try:
         definition = definitions.PAIRS_STAT_ARB_V1
         lookback = definition.adv_lookback_sessions
         if payload["universe"] != universe or payload["source_fingerprint"] != digest:
             raise ValueError("current identity/SIC or selection-period Daily inputs changed")
+        if _canonical(payload["discovery_counts"]) != _canonical(discovery_counts):
+            raise ValueError("selection input qualification or security type evidence changed")
+        if not discovery_counts["selection_membership_resolved"]:
+            raise ValueError("SELECTION_MEMBERSHIP_UNRESOLVED")
+        if not discovery_counts["company_security_types_complete"]:
+            raise ValueError("AUTHORITATIVE_COMPANY_SECURITY_TYPE_UNAVAILABLE")
         identities = {row["symbol"]: row for row in universe}
         indexes = {str(day): index for index, day in enumerate(sessions)}
         expected = []

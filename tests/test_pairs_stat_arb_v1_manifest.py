@@ -9,8 +9,11 @@ import pytest
 from test_pairs_stat_arb_v1 import END, START, forbidden, seed
 from test_pairs_stat_arb_v1 import config as config
 from test_pairs_stat_arb_v1 import offline as offline
+from test_pairs_stat_arb_v1 import synthetic_security_types as synthetic_security_types
 
+from trading_system.backtest import pairs_stat_arb_v1 as engine
 from trading_system.backtest import pairs_stat_arb_v1_data as data
+from trading_system.backtest import pairs_stat_arb_v1_security as security
 from trading_system.backtest.liquid_universe import fingerprint
 from trading_system.backtest.pairs_stat_arb_v1 import PAIRS_V1
 from trading_system.backtest.pairs_stat_arb_v1_data import prepare_pairs_data
@@ -54,6 +57,10 @@ def test_every_primary_economic_semantic_rejected_even_with_recomputed_checksum(
         "manifest_type",
         "manifest_version",
         "coverage_semantics",
+        "selection_gap_semantics",
+        "selection_membership_fail_closed",
+        "instrument_type_semantics",
+        "company_only_requirement",
         "source_input_scope",
         "hypothesis",
         "requested_start",
@@ -192,3 +199,56 @@ def test_normal_manifest_validation_exports_without_discovery(tmp_path, config, 
     assert after["manifest_fingerprint"] == before["manifest_fingerprint"]
     assert after["candidate_source"] == "MANIFEST"
     assert "trades" in outputs
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_pre_patch_manifest_versions_are_obsolete_even_if_rehashed(tmp_path, config, version):
+    contract = manifest_contract(config, START, END)
+    assert contract["manifest_version"] == 3
+    old = {**contract, "manifest_version": version}
+    with pytest.raises(ValueError, match=f"{MISMATCH}: manifest_version"):
+        load_manifest(save(tmp_path / "obsolete.json", old), contract)
+
+
+def test_unresolved_membership_cannot_be_validated_or_hidden_by_rehash(
+    tmp_path, config, monkeypatch
+):
+    db, sessions, *_ = seed(tmp_path)
+    with db.connect() as connection:
+        connection.execute(
+            "DELETE FROM bars WHERE symbol='A' AND timestamp LIKE ?", (f"{sessions[53]}%",)
+        )
+    prepared = prepare_pairs_data(db, config, START, END, preflight=True)
+    monkeypatch.setattr(engine, "observe", forbidden)
+    with pytest.raises(ValueError, match="SELECTION_MEMBERSHIP_UNRESOLVED"):
+        engine.simulate_prepared_pairs(prepared)
+    with pytest.raises(ValueError, match="SELECTION_MEMBERSHIP_UNRESOLVED"):
+        prepare_pairs_data(db, config, START, END)
+    path = save(tmp_path / "unresolved.json", prepared.manifest)
+    with pytest.raises(ValueError, match="SELECTION_MEMBERSHIP_UNRESOLVED"):
+        prepare_pairs_data(db, config, START, END, candidate_manifest=path)
+    prepared.manifest["discovery_counts"].update(
+        internal_selection_gaps=[],
+        unresolved_selection_membership=[],
+        unresolved_sic2_sessions=0,
+        selection_membership_resolved=True,
+    )
+    save(path, prepared.manifest)
+    with pytest.raises(ValueError, match=MISMATCH):
+        prepare_pairs_data(db, config, START, END, candidate_manifest=path)
+
+
+def test_authoritative_security_provenance_is_bound_to_membership(tmp_path, config, monkeypatch):
+    db, *_ = seed(tmp_path)
+    prepared = prepare_pairs_data(db, config, START, END, preflight=True)
+    path = save(tmp_path / "typed.json", prepared.manifest)
+    monkeypatch.setattr(
+        security,
+        "local_security_types",
+        lambda database, symbols: {
+            s: security.SecurityTypeEvidence("COMMON_STOCK", True, "CHANGED_SYNTHETIC_SOURCE")
+            for s in symbols
+        },
+    )
+    with pytest.raises(ValueError, match=MISMATCH):
+        prepare_pairs_data(db, config, START, END, candidate_manifest=path)
