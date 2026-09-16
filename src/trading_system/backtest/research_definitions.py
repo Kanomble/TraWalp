@@ -194,6 +194,7 @@ class PairsStatArbDefinition:
     pair_ordering: str = "UNORDERED_UNIQUE_SYMBOL_A_LT_SYMBOL_B"
     price_observation: str = "PREVIOUS_OFFICIAL_SESSION_CLOSE"
     adv20: str = "MEAN_CLOSE_TIMES_VOLUME_20_OFFICIAL_SESSIONS_THROUGH_T"
+    adv_lookback_sessions: int = 20
     calibration_sessions: int = 60
     calibration: str = "PREVIOUS_60_OFFICIAL_SESSIONS_EXCLUDING_T_NO_FILL"
     spread: str = "LN_CLOSE_A_DIV_CLOSE_B"

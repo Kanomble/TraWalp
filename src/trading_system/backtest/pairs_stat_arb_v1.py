@@ -2,12 +2,12 @@
 
 import math
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from statistics import correlation, mean, stdev
 
-from trading_system.backtest.research_definitions import PAIRS_STAT_ARB_V1
+from trading_system.backtest import research_definitions as definitions
 
-PAIRS_V1 = PAIRS_STAT_ARB_V1
+PAIRS_V1 = definitions.PAIRS_STAT_ARB_V1  # Compatibility identity; runtime reads the definition.
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,10 +21,12 @@ class PairBar:
 
 def calibration(bars, sessions, index, symbol_a, symbol_b):
     """Only the preceding 60 closes; the observation at index is never consumed."""
-    if index < 60:
+    definition = definitions.PAIRS_STAT_ARB_V1
+    length = definition.calibration_sessions
+    if index < length:
         return {"calibration_status": "INCOMPLETE_CALIBRATION"}
     a, b = [], []
-    for session in sessions[index - 60 : index]:
+    for session in sessions[index - length : index]:
         ba, bb = bars.get((symbol_a, session)), bars.get((symbol_b, session))
         if ba is None or bb is None:
             return {"calibration_status": "INCOMPLETE_CALIBRATION"}
@@ -42,7 +44,9 @@ def calibration(bars, sessions, index, symbol_a, symbol_b):
         **result,
         "correlation": corr,
         "calibration_status": (
-            "ELIGIBLE" if corr is not None and corr >= 0.70 else "LOW_CORRELATION"
+            "ELIGIBLE"
+            if corr is not None and corr >= definition.min_correlation
+            else "LOW_CORRELATION"
         ),
     }
 
@@ -57,20 +61,27 @@ def observe(bars, sessions, index, a, b):
 
 
 def signal_direction(z):
-    if z >= 2.0:
+    threshold = definitions.PAIRS_STAT_ARB_V1.entry_z
+    if z >= threshold:
         return "SIGNAL_POSITIVE_Z", "SHORT", "LONG"
-    if z <= -2.0:
+    if z <= -threshold:
         return "SIGNAL_NEGATIVE_Z", "LONG", "SHORT"
     return "NO_SIGNAL", None, None
 
 
 def crossing(entry_z, current_z):
-    return current_z <= 0 if entry_z >= 2 else current_z >= 0
+    return current_z <= 0 if entry_z >= definitions.PAIRS_STAT_ARB_V1.entry_z else current_z >= 0
 
 
 def fill(reference, direction, *, entry):
     buy = (direction == "LONG") == entry
-    return reference * (1.0005 if buy else 0.9995)
+    slippage = definitions.PAIRS_STAT_ARB_V1.slippage_bps / 10_000
+    return reference * (1 + slippage if buy else 1 - slippage)
+
+
+def leg_weight(direction):
+    definition = definitions.PAIRS_STAT_ARB_V1
+    return definition.long_weight if direction == "LONG" else definition.short_weight
 
 
 def trade_returns(row):
@@ -83,7 +94,7 @@ def trade_returns(row):
         lr = row[f"{exit_key}_{long}"] / row[f"{entry_key}_{long}"] - 1
         sr = 1 - row[f"{exit_key}_{short}"] / row[f"{entry_key}_{short}"]
         row.update({f"{kind}_long_return": lr, f"{kind}_short_return": sr})
-        row[f"{kind}_pair_return"] = 0.5 * lr + 0.5 * sr
+        row[f"{kind}_pair_return"] = leg_weight("LONG") * lr + leg_weight("SHORT") * sr
     row["modeled_cost_drag"] = row["gross_pair_return"] - row["net_pair_return"]
 
 
@@ -117,10 +128,16 @@ TRADE_FIELDS = [
 def simulate_trade(candidate, bars, sessions, index, signal_end):
     """Resolve one fixed pair, including data terminals, within its five-session horizon."""
     a, b = candidate["symbol_a"], candidate["symbol_b"]
+    definition = definitions.PAIRS_STAT_ARB_V1
     row = {**candidate, **dict.fromkeys(TRADE_FIELDS)}
     row.update(entry_status="ENTRY_UNOBSERVABLE", mean_crossing_observed=False)
-    row.update(long_weight=0.5, short_weight=0.5, gross_notional=1.0, net_notional=0.0)
-    horizon = min(index + 5, len(sessions) - 1)
+    row.update(
+        long_weight=definition.long_weight,
+        short_weight=definition.short_weight,
+        gross_notional=definition.gross_notional,
+        net_notional=definition.long_weight - definition.short_weight,
+    )
+    horizon = min(index + definition.max_hold_sessions, len(sessions) - 1)
     blocked_until = sessions[horizon]
 
     def unavailable(session, status):
@@ -143,7 +160,9 @@ def simulate_trade(candidate, bars, sessions, index, signal_end):
         row[f"entry_fill_{leg}"] = fill(bar.open, row[f"direction_{leg}"], entry=True)
     scheduled = None
     path = []
-    for holding, session in enumerate(sessions[index + 1 : index + 6], 1):
+    for holding, session in enumerate(
+        sessions[index + 1 : index + definition.max_hold_sessions + 1], 1
+    ):
         ba, bb = bars.get((a, session)), bars.get((b, session))
         row["holding_sessions"] = holding
         if ba is None or bb is None:
@@ -152,7 +171,7 @@ def simulate_trade(candidate, bars, sessions, index, signal_end):
             reason, reference = "MEAN_REVERSION", "open"
         else:
             pnl = sum(
-                0.5
+                leg_weight(row[f"direction_{leg}"])
                 * (bar.close / row[f"entry_fill_{leg}"] - 1)
                 * (1 if row[f"direction_{leg}"] == "LONG" else -1)
                 for leg, bar in (("a", ba), ("b", bb))
@@ -160,7 +179,7 @@ def simulate_trade(candidate, bars, sessions, index, signal_end):
             path.append(pnl)
             row.update(pair_mfe=max(path), pair_mae=min(path))
             observation = observe(bars, sessions, index + holding, a, b)
-            if holding == 5:
+            if holding == definition.max_hold_sessions:
                 reason, reference = "MAX_HOLD_5", "close"
                 row["exit_trigger_session"] = session.isoformat()
             elif observation is None:
@@ -181,7 +200,8 @@ def simulate_trade(candidate, bars, sessions, index, signal_end):
             exit_execution_session=session.isoformat(),
         )
         trade_returns(row)
-        spy_entry, spy_exit = bars.get(("SPY", entry)), bars.get(("SPY", session))
+        spy_entry = bars.get((definition.benchmark_symbol, entry))
+        spy_exit = bars.get((definition.benchmark_symbol, session))
         if spy_entry is not None and spy_exit is not None:
             row["spy_return"] = getattr(spy_exit, reference) / spy_entry.open - 1
         return row, session
@@ -191,6 +211,8 @@ def simulate_trade(candidate, bars, sessions, index, signal_end):
 
 def simulate_prepared_pairs(prepared):
     """No persistence handles: zero SQLite queries, all prices already in memory."""
+    if prepared.manifest["strategy_definition"] != asdict(definitions.PAIRS_STAT_ARB_V1):
+        raise ValueError("PAIRS_STAT_ARB_MANIFEST_MISMATCH: execution definition changed")
     indexes = {day: index for index, day in enumerate(prepared.sessions)}
     evaluations, signals = [], []
     grouped = defaultdict(list)

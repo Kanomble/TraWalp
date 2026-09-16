@@ -7,7 +7,8 @@ from itertools import groupby
 from pathlib import Path
 from statistics import mean, median
 
-from trading_system.backtest.pairs_stat_arb_v1 import PAIRS_V1, simulate_prepared_pairs
+from trading_system.backtest import research_definitions as definitions
+from trading_system.backtest.pairs_stat_arb_v1 import leg_weight, simulate_prepared_pairs
 from trading_system.backtest.pairs_stat_arb_v1_data import prepare_pairs_data
 from trading_system.backtest.report import _atomic_csv, _atomic_text
 
@@ -109,6 +110,7 @@ def distribution(values):
 
 
 def diagnostics(prepared, evaluations, signals):
+    definition = definitions.PAIRS_STAT_ARB_V1
     trades = [row for row in signals if row["net_pair_return"] is not None]
     summary = core_metrics(trades)
     summary.update(
@@ -117,8 +119,8 @@ def diagnostics(prepared, evaluations, signals):
             row["calibration_status"] == "ELIGIBLE" for row in evaluations
         ),
         signals=len(signals),
-        positive_z_signals=sum(row["entry_z"] >= 2 for row in signals),
-        negative_z_signals=sum(row["entry_z"] <= -2 for row in signals),
+        positive_z_signals=sum(row["entry_z"] >= definition.entry_z for row in signals),
+        negative_z_signals=sum(row["entry_z"] <= -definition.entry_z for row in signals),
         entered_trades=sum(row["entry_status"] == "EXECUTED" for row in signals),
         unobservable_entries=sum(row["entry_status"] == "ENTRY_UNOBSERVABLE" for row in signals),
         unobservable_exits=sum(row["status"] == "EXIT_UNOBSERVABLE" for row in signals),
@@ -134,7 +136,7 @@ def diagnostics(prepared, evaluations, signals):
         "exit_attribution": ["MEAN_REVERSION", "MAX_HOLD_5"],
         "z_bucket_attribution": ["2.0_TO_2.5", "2.5_TO_3.0", "OVER_3.0"],
         "correlation_bucket_attribution": ["0.70_TO_0.80", "0.80_TO_0.90", "0.90_TO_1.00"],
-        "holding_attribution": [str(i) for i in range(1, 6)],
+        "holding_attribution": [str(i) for i in range(1, definition.max_hold_sessions + 1)],
     }
     for name, key in (
         ("monthly", lambda row: row["signal_session"][:7]),
@@ -222,7 +224,9 @@ def diagnostics(prepared, evaluations, signals):
             item["pair_trades"] += 1
             side = row[f"direction_{leg}"].lower()
             for kind in ("gross", "net"):
-                item[f"{kind}_pnl_contribution"] += 0.5 * row[f"{kind}_{side}_return"]
+                item[f"{kind}_pnl_contribution"] += (
+                    leg_weight(side.upper()) * row[f"{kind}_{side}_return"]
+                )
     tables["symbol_concentration"] = [{"symbol": s, **r} for s, r in sorted(symbols.items())]
     concentration["unique_traded_symbols"] = len(symbols)
     summary["concentration"] = concentration
@@ -248,8 +252,12 @@ def diagnostics(prepared, evaluations, signals):
             {
                 "side": side.upper(),
                 "executed_trades": len(trades),
-                "gross_contribution": sum(0.5 * r[f"gross_{side}_return"] for r in trades),
-                "net_contribution": sum(0.5 * r[f"net_{side}_return"] for r in trades),
+                "gross_contribution": sum(
+                    leg_weight(side.upper()) * r[f"gross_{side}_return"] for r in trades
+                ),
+                "net_contribution": sum(
+                    leg_weight(side.upper()) * r[f"net_{side}_return"] for r in trades
+                ),
             }
             for side in ("long", "short")
         ]
@@ -281,23 +289,32 @@ def diagnostics(prepared, evaluations, signals):
     if trades:
         long_ratio = mean(1 + r["gross_long_return"] for r in trades)
         short_ratio = mean(1 - r["gross_short_return"] for r in trades)
-        root_l, root_s = math.sqrt(long_ratio), math.sqrt(short_ratio)
-        summary["break_even_adverse_bps_per_fill"] = 10000 * (root_l - root_s) / (root_l + root_s)
+        # Root of weighted net expectancy under adverse fills, without rerunning trades.
+        wl, ws = definition.long_weight, definition.short_weight
+        a = wl * long_ratio - ws * short_ratio + wl - ws
+        c = wl * long_ratio - ws * short_ratio - wl + ws
+        p = wl * long_ratio + ws * short_ratio
+        summary["break_even_adverse_bps_per_fill"] = 10000 * c / (p + math.sqrt(p * p - a * c))
     else:
         summary["break_even_adverse_bps_per_fill"] = None
     return summary, tables
 
 
 def summary_metadata(prepared, *, preflight):
+    definition = definitions.PAIRS_STAT_ARB_V1
     manifest = prepared.manifest
     candidates = manifest["candidates"]
     counts = Counter(row["calibration_status"] for row in candidates)
-    missing = sum(row["status"] != "REQUIRED_PRESENT" for row in prepared.coverage)
+    missing = sum(
+        row["sessions"]
+        for row in prepared.coverage
+        if row["validation_blocking"] and row["status"] == "LOCAL_MISSING_FETCHABLE"
+    )
     selected = manifest["selected"]
     return {
-        "research_family": PAIRS_V1.research_family,
-        "research_id": PAIRS_V1.research_id,
-        "status": PAIRS_V1.status,
+        "research_family": definition.research_family,
+        "research_id": definition.research_id,
+        "status": definition.status,
         "stage": "PREFLIGHT" if preflight else "VALIDATION",
         "requested_start": str(prepared.start),
         "requested_end": str(prepared.end),
@@ -332,12 +349,12 @@ def summary_metadata(prepared, *, preflight):
         "market_data_feed": manifest["market_data_feed"],
         "market_data_adjustment": manifest["market_data_adjustment"],
         "network_used": False,
-        "portfolio_strategy_defined": False,
-        "dollar_neutral": True,
-        "beta_neutral": False,
-        "commission_bps": 0,
-        "borrow_fee_bps": 0,
-        "slippage_bps_per_fill": 5,
+        "portfolio_strategy_defined": definition.portfolio_strategy_defined,
+        "dollar_neutral": definition.dollar_neutral,
+        "beta_neutral": definition.beta_neutral,
+        "commission_bps": definition.commission_bps,
+        "borrow_fee_bps": definition.borrow_fee_bps,
+        "slippage_bps_per_fill": definition.slippage_bps,
         "short_availability": "NOT_MODELED",
         "german_eu_execution_eligibility": "NOT_MODELED",
         "signal_z_deferred_to_validation": True,
@@ -358,6 +375,7 @@ def run_pairs_stat_arb_v1(
     candidate_manifest=None,
     rediscover_candidates=False,
 ):
+    definition = definitions.PAIRS_STAT_ARB_V1
     if preflight:
         if candidate_manifest is not None or rediscover_candidates:
             raise ValueError("Pairs preflight discovers its own immutable membership")
@@ -378,14 +396,25 @@ def run_pairs_stat_arb_v1(
         documents.update(
             pair_candidates=prepared.manifest,
             daily_requirements={
-                "research_family": PAIRS_V1.research_family,
-                "research_id": PAIRS_V1.research_id,
+                "research_family": definition.research_family,
+                "research_id": definition.research_id,
+                "requirements_version": 2,
                 "manifest_fingerprint": prepared.manifest["fingerprint"],
                 "market_data_feed": prepared.manifest["market_data_feed"],
                 "market_data_adjustment": prepared.manifest["market_data_adjustment"],
-                "timeframe": "1d",
+                "timeframe": definition.timeframe,
                 "outcome_tail_sessions": prepared.manifest["outcome_tail_sessions"],
-                "required_sessions": prepared.requirements,
+                "required_ranges": prepared.requirements,
+                "required_sessions_scope": "UNRESOLVED_VALIDATION_BLOCKING_REQUIREMENTS_ONLY",
+                "required_sessions": [
+                    row
+                    for row in prepared.requirements
+                    if row["status"] == "LOCAL_MISSING_FETCHABLE"
+                ],
+                "nonblocking_diagnostics": [
+                    row for row in prepared.coverage if not row["validation_blocking"]
+                ],
+                "source_fingerprint_inputs": prepared.metadata["source_fingerprint_inputs"],
             },
         )
     else:

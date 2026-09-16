@@ -53,6 +53,8 @@ def test_every_primary_economic_semantic_rejected_even_with_recomputed_checksum(
     [
         "manifest_type",
         "manifest_version",
+        "coverage_semantics",
+        "source_input_scope",
         "hypothesis",
         "requested_start",
         "requested_end",

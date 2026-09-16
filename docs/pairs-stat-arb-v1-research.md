@@ -90,6 +90,43 @@ settings are bound and any conflicting local coverage metadata is rejected;
 missing provenance is prominently reported rather than claimed verified.
 Provider-verified ranges are descriptive only, not proof of a session's absence.
 
+### Coverage qualification (manifest schema 2)
+
+An incomplete ADV20 window makes that symbol-session ineligible for ranking. It
+does not, by itself, create a fetch request. `INSUFFICIENT_SELECTION_HISTORY`
+is a non-blocking diagnostic; `unavailable_liquidity_symbol_sessions` remains
+visible. Each symbol has one diagnostic summary with first/last affected signal
+dates and the affected-session count (not a claim that the whole span is missing).
+The classification does not assert a listing date or infer why history is absent.
+Only observations available through each signal session determine eligibility.
+
+`VALIDATION_BLOCKING_REQUIREMENT` covers frozen selected names' ADV/previous-close
+windows, frozen pairs' calibration/observation windows, and eligible pairs'
+possible five-session outcomes. A missing bar within an established required
+history or a possible outcome window remains `LOCAL_MISSING_FETCHABLE` and blocks
+readiness. A calibration prefix preceding any locally observed history is instead
+`INSUFFICIENT_CALIBRATION_HISTORY`: the pair remains `INCOMPLETE_CALIBRATION`,
+cannot signal, and nonexistent prefix history is not requested. No fill, replacement,
+or future listing information is used. Readiness counts only unresolved blocking
+requirements; insufficient histories remain explicit even when readiness is true.
+
+All current-universe inputs still participate in the membership digest, including
+missing markers. They are described separately as `SOURCE_FINGERPRINT_INPUT`,
+which is not an automatic remediation requirement. The coverage CSV compresses
+present requirements and insufficient calibration prefixes into contiguous official
+session ranges, while preserving each missing required bar as an actionable row.
+The requirements JSON contains compact `required_ranges`, unresolved-only
+`required_sessions`, non-blocking diagnostics, and a compact fingerprint-scope
+descriptor. It never enumerates the entire current-universe/history cross product.
+
+Runtime and manifest construction read the same frozen `PAIRS_STAT_ARB_V1`
+definition, including numeric `adv_lookback_sessions=20`, `calibration_sessions=60`,
+`min_correlation=0.70`, `entry_z=2.0`, `long_weight=short_weight=0.50`,
+`slippage_bps=5.0`, `max_hold_sessions=5`, `top_n=5`, and `outcome_tail_sessions=5`.
+No new parameter choices are exposed. Simulation also rejects a prepared manifest
+whose definition differs from the current execution definition. Schema 1 manifests
+must be replaced; this schema correction precedes any historical Pairs preflight.
+
 Signals are confined to the requested period. Five official sessions after its
 end are outcome-only. Missing required tail observations yield
 `OUTCOME_CENSORED`; missing in-period entry/exit data yields explicit

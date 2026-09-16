@@ -432,7 +432,7 @@ def test_repeated_active_signals_ignored_then_reentry(monkeypatch):
         signal_dates={str(d): d for d in days},
         bars=bars,
         end=END,
-        manifest={"candidates": candidates},
+        manifest={"candidates": candidates, "strategy_definition": asdict(PAIRS_V1)},
     )
     evaluations, signals = simulate_prepared_pairs(prepared)
     assert [r["signal_session"] for r in signals] == [str(days[0]), str(days[5])]
@@ -491,7 +491,7 @@ def test_no_signal_evaluation_produces_no_trade(config):
         signal_dates={str(d): d for d in days},
         bars=bars,
         end=START,
-        manifest={"candidates": candidates},
+        manifest={"candidates": candidates, "strategy_definition": asdict(PAIRS_V1)},
     )
     evaluations, signals = simulate_prepared_pairs(prepared)
     assert len(evaluations) == 1 and evaluations[0]["status"] == "NO_SIGNAL"

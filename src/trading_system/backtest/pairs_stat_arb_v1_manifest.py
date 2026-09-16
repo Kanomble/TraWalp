@@ -7,8 +7,9 @@ from decimal import Decimal
 from itertools import combinations
 from pathlib import Path
 
+from trading_system.backtest import research_definitions as definitions
 from trading_system.backtest.liquid_universe import _canonical, fingerprint
-from trading_system.backtest.pairs_stat_arb_v1 import PAIRS_V1, calibration
+from trading_system.backtest.pairs_stat_arb_v1 import calibration
 from trading_system.data.market_sessions import trading_sessions_between
 
 MISMATCH = "PAIRS_STAT_ARB_MANIFEST_MISMATCH"
@@ -23,27 +24,39 @@ HYPOTHESIS = (
 
 
 def calendar_window(start, end):
+    definition = definitions.PAIRS_STAT_ARB_V1
     days = trading_sessions_between(start, end)
     if not days:
         raise ValueError("PAIRS_STAT_ARB_NO_SIGNAL_SESSIONS")
-    prior = trading_sessions_between(days[0] - timedelta(days=180), days[0])[:-1][-60:]
-    tail = trading_sessions_between(end + timedelta(days=1), end + timedelta(days=20))[:5]
-    if len(prior) != 60 or len(tail) != 5:
+    lookback = max(definition.calibration_sessions, definition.adv_lookback_sessions)
+    prior = trading_sessions_between(days[0] - timedelta(days=lookback * 3), days[0])[:-1][
+        -lookback:
+    ]
+    tail_length = definition.outcome_tail_sessions
+    tail = trading_sessions_between(end + timedelta(days=1), end + timedelta(days=tail_length * 4))[
+        :tail_length
+    ]
+    if len(prior) != lookback or len(tail) != tail_length:
         raise ValueError("PAIRS_STAT_ARB_CALENDAR_UNAVAILABLE")
     return prior + days + tail, days, tail
 
 
 def manifest_contract(config, start, end):
+    definition = definitions.PAIRS_STAT_ARB_V1
     sessions, days, tail = calendar_window(start, end)
     if config.universe.market_data_adjustment == "raw":
         raise ValueError("PAIRS_STAT_ARB_REQUIRES_ADJUSTED_DAILY")
     return {
         "manifest_type": "pairs_stat_arb_v1_manifest",
-        "manifest_version": 1,
+        "manifest_version": 2,
+        "coverage_semantics": (
+            "SELECTED_ADV_PAIR_CALIBRATION_ELIGIBLE_OUTCOMES;PREFIX_HISTORY_NONBLOCKING"
+        ),
+        "source_input_scope": "SOURCE_FINGERPRINT_INPUT_NOT_AUTOMATICALLY_VALIDATION_BLOCKING",
         "hypothesis": HYPOTHESIS,
-        "research_family": PAIRS_V1.research_family,
-        "research_id": PAIRS_V1.research_id,
-        "status_at_creation": PAIRS_V1.status,
+        "research_family": definition.research_family,
+        "research_id": definition.research_id,
+        "status_at_creation": definition.status,
         "requested_start": start.isoformat(),
         "requested_end": end.isoformat(),
         "signal_start": days[0].isoformat(),
@@ -51,7 +64,7 @@ def manifest_contract(config, start, end):
         "signal_sessions": [str(day) for day in days],
         "history_sessions": [str(day) for day in sessions],
         "outcome_tail_sessions": [str(day) for day in tail],
-        "strategy_definition": asdict(PAIRS_V1),
+        "strategy_definition": asdict(definition),
         "min_price_source": "config.universe.min_price",
         "min_price": config.universe.min_price,
         "min_adv20_source": "config.universe.min_avg_dollar_volume_20d",
@@ -94,6 +107,8 @@ def load_manifest(path, contract):
 def verify_membership(payload, universe, digest, bars, sessions):
     """Verify saved membership and calibration; never discover/rank replacement pairs."""
     try:
+        definition = definitions.PAIRS_STAT_ARB_V1
+        lookback = definition.adv_lookback_sessions
         if payload["universe"] != universe or payload["source_fingerprint"] != digest:
             raise ValueError("current identity/SIC or selection-period Daily inputs changed")
         identities = {row["symbol"]: row for row in universe}
@@ -104,7 +119,7 @@ def verify_membership(payload, universe, digest, bars, sessions):
             raise ValueError("selected session membership")
         for day, groups in selected.items():
             for sic2, names in sorted(groups.items()):
-                if not 1 <= len(names) <= 5:
+                if not 1 <= len(names) <= definition.top_n:
                     raise ValueError("top-five membership")
                 if names != sorted(names, key=lambda row: (-row["adv20"], row["symbol"])):
                     raise ValueError("liquidity ordering")
@@ -120,10 +135,14 @@ def verify_membership(payload, universe, digest, bars, sessions):
                     index = indexes[day]
                     symbol = row["symbol"]
                     prior = bars.get((symbol, sessions[index - 1]))
-                    window = [bars.get((symbol, s)) for s in sessions[index - 19 : index + 1]]
+                    window = [
+                        bars.get((symbol, s)) for s in sessions[index - lookback + 1 : index + 1]
+                    ]
                     if prior is None or any(bar is None for bar in window):
                         raise ValueError("selected Daily window")
-                    adv = float(sum(Decimal(str(bar.close)) * bar.volume for bar in window) / 20)
+                    adv = float(
+                        sum(Decimal(str(bar.close)) * bar.volume for bar in window) / lookback
+                    )
                     if row["adv20"] != adv or row["previous_close"] != prior.close:
                         raise ValueError("saved liquidity observations")
                 by_symbol = {row["symbol"]: row for row in names}
