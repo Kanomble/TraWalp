@@ -547,6 +547,8 @@ def _parser() -> argparse.ArgumentParser:
         ("analyze-champion-edge-v1", "Local descriptive attribution of frozen F/configured/C1"),
         ("preflight-orb-v1", "Local PIT liquid Top-100 and native 15m data qualification"),
         ("validate-orb-v1", "Local independent ORB-V1-15M-LONG signal-level research"),
+        ("preflight-pairs-stat-arb-v1", "Local Daily company/SIC2 pair candidate qualification"),
+        ("validate-pairs-stat-arb-v1", "Local independent frozen Daily pair-trade research"),
         (
             "preflight-intraday-reversal-v1",
             "Local liquid Top-100 and native first-hour reversal coverage",
@@ -571,6 +573,7 @@ def _parser() -> argparse.ArgumentParser:
         if name in {
             "validate-f-intraday-entry",
             "validate-orb-v1",
+            "validate-pairs-stat-arb-v1",
             "validate-intraday-reversal-v1",
             "validate-market-intraday-momentum-v1",
         }:
@@ -669,6 +672,34 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
     database = Database(settings.strategy.storage.database_path)
+    if args.command in {"preflight-pairs-stat-arb-v1", "validate-pairs-stat-arb-v1"}:
+        # Read-only research dispatch precedes initialization/provider construction.
+        from sqlite3 import Error as SQLiteError
+
+        from trading_system.backtest.pairs_stat_arb_v1_research import run_pairs_stat_arb_v1
+
+        try:
+            summary, paths = run_pairs_stat_arb_v1(
+                database,
+                settings.strategy,
+                args.start,
+                args.end,
+                settings.strategy.storage.reports_path,
+                stem=args.output_stem,
+                preflight=args.command == "preflight-pairs-stat-arb-v1",
+                candidate_manifest=getattr(args, "candidate_manifest", None),
+                rediscover_candidates=getattr(args, "rediscover_candidates", False),
+            )
+            print(f"{summary['research_id']}: {summary['status']}; pair-level research")
+            print(f"Ready for local validation: {summary['ready_for_local_validation']}")
+            print("\n".join(summary["warnings"]))
+            print("\n".join(f"{name}: {path}" for name, path in paths.items()))
+            return 0
+        except KeyboardInterrupt:
+            return 130
+        except (OSError, ValueError, SQLiteError) as exc:
+            print(f"Pairs research refused: {exc}", file=sys.stderr)
+            return 1
     if args.command == "analyze-champion-edge-v1":
         from sqlite3 import Error as SQLiteError
 

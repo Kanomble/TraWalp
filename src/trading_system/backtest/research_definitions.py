@@ -178,6 +178,61 @@ MARKET_INTRADAY_MOMENTUM_V1 = MarketIntradayMomentumDefinition()
 
 
 @dataclass(frozen=True, slots=True)
+class PairsStatArbDefinition:
+    research_family: str = "research-pairs-stat-arb-v1"
+    research_id: str = "PAIRS-STAT-ARB-V1-DAILY"
+    status: str = "ACTIVE"
+    asset_class: str = "US_EQUITY"
+    tradable_required: bool = True
+    company_identity_required: bool = True
+    sic_required: bool = True
+    benchmark_symbol: str = "SPY"
+    benchmark_role: str = "DIAGNOSTIC_ONLY_EXCLUDED_FROM_PAIR_UNIVERSE"
+    grouping: str = "CURRENT_LOCAL_SIC2_FIRST_TWO_DIGITS_OF_FOUR_DIGIT_SIC"
+    top_n: int = 5
+    ranking: str = "ADV20_DESC_SYMBOL_ASC"
+    pair_ordering: str = "UNORDERED_UNIQUE_SYMBOL_A_LT_SYMBOL_B"
+    price_observation: str = "PREVIOUS_OFFICIAL_SESSION_CLOSE"
+    adv20: str = "MEAN_CLOSE_TIMES_VOLUME_20_OFFICIAL_SESSIONS_THROUGH_T"
+    calibration_sessions: int = 60
+    calibration: str = "PREVIOUS_60_OFFICIAL_SESSIONS_EXCLUDING_T_NO_FILL"
+    spread: str = "LN_CLOSE_A_DIV_CLOSE_B"
+    standard_deviation: str = "SAMPLE_DDOF_1_STRICTLY_POSITIVE"
+    correlation: str = "PEARSON_59_CONSECUTIVE_CALIBRATION_LOG_RETURNS"
+    min_correlation: float = 0.70
+    z_score: str = "CURRENT_SPREAD_MINUS_CALIBRATION_MEAN_DIV_SAMPLE_STD"
+    entry_z: float = 2.0
+    direction: str = "Z_GE_2_SHORT_A_LONG_B_Z_LE_MINUS_2_LONG_A_SHORT_B"
+    entry: str = "NEXT_OFFICIAL_SESSION_OPEN_BOTH_LEGS_NO_SUBSTITUTION"
+    long_weight: float = 0.50
+    short_weight: float = 0.50
+    gross_notional: float = 1.0
+    dollar_neutral: bool = True
+    beta_neutral: bool = False
+    slippage_bps: float = 5.0
+    commission_bps: float = 0.0
+    borrow_fee_bps: float = 0.0
+    mean_exit: str = "POSITIVE_ENTRY_Z_TO_LE_ZERO_NEGATIVE_TO_GE_ZERO"
+    mean_exit_execution: str = "NEXT_OFFICIAL_OPEN_BEFORE_CLOSE_PROCESSING"
+    max_hold_sessions: int = 5
+    max_hold_execution: str = "FIFTH_HOLDING_SESSION_CLOSE_ENTRY_COUNTS_AS_ONE"
+    stop: None = None
+    profit_target: None = None
+    trailing_stop: None = None
+    partial_exit: None = None
+    reentry: str = "ONE_ACTIVE_PER_PAIR_IGNORE_SIGNALS_REENTER_FROM_EXIT_DAY_CLOSE"
+    unobservable_block: str = "BLOCK_PAIR_THROUGH_ORIGINAL_FIVE_SESSION_HORIZON"
+    outcome_tail_sessions: int = 5
+    timeframe: str = "1d"
+    calendar: str = "XNYS"
+    portfolio_strategy_defined: bool = False
+    automatic_champion_selection: bool = False
+
+
+PAIRS_STAT_ARB_V1 = PairsStatArbDefinition()
+
+
+@dataclass(frozen=True, slots=True)
 class ChampionEdgeDecompositionDefinition:
     research_family: str = "research-f-champion-edge-decomposition-v1"
     research_id: str = "F-CHAMPION-EDGE-DECOMPOSITION-V1"
