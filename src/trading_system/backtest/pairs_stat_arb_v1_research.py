@@ -13,7 +13,8 @@ from trading_system.backtest.pairs_stat_arb_v1_data import prepare_pairs_data
 from trading_system.backtest.report import _atomic_csv, _atomic_text
 
 WARNINGS = [
-    "CURRENT_UNIVERSE_ONLY; NOT_SURVIVORSHIP_CLEAN; CURRENT_LOCAL_SIC_NOT_PIT. "
+    "CURRENT_UNIVERSE_ONLY; NOT_SURVIVORSHIP_CLEAN; "
+    "CURRENT_REFERENCE_SECURITY_TYPE_NOT_PIT; CURRENT_LOCAL_SIC_NOT_PIT. "
     "SIC classification is current/local and not guaranteed PIT-safe.",
     "Short availability, borrow availability, hard-to-borrow fees, locate fees, broker "
     "execution eligibility and German/EU retail execution eligibility are NOT_MODELED. "
@@ -350,6 +351,7 @@ def summary_metadata(prepared, *, preflight):
         "limitations": [
             "CURRENT_UNIVERSE_ONLY",
             "NOT_SURVIVORSHIP_CLEAN",
+            "CURRENT_REFERENCE_SECURITY_TYPE_NOT_PIT",
             "CURRENT_LOCAL_SIC_NOT_PIT",
         ],
         "market_data_feed": manifest["market_data_feed"],
@@ -368,8 +370,8 @@ def summary_metadata(prepared, *, preflight):
         + (
             [
                 "AUTHORITATIVE_COMPANY_SECURITY_TYPE_UNAVAILABLE: company-only membership cannot "
-                "be established. A new authoritative per-security source and persistence adapter "
-                "are required; existing Alpaca/SEC metadata sync is insufficient."
+                "be established. Review security-reference/SEC identity requirements locally; "
+                "only explicit sync-security-reference may fetch Massive classification."
             ]
             if not manifest["discovery_counts"]["company_security_types_complete"]
             else []

@@ -2,7 +2,6 @@
 
 import hashlib
 import math
-import re
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
@@ -13,6 +12,7 @@ from trading_system.backtest import research_definitions as definitions
 from trading_system.backtest.liquid_universe import ResearchReadOnlyDatabase, _canonical
 from trading_system.backtest.pairs_stat_arb_v1 import PairBar, calibration
 from trading_system.backtest.pairs_stat_arb_v1_manifest import (
+    MISMATCH,
     calendar_window,
     load_manifest,
     manifest_contract,
@@ -21,6 +21,16 @@ from trading_system.backtest.pairs_stat_arb_v1_manifest import (
 )
 from trading_system.backtest.pairs_stat_arb_v1_selection import selection_inputs
 from trading_system.data.qualification import provider_range_verified
+from trading_system.data.security_reference import (
+    MAPPING_VERSION,
+    cik_state,
+    membership_fingerprint,
+    normalize_cik,
+    valid_sic,
+)
+from trading_system.data.security_reference import (
+    digest as reference_digest,
+)
 
 
 @dataclass
@@ -36,53 +46,62 @@ class PreparedPairs:
     metadata: dict
 
 
-def company_universe(database, *, with_diagnostics=False):
-    assets = {a.symbol: a for a in database.list_tradable_assets()}
-    result = []
-    for company in database.list_tradable_companies():
-        asset = assets.get(company.symbol)
-        sic = (company.sic or "").strip()
-        if (
-            asset is None
-            or company.symbol == definitions.PAIRS_STAT_ARB_V1.benchmark_symbol
-            or not asset.tradable
-            or asset.asset_class != definitions.PAIRS_STAT_ARB_V1.asset_class
-            or not re.fullmatch(r"[0-9]{3,4}", sic)
-            or int(sic) == 0
-        ):
+def company_universe(database, *, with_diagnostics=False, reference_snapshot=None):
+    assets = sorted(
+        (
+            a
+            for a in database.list_tradable_assets()
+            if a.tradable
+            and a.asset_class == definitions.PAIRS_STAT_ARB_V1.asset_class
+            and a.symbol != definitions.PAIRS_STAT_ARB_V1.benchmark_symbol
+        ),
+        key=lambda a: a.symbol,
+    )
+    companies = {c.symbol: c for c in database.list_tradable_companies()}
+    evidence = security.local_security_types(
+        database, [a.symbol for a in assets], reference_snapshot=reference_snapshot
+    )
+    qualified, diagnostics = [], []
+    for asset in assets:
+        company = companies.get(asset.symbol)
+        sic = valid_sic(company.sic) if company else None
+        kind = evidence.get(asset.symbol, security.SecurityTypeEvidence())
+        identity_state = cik_state(company.cik if company else None, kind.provider_cik)
+        row = {
+            "symbol": asset.symbol,
+            "cik": company.cik if company else None,
+            "sic": sic,
+            "sic2": sic[:2] if sic else None,
+            "tradable": True,
+            "asset_class": asset.asset_class,
+            "cik_cross_check": identity_state,
+            **asdict(kind),
+        }
+        if not kind.reference_present:
+            status, blocking = "SECURITY_TYPE_REFERENCE_MISSING", True
+        elif not kind.resolved:
+            status, blocking = "SECURITY_TYPE_UNKNOWN", True
+        elif identity_state == "CIK_MISMATCH":
+            status, blocking = "SECURITY_IDENTITY_CONFLICT", True
+        elif not kind.company_common_stock:
+            status, blocking = "EXCLUDED_SECURITY_TYPE", False
+        elif company is None or normalize_cik(company.cik) is None:
+            status, blocking = "SEC_ISSUER_IDENTITY_MISSING", True
+        elif sic is None:
+            status, blocking = "SEC_SIC_MISSING_OR_INVALID", True
+        else:
+            qualified.append(row)
             continue
-        sic = sic.zfill(4)
-        result.append(
+        diagnostics.append(
             {
-                "symbol": company.symbol,
-                "cik": company.cik,
-                "sic": sic,
-                "sic2": sic[:2],
-                "tradable": True,
-                "asset_class": definitions.PAIRS_STAT_ARB_V1.asset_class,
+                **row,
+                "record_kind": "SYMBOL_IDENTITY",
+                "input_scope": "COMPANY_SECURITY_TYPE_REQUIREMENT",
+                "roles": "COMPANY_COMMON_STOCK_IDENTITY",
+                "validation_blocking": blocking,
+                "status": status,
             }
         )
-    result.sort(key=lambda row: row["symbol"])
-    evidence = security.local_security_types(database, [r["symbol"] for r in result])
-    qualified, diagnostics = [], []
-    for row in result:
-        kind = evidence.get(row["symbol"], security.SecurityTypeEvidence())
-        if kind.company_common_stock:
-            qualified.append({**row, **asdict(kind)})
-        else:
-            diagnostics.append(
-                {
-                    **row,
-                    **asdict(kind),
-                    "record_kind": "SYMBOL_IDENTITY",
-                    "input_scope": "COMPANY_SECURITY_TYPE_REQUIREMENT",
-                    "roles": "COMPANY_COMMON_STOCK_IDENTITY",
-                    "validation_blocking": not kind.resolved,
-                    "status": security.UNAVAILABLE
-                    if not kind.resolved
-                    else "EXCLUDED_SECURITY_TYPE",
-                }
-            )
     if with_diagnostics:
         return qualified, diagnostics
     return qualified
@@ -265,18 +284,48 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
     )
     database = ResearchReadOnlyDatabase(database.path)
     sessions, days, tail = calendar_window(start, end)
-    universe, security_diagnostics = company_universe(database, with_diagnostics=True)
+    reference_snapshot = database.security_reference_snapshot()
+    reference_records, snapshot_metadata = reference_snapshot
+    reference_symbols = [
+        a.symbol
+        for a in database.list_tradable_assets()
+        if a.asset_class == definitions.PAIRS_STAT_ARB_V1.asset_class
+    ]
+    contract.update(
+        security_reference_fingerprint=membership_fingerprint(reference_records, reference_symbols),
+        provider_type_catalog_fingerprint=(
+            reference_digest(snapshot_metadata["type_catalog"]) if snapshot_metadata else None
+        ),
+    )
+    if snapshot_metadata and snapshot_metadata["mapping_version"] != MAPPING_VERSION:
+        raise ValueError("SECURITY_REFERENCE_MAPPING_VERSION_MISMATCH")
+    if candidate_manifest is not None:
+        payload = load_manifest(candidate_manifest, contract)
+    universe, security_diagnostics = company_universe(
+        database, with_diagnostics=True, reference_snapshot=reference_snapshot
+    )
     security_complete = not any(r["validation_blocking"] for r in security_diagnostics)
+    if payload is not None and (
+        payload["discovery_counts"]["company_security_types_complete"] != security_complete
+        or payload["discovery_counts"]["security_type_diagnostics"] != security_diagnostics
+    ):
+        raise ValueError(f"{MISMATCH}: security identity qualification changed")
     symbols = [row["symbol"] for row in universe]
-    bars = load_daily(database, symbols, sessions[0], days[-1])
-    history_anchors = load_history_anchors(database, symbols, days[-1])
-    digest = source_digest(universe, bars, [s for s in sessions if s <= days[-1]], history_anchors)
     if not preflight and not security_complete:
         raise ValueError(security.UNAVAILABLE)
+    # Resolve the entire static identity boundary before touching historical prices.
+    bars = load_daily(database, symbols, sessions[0], days[-1]) if security_complete else {}
+    history_anchors = load_history_anchors(database, symbols, days[-1]) if security_complete else {}
+    digest = source_digest(universe, bars, [s for s in sessions if s <= days[-1]], history_anchors)
     if payload is None:
-        selected, candidates, counts = discover_pairs(
-            universe, bars, sessions, days, config, history_anchors
-        )
+        if security_complete:
+            selected, candidates, counts = discover_pairs(
+                universe, bars, sessions, days, config, history_anchors
+            )
+        else:
+            selected, candidates = {}, []
+            _, counts = selection_inputs([], {}, sessions, days, config)
+            counts["selection_membership_resolved"] = False
         counts.update(
             company_security_types_complete=security_complete,
             security_type_diagnostics=security_diagnostics,
@@ -310,7 +359,8 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
         required[key].add("LIQUIDITY_SELECTION_INTERNAL_GAP")
     tail_symbols = {symbol for symbol, day in required if day > end}
     # Discovery and source hashing above never receive post-T outcome data.
-    bars.update(load_daily(database, tail_symbols, tail[0], tail[-1]))
+    if tail_symbols:
+        bars.update(load_daily(database, tail_symbols, tail[0], tail[-1]))
     if not preflight:
         bars.update(
             load_daily(
@@ -411,7 +461,7 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
             if security_complete
             else security.UNAVAILABLE,
             "company_only_universe_satisfied": security_complete,
-            "metadata_sync_requirement": "NEW_AUTHORITATIVE_SOURCE_AND_PERSISTENCE_ADAPTER_REQUIRED"
+            "metadata_sync_requirement": "EXPLICIT_SYNC_SECURITY_REFERENCE_AND_SEC_IDENTITY_REVIEW"
             if not security_complete
             else None,
             "source_fingerprint_inputs": {

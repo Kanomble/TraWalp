@@ -285,6 +285,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--verbose", action="store_true")
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser(
+        "sync-security-reference", help="Explicit Massive Stocks Basic Free reference-only sync"
+    )
+    commands.add_parser(
+        "audit-security-reference", help="Read-only local reference coverage; no provider calls"
+    )
     sync = commands.add_parser("sync", help="Synchronize SEC data or run a complete refresh")
     mode = sync.add_mutually_exclusive_group()
     mode.add_argument("--full", action="store_true", help="Run the complete legacy sync pipeline")
@@ -672,6 +678,38 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
     database = Database(settings.strategy.storage.database_path)
+    if args.command in {"sync-security-reference", "audit-security-reference"}:
+        from sqlite3 import Error as SQLiteError
+
+        from trading_system.data.security_reference import reference_audit, sync_security_reference
+
+        client = None
+        try:
+            if args.command == "audit-security-reference":
+                summary = reference_audit(database)
+            else:
+                import os
+
+                from trading_system.data.massive_reference import MassiveReferenceClient
+
+                # load_settings has loaded the project's .env. Only this explicit
+                # command reads Massive credentials; never put them in Settings/reports.
+                client = MassiveReferenceClient(os.getenv("MASSIVE_API_KEY"))
+                database.initialize()
+                summary = sync_security_reference(database, client)
+            print(json.dumps(summary, sort_keys=True, indent=2))
+            return 0
+        except KeyboardInterrupt:
+            print("SECURITY_REFERENCE_SYNC_INTERRUPTED", file=sys.stderr)
+            return 130
+        except (OSError, ValueError, SQLiteError) as exc:
+            print(f"Security reference refused: {exc}", file=sys.stderr)
+            if client is not None:
+                print(json.dumps(client.diagnostics, sort_keys=True), file=sys.stderr)
+            return 1
+        finally:
+            if client is not None:
+                client.close()
     if args.command in {"preflight-pairs-stat-arb-v1", "validate-pairs-stat-arb-v1"}:
         # Read-only research dispatch precedes initialization/provider construction.
         from sqlite3 import Error as SQLiteError

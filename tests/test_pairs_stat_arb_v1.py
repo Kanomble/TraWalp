@@ -71,12 +71,18 @@ def offline(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def synthetic_security_types(monkeypatch):
-    """Synthetic evidence only; production has no authoritative type adapter yet."""
+    """Synthetic evidence matching the local adapter; no live reference data."""
     monkeypatch.setattr(
         security,
         "local_security_types",
-        lambda database, symbols: {
-            s: security.SecurityTypeEvidence("COMMON_STOCK", True, "SYNTHETIC_TEST_SOURCE")
+        lambda database, symbols, **kwargs: {
+            s: security.SecurityTypeEvidence(
+                "COMMON_STOCK",
+                "MASSIVE",
+                "CS",
+                "MASSIVE_V3_REFERENCE_TICKERS",
+                reference_present=True,
+            )
             for s in symbols
         },
     )

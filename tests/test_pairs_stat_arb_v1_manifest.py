@@ -61,6 +61,10 @@ def test_every_primary_economic_semantic_rejected_even_with_recomputed_checksum(
         "selection_membership_fail_closed",
         "instrument_type_semantics",
         "company_only_requirement",
+        "security_reference_source",
+        "security_reference_semantics",
+        "provider_type_mapping_version",
+        "cik_conflict_policy",
         "source_input_scope",
         "hypothesis",
         "requested_start",
@@ -201,10 +205,10 @@ def test_normal_manifest_validation_exports_without_discovery(tmp_path, config, 
     assert "trades" in outputs
 
 
-@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("version", [1, 2, 3])
 def test_pre_patch_manifest_versions_are_obsolete_even_if_rehashed(tmp_path, config, version):
     contract = manifest_contract(config, START, END)
-    assert contract["manifest_version"] == 3
+    assert contract["manifest_version"] == 4
     old = {**contract, "manifest_version": version}
     with pytest.raises(ValueError, match=f"{MISMATCH}: manifest_version"):
         load_manifest(save(tmp_path / "obsolete.json", old), contract)
@@ -245,8 +249,14 @@ def test_authoritative_security_provenance_is_bound_to_membership(tmp_path, conf
     monkeypatch.setattr(
         security,
         "local_security_types",
-        lambda database, symbols: {
-            s: security.SecurityTypeEvidence("COMMON_STOCK", True, "CHANGED_SYNTHETIC_SOURCE")
+        lambda database, symbols, **kwargs: {
+            s: security.SecurityTypeEvidence(
+                "COMMON_STOCK",
+                "CHANGED_SYNTHETIC_SOURCE",
+                "CS",
+                "MASSIVE_V3_REFERENCE_TICKERS",
+                reference_present=True,
+            )
             for s in symbols
         },
     )

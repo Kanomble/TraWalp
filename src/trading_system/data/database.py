@@ -99,6 +99,22 @@ class Database:
                     source TEXT NOT NULL, key TEXT NOT NULL, updated_at TEXT NOT NULL,
                     value TEXT, PRIMARY KEY(source, key)
                 );
+                CREATE TABLE IF NOT EXISTS security_reference_snapshots (
+                    snapshot_id TEXT PRIMARY KEY, metadata TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS security_reference_active (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                    snapshot_id TEXT NOT NULL REFERENCES security_reference_snapshots(snapshot_id)
+                );
+                CREATE TABLE IF NOT EXISTS security_reference (
+                    symbol TEXT PRIMARY KEY, security_type TEXT NOT NULL,
+                    provider_security_type TEXT, source TEXT NOT NULL, source_version TEXT NOT NULL,
+                    market TEXT NOT NULL, locale TEXT NOT NULL, active INTEGER NOT NULL,
+                    primary_exchange TEXT, cik TEXT, composite_figi TEXT, share_class_figi TEXT,
+                    provider_updated_at TEXT, observed_at TEXT NOT NULL,
+                    raw_fingerprint TEXT NOT NULL,
+                    snapshot_id TEXT NOT NULL REFERENCES security_reference_snapshots(snapshot_id)
+                );
                 """
             )
             if "asset_class" not in {
@@ -108,6 +124,62 @@ class Database:
                     "ALTER TABLE assets ADD COLUMN asset_class TEXT NOT NULL DEFAULT 'UNKNOWN'"
                 )
             _migrate_daily_bars(connection)
+
+    def promote_security_reference(self, records, metadata) -> None:
+        """Commit rows, successful metadata and active pointer as one SQLite transaction."""
+        from trading_system.data.security_reference import REFERENCE_FIELDS
+
+        columns = (*REFERENCE_FIELDS, "observed_at", "raw_fingerprint", "snapshot_id")
+        snapshot_id = metadata["snapshot_id"]
+        rows = [
+            tuple({**record, "snapshot_id": snapshot_id}[k] for k in columns) for record in records
+        ]
+        if not rows or not metadata.get("sync_success"):
+            raise ValueError("SECURITY_REFERENCE_INCOMPLETE_SNAPSHOT")
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT INTO security_reference_snapshots VALUES (?,?)",
+                (snapshot_id, json.dumps(metadata, sort_keys=True, allow_nan=False)),
+            )
+            connection.execute("DELETE FROM security_reference")
+            connection.executemany(
+                f"INSERT INTO security_reference ({','.join(columns)}) "
+                f"VALUES ({','.join('?' for _ in columns)})",
+                rows,
+            )
+            connection.execute(
+                "INSERT INTO security_reference_active VALUES (1,?) "
+                "ON CONFLICT(singleton) DO UPDATE SET snapshot_id=excluded.snapshot_id",
+                (snapshot_id,),
+            )
+
+    def security_reference_snapshot(self):
+        """Read one consistent active snapshot; pre-migration databases remain usable."""
+        with self.read_only() as connection:
+            connection.execute("BEGIN")
+            present = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='security_reference'"
+            ).fetchone()
+            if present is None:
+                return {}, None
+            row = connection.execute(
+                "SELECT s.metadata FROM security_reference_snapshots s "
+                "JOIN security_reference_active a ON a.snapshot_id=s.snapshot_id"
+            ).fetchone()
+            if row is None:
+                return {}, None
+            metadata = json.loads(row[0])
+            records = {
+                r["symbol"]: dict(r)
+                for r in connection.execute(
+                    "SELECT * FROM security_reference WHERE snapshot_id=? ORDER BY symbol",
+                    (metadata["snapshot_id"],),
+                )
+            }
+            for record in records.values():
+                record["active"] = bool(record["active"])
+            return records, metadata
 
     def upsert_assets(self, assets: Iterable[TradableAsset]) -> int:
         rows = [

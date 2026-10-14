@@ -16,6 +16,12 @@ from trading_system.backtest.pairs_stat_arb_v1_security import (
 )
 from trading_system.backtest.pairs_stat_arb_v1_selection import SELECTION_GAP_SEMANTICS
 from trading_system.data.market_sessions import trading_sessions_between
+from trading_system.data.security_reference import (
+    CIK_CONFLICT_POLICY,
+    MAPPING_VERSION,
+    REFERENCE_SEMANTICS,
+    SOURCE,
+)
 
 MISMATCH = "PAIRS_STAT_ARB_MANIFEST_MISMATCH"
 HYPOTHESIS = (
@@ -53,7 +59,7 @@ def manifest_contract(config, start, end):
         raise ValueError("PAIRS_STAT_ARB_REQUIRES_ADJUSTED_DAILY")
     return {
         "manifest_type": "pairs_stat_arb_v1_manifest",
-        "manifest_version": 3,
+        "manifest_version": 4,
         "coverage_semantics": (
             "SELECTED_ADV_PAIR_CALIBRATION_ELIGIBLE_OUTCOMES;PREFIX_HISTORY_NONBLOCKING;"
             "INTERNAL_SELECTION_GAPS_BLOCKING"
@@ -62,6 +68,10 @@ def manifest_contract(config, start, end):
         "selection_membership_fail_closed": True,
         "instrument_type_semantics": INSTRUMENT_TYPE_SEMANTICS,
         "company_only_requirement": COMPANY_ONLY_REQUIREMENT,
+        "security_reference_source": SOURCE,
+        "security_reference_semantics": REFERENCE_SEMANTICS,
+        "provider_type_mapping_version": MAPPING_VERSION,
+        "cik_conflict_policy": CIK_CONFLICT_POLICY,
         "source_input_scope": "SOURCE_FINGERPRINT_INPUT_NOT_AUTOMATICALLY_VALIDATION_BLOCKING",
         "hypothesis": HYPOTHESIS,
         "research_family": definition.research_family,

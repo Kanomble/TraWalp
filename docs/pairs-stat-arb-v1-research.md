@@ -22,12 +22,13 @@ An extreme negative deviation is treated symmetrically.
 ## Frozen design
 
 Only current local tradable `US_EQUITY` assets with local company identity, valid
-SIC, and authoritative **operating-company common-stock** identity qualify.
+SIC, and Massive **COMMON_STOCK** classification with no SEC/provider CIK conflict qualify.
 Company/SIC identity alone does not establish that security type. SPY is reserved
 exclusively for diagnostics, even if local company identity exists. No symbol
 blacklist or name heuristic supplies the company boundary. SIC is
 normalized to four digits (three-digit codes receive a leading zero); SIC2 is its
-first two digits. `CURRENT_UNIVERSE_ONLY`, `NOT_SURVIVORSHIP_CLEAN`, and
+first two digits. `CURRENT_UNIVERSE_ONLY`, `NOT_SURVIVORSHIP_CLEAN`,
+`CURRENT_REFERENCE_SECURITY_TYPE_NOT_PIT`, and
 `CURRENT_LOCAL_SIC_NOT_PIT` apply throughout. SIC classification is current/local
 and not guaranteed PIT-safe. Historical constituents are not reconstructed.
 
@@ -92,46 +93,40 @@ settings are bound and any conflicting local coverage metadata is rejected;
 missing provenance is prominently reported rather than claimed verified.
 Provider-verified ranges are descriptive only, not proof of a session's absence.
 
-### Company security type: currently unavailable
+### Authoritative common-stock reference boundary
 
-**AUTHORITATIVE_COMPANY_SECURITY_TYPE_UNAVAILABLE.** The current local/provider
-architecture does not supply an authoritative per-security distinction between
-operating-company common stock and ETF/ETP/fund/warrant/unit/other instruments.
-The source audit used repository code and the installed SDK; no network or
-historical pair outcomes were consulted:
+Massive is used only for security classification, with a Stocks Basic Free
+contract, a hard maximum of **5 requests in any rolling 60 seconds**, and exactly
+`GET /v3/reference/tickers` and `GET /v3/reference/tickers/types`. Paid features,
+market-data downloads, billing, subscriptions and upgrades are never used.
+Provider pricing/access may change externally; access errors fail closed without
+switching endpoints or selecting a paid feature. Alpaca supplies prices; SEC
+remains canonical for issuer identity and fundamentals.
 
-- The installed Alpaca `Asset` model exposes broad `asset_class`, exchange,
-  tradability, margin/borrow/fractional flags and attributes. None establishes
-  operating-company common-stock identity. `AlpacaDataClient.list_tradable_us_equities`
-  persists the broad asset class and trading flags in `TradableAsset`/`assets`.
-- The SEC identity/submissions path persists CIK, symbol, name, SIC and SIC
-  description in `CompanyIdentity`/`companies`. Cached raw issuer submissions
-  are not an authoritative mapping from each traded security to common stock;
-  issuer identity or an issuer-level entity type cannot supply that mapping.
-- No other persisted authoritative instrument classification or project-wide
-  security-type classifier was found. Prices, fundamentals, names, symbols and
-  SIC codes are not used to invent one.
+The company-only requirement is `COMMON_STOCK_WITH_SEC_ISSUER_IDENTITY`:
+Massive canonical `COMMON_STOCK`, local SEC CompanyIdentity with a valid CIK,
+valid SIC, and matching ten-digit CIKs whenever both sources provide one. Missing
+Massive CIK is accepted with valid SEC identity/SIC and explicitly reported;
+SEC CIK is never overwritten. This corrects the unsupported operating-company
+metadata requirement without changing Pairs economics.
 
-The local adapter therefore returns `UNKNOWN` with no source. Preflight exports
-per-symbol identity requirements, freezes no pairs for these unqualified symbols,
-reports `company_only_universe_satisfied=false`, and remains unready. Validation
-and the prepared-data simulation entry point refuse unresolved company identity.
-This is a metadata blocker, not a Daily-bar fetch request.
+Known ETF/ETP/fund/preferred/ADR/warrant/unit/right/bond/other types are excluded
+nonblocking. Missing reference rows, unknown/new type codes and conflicting CIKs
+produce blocking `SECURITY_TYPE_REFERENCE_MISSING`, `SECURITY_TYPE_UNKNOWN` and
+`SECURITY_IDENTITY_CONFLICT`. Common stock without valid SEC identity/SIC also
+blocks. Static identity is qualified before historical ranking: unresolved
+metadata freezes no misleading replacement universe and preflight stays unready.
+Neither preflight nor validation repairs metadata or invokes Massive, Alpaca or SEC.
 
-A safe extension requires an authoritative per-security source, a reviewed
-mapping to `COMMON_STOCK`/`ETF`/`ETP`/`FUND`/`WARRANT`/`UNIT`/`OTHER`/`UNKNOWN`,
-and positive operating-company evidence for common stock. Persist stable
-security/symbol/issuer linkage, source, source version/timestamp and classification
-provenance in a migrated schema; integrate its local reader before manually
-synchronizing that source. Only sourced `COMMON_STOCK` with
-`operating_company=true` may enter. Unknown/missing/unsupported evidence fails
-closed; positively identified non-company securities are excluded.
-An existing Alpaca/SEC metadata sync alone cannot resolve this blocker. No
-unsupported upstream field, schema migration with invented values, config
-override, or manual category file has been introduced. Synthetic tests inject
-explicitly marked evidence at the adapter boundary only.
+The new reference layer stores canonical and raw provider types, identifiers,
+source/version/provider timestamp and atomic snapshot/catalog fingerprints.
+Current classifications carry `CURRENT_REFERENCE_SECURITY_TYPE_NOT_PIT` alongside
+`CURRENT_UNIVERSE_ONLY` and `NOT_SURVIVORSHIP_CLEAN`; no historical PIT identity is
+claimed. See [security-reference.md](security-reference.md) for the limiter proof,
+credential protection, mapping, storage, access-error policy and manual workflow.
 
-### Coverage qualification (manifest schema 3)
+### Coverage qualification (manifest schema 4)
+
 
 Apply the preceding-close price gate first: a known close below the configured
 minimum deterministically excludes the symbol without requesting ADV remediation.
@@ -189,15 +184,19 @@ definition, including numeric `adv_lookback_sessions=20`, `calibration_sessions=
 `min_correlation=0.70`, `entry_z=2.0`, `long_weight=short_weight=0.50`,
 `slippage_bps=5.0`, `max_hold_sessions=5`, `top_n=5`, and `outcome_tail_sessions=5`.
 No new parameter choices are exposed. Simulation also rejects a prepared manifest
-whose definition differs from the current execution definition. Schema 3 binds
+whose definition differs from the current execution definition. Schema 4 binds
+security-reference source/semantics/fingerprint, catalog fingerprint, mapping
+version, CIK conflict policy,
 `selection_gap_semantics`, `selection_membership_fail_closed=true`,
-`instrument_type_semantics`, and `company_only_requirement`. Schema 1/2 manifests
+`instrument_type_semantics`, and `company_only_requirement`. Schema 1/2/3 manifests
 are rejected. The earlier historical preflight fingerprint
 `f6985aad8b760cc654bce1c8f6220b6af16bfb78c01d93100f91738f1915a27d`
 is obsolete for validation. This patch follows a historical preflight and precedes
 any historical Pairs outcome evaluation; frozen signal/execution economics remain
-unchanged. Do not reuse the old `_v1` report stem or manifest. The next manual
-preflight uses `_v2` (the report suffix is distinct from manifest schema **3**):
+unchanged. Do not reuse old manifests. Preserve existing report stems; an
+already-used `_v2` stem also refuses overwrite, so choose a new unused stem
+manually if needed. After the explicit manual security-reference sync, the next manual
+preflight uses `_v2` (the report suffix is distinct from manifest schema **4**):
 
 ```powershell
 .\.venv\Scripts\python.exe -m trading_system.cli preflight-pairs-stat-arb-v1 `
@@ -206,7 +205,7 @@ preflight uses `_v2` (the report suffix is distinct from manifest schema **3**):
   --output-stem pairs_stat_arb_v1_preflight_2024-01-02_2026-08-12_v2
 ```
 
-Until the authoritative source extension is available, this command reports the
+Before manually syncing security reference, this command reports the
 company-security-type blocker. Manually review the new preflight before considering
 any validation; no historical run or synchronization was performed for this patch.
 

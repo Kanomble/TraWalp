@@ -1,5 +1,30 @@
 # TraWalp Trading System
 
+## Massive security reference (Stocks Basic Free)
+
+Massive provides current security classification only; Alpaca provides prices and
+SEC provides issuer identity/fundamentals. The exact allowlist is
+`GET /v3/reference/tickers` and `GET /v3/reference/tickers/types`. Paid Massive
+features are not used, and there is no subscription, billing or upgrade workflow.
+One process-wide monotonic sliding-window limiter enforces a hard maximum of
+**5 requests in any rolling 60 seconds**, including retries and pagination.
+Provider pricing/access may change; access errors fail closed without paid fallback.
+
+Only the explicit user-run command may access Massive:
+
+```powershell
+.\.venv\Scripts\python.exe -m trading_system.cli sync-security-reference
+```
+
+It uses `MASSIVE_API_KEY` from the project's normal `.env`/environment mechanism.
+Normal F workflows need no Massive key or reference data. Pairs preflight and
+validation remain local and make no Massive, Alpaca or SEC calls. Manifest V4
+binds common-stock classification, SEC issuer/SIC/CIK checks and reference
+fingerprints. `CURRENT_UNIVERSE_ONLY`, `NOT_SURVIVORSHIP_CLEAN` and
+`CURRENT_REFERENCE_SECURITY_TYPE_NOT_PIT` apply together.
+See [security reference](docs/security-reference.md) for access errors, atomic
+snapshots, mapping, local audit and the manual-only preflight workflow.
+
 ## Frozen champion and completed research
 
 Current frozen champion: **F / configured / C1** (`portfolio.max_positions = 1`).
