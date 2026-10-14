@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 import requests
 
+from trading_system.data import massive_rate_limit as rate_limit
 from trading_system.data import massive_reference as massive
 
 DUMMY_KEY = "synthetic-credential-never-from-environment"
@@ -72,6 +73,9 @@ class FakeClock:
     def monotonic(self):
         return self.now
 
+    def wall_clock(self):
+        return 1_700_000_000 + self.now
+
     def sleep(self, seconds):
         assert seconds > 0
         self.sleeps.append(seconds)
@@ -83,18 +87,23 @@ def offline(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", forbidden)
     monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
     monkeypatch.setattr(requests.Session, "request", forbidden)
-    monkeypatch.setattr(massive.time, "sleep", forbidden)
+    monkeypatch.setattr(rate_limit.time, "sleep", forbidden)
     # Provider tests never consult a real key, even if one is configured.
     monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
 
 
 @pytest.fixture
-def clock(monkeypatch):
+def clock(monkeypatch, tmp_path):
     clock = FakeClock()
     monkeypatch.setattr(
         massive,
         "_REQUEST_LIMITER",
-        massive._RollingWindowLimiter(clock=clock.monotonic, sleeper=clock.sleep),
+        massive._RollingWindowLimiter(
+            clock=clock.monotonic,
+            wall_clock=clock.wall_clock,
+            sleeper=clock.sleep,
+            state_path=tmp_path / "massive-limiter.json",
+        ),
     )
     return clock
 

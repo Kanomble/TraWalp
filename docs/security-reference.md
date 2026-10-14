@@ -41,28 +41,83 @@ activation, plan mutation, credit-card workflow, account upgrade or purchase cod
 
 ## Rolling request limit
 
-The hard maximum is **5 requests in any rolling 60 seconds**. One module-level
-process-wide limiter protects all clients, types, pages and retries. It uses a
-monotonic clock and a deque under a lock held through each HTTP operation:
+The hard maximum is **5 TraWalp-controlled requests in any rolling 60 seconds**.
+One persistent budget protects all local reference-sync processes, clients,
+types, pages and retries, including rapid command restarts. The module-level
+limiter is now a front end to shared timing state and an OS-level exclusive lock.
+No process-local fallback exists.
 
-1. Expire entries only once they are at least **60.5 seconds** old.
-2. If five entries remain, wait until the oldest expires. Recheck after sleeping.
-3. Also wait until any retry deadline; this uses the greater local/provider delay.
-4. Reserve a timestamp immediately before transport, even if the request fails.
-5. In `finally`, move that timestamp to request completion. This is conservative
-   and prevents scheduling/transport delays from shortening protection.
+The fixed state location is independent of the API key, working directory and
+checkout, with no CLI/env/debug path override:
+
+- Windows: `~/AppData/Local/TraWalp/state/massive-reference-rate-limit.json`
+  (`~` is the Windows user's home directory).
+- POSIX: `~/.local/state/TraWalp/state/massive-reference-rate-limit.json`.
+- Both use a separate `massive-reference-rate-limit.lock` in the same directory.
+
+All invocations in the local TraWalp user environment share this location. State
+contains only at most five paired wall/monotonic timing observations, the last
+clock observation and an in-flight timing flag. The lock file contains one
+initialization byte. Neither filename nor contents contain an API key, API
+response, URL, ticker or account identifier. Files are created only when a
+request is explicitly attempted; import, audit and Pairs commands do not create them.
+
+Windows uses `msvcrt.locking` on byte zero; POSIX uses exclusive `fcntl.flock`.
+A thread lock also coordinates callers in a process. The OS lock remains held
+through budget waiting, reservation, HTTP transport and completion. Handle
+closure releases it after normal completion, exceptions or KeyboardInterrupt;
+the OS releases locks when a process terminates. The lock file is never replaced.
+These are standard-library facilities, with no new locking dependency.
+
+Before every attempt:
+
+1. Acquire the OS lock and read the persistent timing history.
+2. Validate both clocks before expiring anything. If the previous owner left an
+   in-flight reservation, conservatively advance its timestamp to now and persist
+   it: the acquired lock proves that owner no longer controls transport.
+3. Expire entries only once **both wall and monotonic ages reach 60.5 seconds**.
+4. If five entries remain, wait until the oldest safely expires. Recheck both
+   clocks after sleeping. Also honor any monotonic retry deadline.
+5. Atomically persist a reservation and in-flight flag **before transport**.
+6. In `finally`, advance its timestamp to completion and clear the flag. Both
+   writes flush/fsync a temporary file before atomic replacement under the
+   separate OS lock. Release the lock only after completion handling.
+
+Failed attempts consume the same durable slots. If reservation persistence
+fails, transport is never entered. If completion is interrupted or cannot be
+written, the previous durable in-flight reservation survives for the next owner.
+Missing initialized state, corrupt state and storage errors fail closed with
+`MASSIVE_RATE_LIMIT_STATE_UNAVAILABLE` / `MASSIVE_RATE_LIMIT_STATE_INVALID`;
+they never silently reset the budget. Interruption before replacement preserves
+the previous complete JSON document.
 
 For any six actual transmissions, the sixth cannot start until at least 60.5
 seconds after the first's completion, which is no earlier than its transmission.
-Consequently no rolling 60-second interval can contain six requests. The lock
-also prevents overlapping requests; pagination is a single sequential loop.
-There is no wall-clock minute bucket, fan-out or worker pool. New clients and
-successive syncs in the same process retain the same limiter history.
+The OS lock prevents two processes from checking/reserving the same capacity;
+each new owner loads the prior owner's committed history. The sixth therefore
+cannot fit inside a rolling 60-second interval even when earlier owners exit,
+or when processes start simultaneously. Pagination remains sequential, without
+fan-out or worker pools.
+
+Persisted wall time is conservative epoch time; monotonic readings are additionally
+used to guard elapsed time. Python >=3.11 uses the same monotonic clock across
+processes on a boot, including Windows. See the standard-library
+[time](https://docs.python.org/3.11/library/time.html#time.monotonic),
+[Windows locking](https://docs.python.org/3.11/library/msvcrt.html#msvcrt.locking)
+and [POSIX locking](https://docs.python.org/3.11/library/fcntl.html#fcntl.flock) docs.
+Rollback, future clock observations, monotonic resets or a wall/monotonic elapsed
+discrepancy over 0.5 seconds raise **MASSIVE_RATE_LIMIT_CLOCK_ANOMALY** without
+discarding history or starting transport. Small adjustments cannot shorten the
+window because both ages must reach 60.5 seconds. Suspend/reboot/clock corrections
+may conservatively trigger this error; there is no automatic state reset. Do not
+delete/reset state while any local sync process may be active.
+
 Rates of 1 through 5 may be configured programmatically; all other values,
 including 6, 100 and `unlimited`, raise `MASSIVE_RATE_LIMIT_EXCEEDS_FREE_TIER`.
-There is no CLI/env/debug override. Run one explicit sync process at a time;
-the process-wide limiter does not coordinate separate operating-system processes
-or other software using the same account.
+There is no CLI/env/debug override. This controls TraWalp's own local sync
+processes; it cannot control another application, Massive dashboard tooling,
+manual curl requests or requests from another computer using the same key.
+It is not an account-wide guarantee against external API consumption.
 
 Requests' automatic retries and redirects are disabled. Every manual retry
 consumes a slot. At most three retries follow the original attempt:
@@ -158,7 +213,9 @@ SEC CIK is never overwritten. Valid nonzero digit CIKs normalize to ten digits:
 `CIK_MATCH`, `CIK_MISMATCH`, `CIK_MISSING_MASSIVE`, `CIK_MISSING_LOCAL` are reported.
 Malformed nonempty provider CIK fails the sync. **Missing Massive CIK is accepted
 for Pairs when local SEC identity and SIC are valid**; it is reported as unavailable,
-not a verified match. If both CIKs exist they must match.
+not a verified match. For COMMON_STOCK eligibility, both existing CIKs must match.
+Known non-common-stock classifications are already outside Pairs; their CIK
+cross-check is retained diagnostically but cannot block that exclusion.
 
 ## Pairs V1 boundary and Manifest V4
 
@@ -168,9 +225,11 @@ valid nonzero three/four-digit SIC, and no CIK conflict. SPY retains its frozen
 diagnostic-only role. The unsupported `operating_company=true` requirement is
 removed; no Pairs economic parameter changes.
 
-Known non-common instruments are `EXCLUDED_SECURITY_TYPE`, nonblocking. Missing
+Qualification first blocks missing reference/unresolved type, then excludes known
+non-common instruments as `EXCLUDED_SECURITY_TYPE`, nonblocking regardless of CIK
+agreement. Only COMMON_STOCK proceeds to SEC/SIC/CIK eligibility checks. Missing
 reference is `SECURITY_TYPE_REFERENCE_MISSING`; unknown type is
-`SECURITY_TYPE_UNKNOWN`; conflicting CIK is `SECURITY_IDENTITY_CONFLICT`.
+`SECURITY_TYPE_UNKNOWN`; common-stock conflicting CIK is `SECURITY_IDENTITY_CONFLICT`.
 Common stock without valid SEC identity/SIC also blocks. All unresolved metadata
 is resolved **before historical ADV20 ranking**: preflight freezes no replacement
 names/pairs and remains unready. It reports metadata requirements separately
@@ -181,6 +240,10 @@ Pairs preflight/validation are local and read-only: **0 Massive, Alpaca or SEC
 requests**. Manifest V4 binds source, current-reference semantics, company rule,
 reference fingerprint, catalog fingerprint, mapping version, CIK conflict policy,
 selection-gap semantics and fail-closed membership. V1/V2/V3 are rejected.
+The follow-up corrects only the CIK policy to
+`SEC_CANONICAL;COMMON_STOCK_BOTH_PRESENT_MUST_MATCH;MASSIVE_MISSING_ACCEPTED`.
+V4 manifests carrying the former all-security CIK policy are rejected as semantic
+drift; manifest version and economic parameters remain unchanged.
 The membership reference digest covers stable reference fields for all current
 US_EQUITY assets, including known exclusions and missing markers: symbol,
 canonical/raw type, provider CIK, market/locale/active, exchange, both FIGIs,

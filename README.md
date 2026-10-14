@@ -6,8 +6,11 @@ Massive provides current security classification only; Alpaca provides prices an
 SEC provides issuer identity/fundamentals. The exact allowlist is
 `GET /v3/reference/tickers` and `GET /v3/reference/tickers/types`. Paid Massive
 features are not used, and there is no subscription, billing or upgrade workflow.
-One process-wide monotonic sliding-window limiter enforces a hard maximum of
-**5 requests in any rolling 60 seconds**, including retries and pagination.
+One persistent cross-process sliding-window limiter enforces a hard maximum of
+**5 requests in any rolling 60 seconds** across local TraWalp sync invocations,
+including retries and pagination. A fixed user-local timing file and OS lock
+preserve the budget across simultaneous processes and rapid restarts. External
+applications, dashboard/curl requests and other computers are outside its control.
 Provider pricing/access may change; access errors fail closed without paid fallback.
 
 Only the explicit user-run command may access Massive:

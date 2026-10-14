@@ -1,15 +1,18 @@
 """Only Stocks Basic Free reference GETs; no market data or account operations."""
 
 import math
-import threading
-import time
-from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
+
+from trading_system.data.massive_rate_limit import (
+    MassiveReferenceError,
+    _RollingWindowLimiter,
+    _validate_limit,
+)
 
 TICKERS_PATH = "/v3/reference/tickers"
 TYPES_PATH = "/v3/reference/tickers/types"
@@ -26,53 +29,6 @@ class MassiveFreeReferenceContract:
 
 
 FREE_REFERENCE_CONTRACT = MassiveFreeReferenceContract()
-
-
-class MassiveReferenceError(ValueError):
-    """Fixed status only: never attach provider bodies, URLs, headers or credentials."""
-
-
-def _validate_limit(limit):
-    if type(limit) is not int or not 1 <= limit <= 5:
-        raise MassiveReferenceError("MASSIVE_RATE_LIMIT_EXCEEDS_FREE_TIER")
-
-
-class _RollingWindowLimiter:
-    """Serialize transmissions, including across clients and failed attempts.
-
-    Reserve before entering transport; conservatively move the timestamp to
-    completion in finally. Thus scheduling/transport delay cannot shorten the
-    protected window. Keep the lock through transport: no parallel requests.
-    Production uses exactly one module-level instance. Clock/sleeper injection
-    is for deterministic tests; there is no CLI/env bypass.
-    """
-
-    _expiry_seconds = 60.5
-
-    def __init__(self, *, clock=time.monotonic, sleeper=time.sleep):
-        self._clock = clock
-        self._sleeper = sleeper
-        self._timestamps = deque()
-        self._lock = threading.Lock()
-
-    def transmit(self, operation, *, limit=5, not_before=0):
-        _validate_limit(limit)
-        with self._lock:
-            while True:
-                now = self._clock()
-                while self._timestamps and now - self._timestamps[0] >= self._expiry_seconds:
-                    self._timestamps.popleft()
-                due = not_before
-                if len(self._timestamps) >= limit:
-                    due = max(due, self._timestamps[0] + self._expiry_seconds)
-                if due <= now:
-                    break
-                self._sleeper(due - now)
-            self._timestamps.append(self._clock())
-            try:
-                return operation()
-            finally:
-                self._timestamps[-1] = self._clock()
 
 
 _REQUEST_LIMITER = _RollingWindowLimiter()

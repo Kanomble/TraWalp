@@ -81,10 +81,10 @@ def company_universe(database, *, with_diagnostics=False, reference_snapshot=Non
             status, blocking = "SECURITY_TYPE_REFERENCE_MISSING", True
         elif not kind.resolved:
             status, blocking = "SECURITY_TYPE_UNKNOWN", True
-        elif identity_state == "CIK_MISMATCH":
-            status, blocking = "SECURITY_IDENTITY_CONFLICT", True
         elif not kind.company_common_stock:
             status, blocking = "EXCLUDED_SECURITY_TYPE", False
+        elif identity_state == "CIK_MISMATCH":
+            status, blocking = "SECURITY_IDENTITY_CONFLICT", True
         elif company is None or normalize_cik(company.cik) is None:
             status, blocking = "SEC_ISSUER_IDENTITY_MISSING", True
         elif sic is None:

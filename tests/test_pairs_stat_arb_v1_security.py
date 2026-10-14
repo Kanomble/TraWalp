@@ -213,12 +213,39 @@ def test_identical_resync_keeps_stable_membership_digest(tmp_path, config, clien
     assert reused.manifest == prepared.manifest
 
 
-def test_known_exclusion_cik_conflict_also_fails_closed(tmp_path, client_factory):
+@pytest.mark.parametrize(
+    "code,status,blocking",
+    [
+        ("ETF", "EXCLUDED_SECURITY_TYPE", False),
+        ("CS", "SECURITY_IDENTITY_CONFLICT", True),
+    ],
+)
+def test_cik_conflict_blocks_common_stock_only(tmp_path, client_factory, code, status, blocking):
     db, *_ = seed(tmp_path)
-    populate(db, client_factory, [ticker("A", "ETF", "999"), ticker("B", cik="2")])
-    _, diagnostics = company_universe(db, with_diagnostics=True)
-    assert diagnostics[0]["status"] == "SECURITY_IDENTITY_CONFLICT"
-    assert diagnostics[0]["validation_blocking"]
+    populate(db, client_factory, [ticker("A", code, "999"), ticker("B", cik="2")])
+    universe, diagnostics = company_universe(db, with_diagnostics=True)
+    assert [row["symbol"] for row in universe] == ["B"]
+    assert diagnostics[0]["cik_cross_check"] == "CIK_MISMATCH"
+    assert diagnostics[0]["status"] == status
+    assert diagnostics[0]["validation_blocking"] is blocking
+
+
+def test_manifest_rejects_previous_cik_gate_policy_without_changing_economics(tmp_path, config):
+    from trading_system.backtest.liquid_universe import fingerprint
+    from trading_system.backtest.pairs_stat_arb_v1_manifest import load_manifest, manifest_contract
+
+    contract = manifest_contract(config, START, END)
+    previous = {
+        **contract,
+        "cik_conflict_policy": "SEC_CANONICAL;BOTH_PRESENT_MUST_MATCH;MASSIVE_MISSING_ACCEPTED",
+    }
+    previous["fingerprint"] = fingerprint(previous)
+    path = tmp_path / "previous-policy.json"
+    path.write_text(json.dumps(previous))
+    assert contract["manifest_version"] == previous["manifest_version"] == 4
+    assert contract["strategy_definition"] == previous["strategy_definition"]
+    with pytest.raises(ValueError, match=f"{MISMATCH}: cik_conflict_policy"):
+        load_manifest(path, contract)
 
 
 def test_cli_preflight_and_manifest_validation_construct_no_provider(

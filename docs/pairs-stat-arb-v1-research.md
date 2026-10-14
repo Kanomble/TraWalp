@@ -102,6 +102,9 @@ market-data downloads, billing, subscriptions and upgrades are never used.
 Provider pricing/access may change externally; access errors fail closed without
 switching endpoints or selecting a paid feature. Alpaca supplies prices; SEC
 remains canonical for issuer identity and fundamentals.
+The persistent timing budget and OS lock coordinate local TraWalp processes and
+rapid restarts; requests made by external software or other computers are outside
+TraWalp's control.
 
 The company-only requirement is `COMMON_STOCK_WITH_SEC_ISSUER_IDENTITY`:
 Massive canonical `COMMON_STOCK`, local SEC CompanyIdentity with a valid CIK,
@@ -111,7 +114,9 @@ SEC CIK is never overwritten. This corrects the unsupported operating-company
 metadata requirement without changing Pairs economics.
 
 Known ETF/ETP/fund/preferred/ADR/warrant/unit/right/bond/other types are excluded
-nonblocking. Missing reference rows, unknown/new type codes and conflicting CIKs
+nonblocking before SEC/SIC/CIK eligibility checks, even if their diagnostic CIK
+cross-check mismatches. Missing reference rows, unknown/new type codes and
+common-stock conflicting CIKs
 produce blocking `SECURITY_TYPE_REFERENCE_MISSING`, `SECURITY_TYPE_UNKNOWN` and
 `SECURITY_IDENTITY_CONFLICT`. Common stock without valid SEC identity/SIC also
 blocks. Static identity is qualified before historical ranking: unresolved
