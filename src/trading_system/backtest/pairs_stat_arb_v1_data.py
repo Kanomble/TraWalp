@@ -23,9 +23,11 @@ from trading_system.backtest.pairs_stat_arb_v1_selection import selection_inputs
 from trading_system.data.qualification import provider_range_verified
 from trading_system.data.security_reference import (
     MAPPING_VERSION,
-    cik_state,
+    cached_sec_ticker_ciks,
+    identity_qualification_fingerprint,
     membership_fingerprint,
     pairs_base_company_universe,
+    pairs_security_qualification,
 )
 from trading_system.data.security_reference import (
     digest as reference_digest,
@@ -46,30 +48,37 @@ class PreparedPairs:
 
 
 def company_universe(
-    database, *, with_diagnostics=False, reference_snapshot=None, base_universe=None
+    database,
+    *,
+    with_diagnostics=False,
+    reference_snapshot=None,
+    base_universe=None,
+    current_sec_ciks=None,
 ):
     base = pairs_base_company_universe(database) if base_universe is None else base_universe
+    current_sec_ciks = (
+        cached_sec_ticker_ciks(database) if current_sec_ciks is None else current_sec_ciks
+    )
     evidence = security.local_security_types(
         database, [r["symbol"] for r in base], reference_snapshot=reference_snapshot
     )
     qualified, diagnostics = [], []
     for identity in base:
         kind = evidence.get(identity["symbol"], security.SecurityTypeEvidence())
-        identity_state = cik_state(identity["cik"], kind.provider_cik)
+        qualification = pairs_security_qualification(
+            reference_present=kind.reference_present,
+            resolved=kind.resolved,
+            security_type=kind.security_type,
+            local_cik=identity["cik"],
+            current_sec_cik=current_sec_ciks.get(identity["symbol"]),
+            massive_cik=kind.provider_cik,
+        )
         row = {
             **identity,
-            "cik_cross_check": identity_state,
             **asdict(kind),
+            **qualification,
         }
-        if not kind.reference_present:
-            status, blocking = "SECURITY_TYPE_REFERENCE_MISSING", True
-        elif not kind.resolved:
-            status, blocking = "SECURITY_TYPE_UNKNOWN", True
-        elif not kind.company_common_stock:
-            status, blocking = "EXCLUDED_SECURITY_TYPE", False
-        elif identity_state == "CIK_MISMATCH":
-            status, blocking = "SECURITY_IDENTITY_CONFLICT", True
-        else:
+        if qualification["status"] == "ELIGIBLE_COMMON_STOCK":
             qualified.append(row)
             continue
         diagnostics.append(
@@ -78,8 +87,6 @@ def company_universe(
                 "record_kind": "SYMBOL_IDENTITY",
                 "input_scope": "COMPANY_SECURITY_TYPE_REQUIREMENT",
                 "roles": "COMPANY_COMMON_STOCK_IDENTITY",
-                "validation_blocking": blocking,
-                "status": status,
             }
         )
     if with_diagnostics:
@@ -276,14 +283,17 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
     )
     if snapshot_metadata and snapshot_metadata["mapping_version"] != MAPPING_VERSION:
         raise ValueError("SECURITY_REFERENCE_MAPPING_VERSION_MISMATCH")
-    if candidate_manifest is not None:
-        payload = load_manifest(candidate_manifest, contract)
     universe, security_diagnostics = company_universe(
         database,
         with_diagnostics=True,
         reference_snapshot=reference_snapshot,
         base_universe=base_universe,
     )
+    contract["identity_qualification_fingerprint"] = identity_qualification_fingerprint(
+        [*universe, *security_diagnostics]
+    )
+    if candidate_manifest is not None:
+        payload = load_manifest(candidate_manifest, contract)
     security_complete = not any(r["validation_blocking"] for r in security_diagnostics)
     if payload is not None and (
         payload["discovery_counts"]["company_security_types_complete"] != security_complete

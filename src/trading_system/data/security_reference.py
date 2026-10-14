@@ -11,8 +11,17 @@ SOURCE = "MASSIVE"
 SOURCE_VERSION = "MASSIVE_V3_REFERENCE_TICKERS"
 REFERENCE_SEMANTICS = "CURRENT_REFERENCE_SECURITY_TYPE_NOT_PIT"
 MAPPING_VERSION = "MASSIVE_STOCK_TYPES_V2"
-PAIRS_COMPANY_UNIVERSE_SCOPE = "LOCAL_TRADABLE_US_EQUITY_WITH_VALID_SEC_COMPANY_CIK_SIC"
-CIK_CONFLICT_POLICY = "SEC_CANONICAL;COMMON_STOCK_BOTH_PRESENT_MUST_MATCH;MASSIVE_MISSING_ACCEPTED"
+PAIRS_COMPANY_UNIVERSE_SCOPE = "LOCAL_TRADABLE_NON_OTC_US_EQUITY_WITH_VALID_SEC_COMPANY_CIK_SIC"
+IDENTITY_CONFLICT_POLICY = "SYMBOL_QUARANTINE_NONBLOCKING"
+IDENTITY_CONFLICT_CLASSIFICATION_VERSION = "LOCAL_CACHED_SEC_MASSIVE_CIK_V1"
+EXCLUDED_IDENTITY_CONFLICT = "EXCLUDED_IDENTITY_CONFLICT"
+MASSIVE_REFERENCE_CIK_CONFLICT = "MASSIVE_REFERENCE_CIK_CONFLICT"
+LOCAL_IDENTITY_STALE_OR_TICKER_REUSE = "LOCAL_IDENTITY_STALE_OR_TICKER_REUSE"
+UNRESOLVED_CROSS_SOURCE_IDENTITY = "UNRESOLVED_CROSS_SOURCE_IDENTITY"
+CIK_CONFLICT_POLICY = (
+    "SEC_CANONICAL;COMMON_STOCK_LOCAL_MASSIVE_OR_CACHED_SEC_CONFLICT_QUARANTINED;"
+    "MASSIVE_MISSING_ACCEPTED_WITHOUT_CACHED_SEC_CONFLICT"
+)
 SECURITY_TYPES = (
     "COMMON_STOCK",
     "PREFERRED_STOCK",
@@ -107,6 +116,7 @@ def _local_company_metadata(database):
                 "symbol": row["symbol"],
                 "tradable": bool(row["tradable"]),
                 "asset_class": dict(row).get("asset_class", "UNKNOWN"),
+                "exchange": dict(row).get("exchange"),
             }
             for row in connection.execute("SELECT * FROM assets WHERE tradable=1 ORDER BY symbol")
         ]
@@ -120,12 +130,8 @@ def _local_company_metadata(database):
     return assets, companies
 
 
-def pairs_base_company_universe(database, *, assets=None, companies=None):
-    """Frozen local company/CIK/SIC gate, independent of Massive reference coverage."""
-    if assets is None or companies is None:
-        local_assets, local_companies = _local_company_metadata(database)
-        assets = local_assets if assets is None else assets
-        companies = local_companies if companies is None else companies
+def _pairs_company_rows(assets, companies):
+    """Company gate before exchange exclusion, also used for OTC audit counts."""
     base = []
     for asset in assets:
         company = companies.get(asset["symbol"])
@@ -148,9 +154,90 @@ def pairs_base_company_universe(database, *, assets=None, companies=None):
                 "sic2": sic[:2],
                 "tradable": True,
                 "asset_class": asset["asset_class"],
+                "exchange": str(asset.get("exchange") or "").strip().upper(),
             }
         )
     return sorted(base, key=lambda row: row["symbol"])
+
+
+def pairs_base_company_universe(database, *, assets=None, companies=None):
+    """Frozen non-OTC local company gate, before any Massive qualification."""
+    if assets is None or companies is None:
+        local_assets, local_companies = _local_company_metadata(database)
+        assets = local_assets if assets is None else assets
+        companies = local_companies if companies is None else companies
+    return [r for r in _pairs_company_rows(assets, companies) if r["exchange"] != "OTC"]
+
+
+def cached_sec_ticker_ciks(database):
+    """Read the existing SEC cache; never refresh it or migrate issuer histories."""
+    with database.read_only() as connection:
+        row = connection.execute(
+            "SELECT value FROM sync_state WHERE source=? AND key=?",
+            ("sec_reference", "ticker_to_cik"),
+        ).fetchone()
+    if row is None:
+        return {}
+    try:
+        values = json.loads(row["value"])
+        if not isinstance(values, dict):
+            raise ValueError("not a ticker map")
+    except (ValueError, TypeError) as exc:
+        raise ValueError("PAIRS_SEC_IDENTITY_CACHE_INVALID") from exc
+    return {symbol: normalize_cik(cik) for symbol, cik in values.items()}
+
+
+def pairs_security_qualification(
+    *, reference_present, resolved, security_type, local_cik, current_sec_cik, massive_cik
+):
+    """Static eligibility only; conflict provenance is evidence, not issuer repair."""
+    local, current, massive = map(normalize_cik, (local_cik, current_sec_cik, massive_cik))
+    reason = None
+    if not reference_present:
+        status, blocking = "SECURITY_TYPE_REFERENCE_MISSING", True
+    elif not resolved:
+        status, blocking = "SECURITY_TYPE_UNKNOWN", True
+    elif security_type != "COMMON_STOCK":
+        status, blocking = "EXCLUDED_SECURITY_TYPE", False
+    elif (massive and local != massive) or (current and local != current):
+        status, blocking = EXCLUDED_IDENTITY_CONFLICT, False
+        if local == current and massive and massive != current:
+            reason = MASSIVE_REFERENCE_CIK_CONFLICT
+        elif current and current == massive and local != current:
+            reason = LOCAL_IDENTITY_STALE_OR_TICKER_REUSE
+        else:
+            reason = UNRESOLVED_CROSS_SOURCE_IDENTITY
+    else:
+        status, blocking = "ELIGIBLE_COMMON_STOCK", False
+    return {
+        "status": status,
+        "validation_blocking": blocking,
+        "local_cik": local,
+        "current_sec_cik": current,
+        "massive_cik": massive,
+        "cik_cross_check": cik_state(local, massive),
+        "identity_conflict_class": reason,
+        "quarantine_status": EXCLUDED_IDENTITY_CONFLICT if reason else None,
+    }
+
+
+def identity_qualification_fingerprint(rows):
+    """Bind every non-OTC base member, including quarantines and missing markers."""
+    fields = (
+        "symbol",
+        "exchange",
+        "sic",
+        "local_cik",
+        "current_sec_cik",
+        "massive_cik",
+        "identity_conflict_class",
+        "quarantine_status",
+        "status",
+        "validation_blocking",
+    )
+    return digest(
+        [{k: row.get(k) for k in fields} for row in sorted(rows, key=lambda r: r["symbol"])]
+    )
 
 
 def normalize_catalog(records):
@@ -249,6 +336,10 @@ def reference_audit(database, *, now=None):
     records, snapshot = database.security_reference_snapshot()
     assets, companies = _local_company_metadata(database)
     assets = [a for a in assets if a["asset_class"] == "US_EQUITY"]
+    current_sec = cached_sec_ticker_ciks(database)
+    otc_excluded = [
+        r["symbol"] for r in _pairs_company_rows(assets, companies) if r["exchange"] == "OTC"
+    ]
     base = {
         r["symbol"]: r
         for r in pairs_base_company_universe(database, assets=assets, companies=companies)
@@ -260,19 +351,34 @@ def reference_audit(database, *, now=None):
         for s in matched
     )
     distribution = Counter(r["security_type"] for r in records.values())
-    eligible = sum(
-        records[s]["security_type"] == "COMMON_STOCK"
-        and records[s]["source"] == SOURCE
-        and records[s]["source_version"] == SOURCE_VERSION
-        and records[s]["market"] == "stocks"
-        and records[s]["locale"] == "us"
-        and records[s]["active"]
-        and cik_state(base[s]["cik"], records[s]["cik"]) != "CIK_MISMATCH"
-        for s in base.keys() & records.keys()
+    qualifications = {}
+    for symbol, identity in base.items():
+        row = records.get(symbol, {})
+        qualifications[symbol] = pairs_security_qualification(
+            reference_present=symbol in records,
+            resolved=(
+                row.get("source") == SOURCE
+                and row.get("source_version") == SOURCE_VERSION
+                and row.get("market") == "stocks"
+                and row.get("locale") == "us"
+                and row.get("active")
+                and row.get("security_type") in SECURITY_TYPES
+                and row.get("security_type") != "UNKNOWN"
+            ),
+            security_type=row.get("security_type"),
+            local_cik=identity["cik"],
+            current_sec_cik=current_sec.get(symbol),
+            massive_cik=row.get("cik"),
+        )
+    eligible = sum(q["status"] == "ELIGIBLE_COMMON_STOCK" for q in qualifications.values())
+    base_missing = sorted(
+        s for s, q in qualifications.items() if q["status"] == "SECURITY_TYPE_REFERENCE_MISSING"
     )
-    base_missing = sorted(base.keys() - records.keys())
     base_unknown = sorted(
-        s for s in base.keys() & records.keys() if records[s]["security_type"] == "UNKNOWN"
+        s for s, q in qualifications.items() if q["status"] == "SECURITY_TYPE_UNKNOWN"
+    )
+    quarantined = sorted(
+        s for s, q in qualifications.items() if q["status"] == EXCLUDED_IDENTITY_CONFLICT
     )
     common_conflicts = sorted(
         s
@@ -285,6 +391,10 @@ def reference_audit(database, *, now=None):
         ("pairs_base_company_missing_reference", base_missing),
         ("pairs_base_company_unknown_type", base_unknown),
         ("common_stock_cik_mismatch", common_conflicts),
+        ("pairs_otc_excluded", otc_excluded),
+        ("pairs_identity_quarantine", quarantined),
+        ("pairs_non_otc_missing_reference", base_missing),
+        ("pairs_non_otc_unknown_type", base_unknown),
     ):
         pairs_diagnostics.update(
             {
@@ -333,6 +443,16 @@ def reference_audit(database, *, now=None):
         "eligible_pairs_common_stocks": eligible,
         "company_universe_scope": PAIRS_COMPANY_UNIVERSE_SCOPE,
         "pairs_base_company_universe_count": len(base),
+        "pairs_non_otc_company_universe_count": len(base),
+        "identity_conflict_policy": IDENTITY_CONFLICT_POLICY,
+        "identity_conflict_classification_version": IDENTITY_CONFLICT_CLASSIFICATION_VERSION,
+        "pairs_identity_quarantine_by_reason": dict(
+            sorted(
+                Counter(qualifications[s]["identity_conflict_class"] for s in quarantined).items()
+            )
+        ),
+        "pairs_reference_identity_blocking_count": len(base_missing) + len(base_unknown),
+        "company_security_types_complete": not base_missing and not base_unknown,
         "outside_pairs_company_universe_count": len(symbols - base.keys()),
         **pairs_diagnostics,
         "massive_requests_total": 0,

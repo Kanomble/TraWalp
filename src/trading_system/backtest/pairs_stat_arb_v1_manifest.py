@@ -18,6 +18,8 @@ from trading_system.backtest.pairs_stat_arb_v1_selection import SELECTION_GAP_SE
 from trading_system.data.market_sessions import trading_sessions_between
 from trading_system.data.security_reference import (
     CIK_CONFLICT_POLICY,
+    IDENTITY_CONFLICT_CLASSIFICATION_VERSION,
+    IDENTITY_CONFLICT_POLICY,
     MAPPING_VERSION,
     PAIRS_COMPANY_UNIVERSE_SCOPE,
     REFERENCE_SEMANTICS,
@@ -60,7 +62,7 @@ def manifest_contract(config, start, end):
         raise ValueError("PAIRS_STAT_ARB_REQUIRES_ADJUSTED_DAILY")
     return {
         "manifest_type": "pairs_stat_arb_v1_manifest",
-        "manifest_version": 4,
+        "manifest_version": 5,
         "coverage_semantics": (
             "SELECTED_ADV_PAIR_CALIBRATION_ELIGIBLE_OUTCOMES;PREFIX_HISTORY_NONBLOCKING;"
             "INTERNAL_SELECTION_GAPS_BLOCKING"
@@ -74,6 +76,8 @@ def manifest_contract(config, start, end):
         "security_reference_semantics": REFERENCE_SEMANTICS,
         "provider_type_mapping_version": MAPPING_VERSION,
         "cik_conflict_policy": CIK_CONFLICT_POLICY,
+        "identity_conflict_policy": IDENTITY_CONFLICT_POLICY,
+        "identity_conflict_classification_version": IDENTITY_CONFLICT_CLASSIFICATION_VERSION,
         "source_input_scope": "SOURCE_FINGERPRINT_INPUT_NOT_AUTOMATICALLY_VALIDATION_BLOCKING",
         "hypothesis": HYPOTHESIS,
         "research_family": definition.research_family,

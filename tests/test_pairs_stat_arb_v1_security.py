@@ -110,7 +110,6 @@ def test_common_stock_with_sec_identity_and_sic_accepts_matching_or_absent_massi
     [
         ("missing", "SECURITY_TYPE_REFERENCE_MISSING"),
         ("unknown", "SECURITY_TYPE_UNKNOWN"),
-        ("conflict", "SECURITY_IDENTITY_CONFLICT"),
     ],
 )
 def test_unresolved_static_identity_blocks_all_discovery_before_adv_ranking(
@@ -121,7 +120,7 @@ def test_unresolved_static_identity_blocks_all_discovery_before_adv_ranking(
         ticker(
             "A",
             "FUTURE_CODE" if change == "unknown" else "CS",
-            "999" if change == "conflict" else "1",
+            "1",
         ),
         ticker("B", cik="2"),
     ]
@@ -172,7 +171,7 @@ def test_synthetic_etf_with_sec_sic_high_adv_and_complete_history_never_enters_p
         ("locale", "global"),
     ],
 )
-def test_manifest_v4_freezes_relevant_reference_fields_locally(
+def test_manifest_v5_freezes_relevant_reference_fields_locally(
     tmp_path, config, client_factory, monkeypatch, field, value
 ):
     db, *_ = seed(tmp_path)
@@ -225,10 +224,12 @@ def test_identical_resync_keeps_stable_membership_digest(tmp_path, config, clien
     "code,status,blocking",
     [
         ("ETF", "EXCLUDED_SECURITY_TYPE", False),
-        ("CS", "SECURITY_IDENTITY_CONFLICT", True),
+        ("CS", "EXCLUDED_IDENTITY_CONFLICT", False),
     ],
 )
-def test_cik_conflict_blocks_common_stock_only(tmp_path, client_factory, code, status, blocking):
+def test_cik_conflict_quarantines_common_stock_only(
+    tmp_path, client_factory, code, status, blocking
+):
     db, *_ = seed(tmp_path)
     populate(db, client_factory, [ticker("A", code, "999"), ticker("B", cik="2")])
     universe, diagnostics = company_universe(db, with_diagnostics=True)
@@ -250,7 +251,7 @@ def test_manifest_rejects_previous_cik_gate_policy_without_changing_economics(tm
     previous["fingerprint"] = fingerprint(previous)
     path = tmp_path / "previous-policy.json"
     path.write_text(json.dumps(previous))
-    assert contract["manifest_version"] == previous["manifest_version"] == 4
+    assert contract["manifest_version"] == previous["manifest_version"] == 5
     assert contract["strategy_definition"] == previous["strategy_definition"]
     with pytest.raises(ValueError, match=f"{MISMATCH}: cik_conflict_policy"):
         load_manifest(path, contract)
@@ -322,7 +323,7 @@ def test_manifest_without_reference_change_can_be_checked_without_discovery_or_n
     monkeypatch.setattr(engine, "observe", forbidden)
     reused = prepare_pairs_data(db, config, START, END, candidate_manifest=path)
     assert reused.manifest == prepared.manifest and len(calls) == 2
-    assert reused.manifest["manifest_version"] == 4
+    assert reused.manifest["manifest_version"] == 5
 
 
 def test_reference_cli_sync_missing_key_and_audit_dispatch_are_isolated(

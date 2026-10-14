@@ -7,9 +7,9 @@ from datetime import timedelta
 
 import pytest
 from test_pairs_stat_arb_v1 import END, START, forbidden, seed
-from test_pairs_stat_arb_v1 import config as config
 from test_pairs_stat_arb_v1 import offline as offline
 from test_pairs_stat_arb_v1 import synthetic_security_types as synthetic_security_types
+from test_pairs_stat_arb_v1_security import config as config
 
 from trading_system.backtest import pairs_stat_arb_v1 as engine
 from trading_system.backtest import pairs_stat_arb_v1_data as data
@@ -66,6 +66,8 @@ def test_every_primary_economic_semantic_rejected_even_with_recomputed_checksum(
         "security_reference_semantics",
         "provider_type_mapping_version",
         "cik_conflict_policy",
+        "identity_conflict_policy",
+        "identity_conflict_classification_version",
         "source_input_scope",
         "hypothesis",
         "requested_start",
@@ -206,10 +208,10 @@ def test_normal_manifest_validation_exports_without_discovery(tmp_path, config, 
     assert "trades" in outputs
 
 
-@pytest.mark.parametrize("version", [1, 2, 3])
+@pytest.mark.parametrize("version", [1, 2, 3, 4])
 def test_pre_patch_manifest_versions_are_obsolete_even_if_rehashed(tmp_path, config, version):
     contract = manifest_contract(config, START, END)
-    assert contract["manifest_version"] == 4
+    assert contract["manifest_version"] == 5
     old = {**contract, "manifest_version": version}
     with pytest.raises(ValueError, match=f"{MISMATCH}: manifest_version"):
         load_manifest(save(tmp_path / "obsolete.json", old), contract)

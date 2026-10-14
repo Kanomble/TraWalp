@@ -6,9 +6,9 @@ from datetime import date
 
 import pytest
 from test_pairs_stat_arb_v1 import END, START, identities, seed, synthetic
-from test_pairs_stat_arb_v1 import config as config
 from test_pairs_stat_arb_v1 import offline as offline
 from test_pairs_stat_arb_v1 import synthetic_security_types as synthetic_security_types
+from test_pairs_stat_arb_v1_security import config as config
 
 from trading_system.backtest.pairs_stat_arb_v1_data import discover_pairs, prepare_pairs_data
 from trading_system.backtest.pairs_stat_arb_v1_research import (

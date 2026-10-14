@@ -21,8 +21,9 @@ An extreme negative deviation is treated symmetrically.
 
 ## Frozen design
 
-Only current local tradable `US_EQUITY` assets with local company identity, valid
-SIC, and Massive **COMMON_STOCK** classification with no SEC/provider CIK conflict qualify.
+Only current local tradable non-OTC `US_EQUITY` assets with local company identity,
+valid/nonzero SEC CIK and SIC, and Massive **COMMON_STOCK** classification without
+local/Massive or cached SEC/local CIK conflict qualify.
 Company/SIC identity alone does not establish that security type. SPY is reserved
 exclusively for diagnostics, even if local company identity exists. No symbol
 blacklist or name heuristic supplies the company boundary. SIC is
@@ -73,6 +74,39 @@ NOT modeled. Positive research requires a separate execution-feasibility study.
 
 ## Reproducibility and data boundary
 
+### Pre-outcome universe/identity definition refinement
+
+Pairs V1 has not inspected historical validation outcomes. The original definition
+did not contain an OTC exclusion. This final eligibility refinement was made before
+first Pairs outcome validation, not as performance tuning or a response to returns.
+User-provided local reference diagnostics exposed a deterministic market-scope
+mismatch: all 22 remaining company reference gaps had persisted Alpaca exchange
+`OTC`. Pairs is a highly liquid long/short US-equity research family; OTC execution,
+borrow and reference semantics differ from the primary-listed universe.
+
+The new frozen base gate requires a local asset, tradable=true, US_EQUITY, not SPY,
+normalized persisted exchange != OTC, local SEC CompanyIdentity, valid/nonzero CIK
+and valid/nonzero SIC. Exchange comparison strips whitespace and uppercases;
+missing/other exchange values are not inferred from names, suffixes or ADR wording.
+OTC symbols have no Massive requirement, blocker, ranking membership or pair.
+
+Common-stock identity disagreement creates an explicit, nonblocking symbol
+quarantine, `EXCLUDED_IDENTITY_CONFLICT`, before historical liquidity ranking.
+Ten-digit local company, cached current SEC (`sec_reference / ticker_to_cik` in
+sync_state) and Massive CIKs classify its provenance:
+
+- local == current SEC and Massive differs: `MASSIVE_REFERENCE_CIK_CONFLICT`;
+- current SEC == Massive and local differs: `LOCAL_IDENTITY_STALE_OR_TICKER_REUSE`;
+- any other local/Massive or local/current SEC conflict: `UNRESOLVED_CROSS_SOURCE_IDENTITY`.
+
+Absent Massive CIK is accepted only without cached SEC/local conflict. No source
+is automatically trusted to migrate an issuer. Companies, historical bars and
+fundamentals remain untouched; the general SEC conflicting-update guard remains
+unchanged. A future symbol/issuer lifecycle model is separate from this safe
+eligibility boundary. Quarantine is an explicit static exclusion, not silent
+rank-six replacement for unresolved Daily inputs. All trading economics below
+and the ADV20 integrity rules remain unchanged.
+
 Preflight is outcome-clean: it freezes selected names, all pair-session
 candidates, calibration coverage/statistics and the semantic contract. Signal
 spread/z remain deferred. Discovery receives no post-signal-period prices. Tail
@@ -107,26 +141,27 @@ rapid restarts; requests made by external software or other computers are outsid
 TraWalp's control.
 
 The company-only requirement is `COMMON_STOCK_WITH_SEC_ISSUER_IDENTITY`:
-first require a local tradable US_EQUITY asset other than SPY, local SEC
+first require a local tradable non-OTC US_EQUITY asset other than SPY, local SEC
 CompanyIdentity with a valid CIK and valid/nonzero SIC. Assets failing that frozen
 base-company gate are outside Pairs; they create no Massive-reference blockers.
-Only inside this scope require Massive canonical `COMMON_STOCK` and matching
-ten-digit CIKs whenever both sources provide one. Missing
-Massive CIK is accepted with valid SEC identity/SIC and explicitly reported;
+Only inside this scope require Massive canonical `COMMON_STOCK` without a
+local/Massive or cached SEC/local CIK conflict. Missing
+Massive CIK is accepted with valid SEC identity/SIC and no cached SEC conflict;
 SEC CIK is never overwritten. This corrects the unsupported operating-company
 metadata requirement without changing Pairs economics.
 
 Reviewed mapping `MASSIVE_STOCK_TYPES_V2` accepts exact catalog entries
 `ETS / Single-security ETF -> ETF`, `ETV / Exchange Traded Vehicle -> ETP`,
 `RIGHT / Rights -> RIGHT`, `SP / Structured Product -> STRUCTURED_PRODUCT`.
-Wrong descriptions/new codes remain UNKNOWN. A new manual V2 snapshot is required.
+Wrong descriptions/new codes remain UNKNOWN. An existing current V2 snapshot
+does not need a resync for this eligibility refinement.
 Known ETF/ETP/fund/preferred/ADR/warrant/unit/right/structured-product/bond/other
 types inside the base scope are excluded nonblocking before the provider CIK
 eligibility check, even if their diagnostic CIK cross-check mismatches.
-Missing reference rows, unknown/new type codes and
-common-stock conflicting CIKs
-produce blocking `SECURITY_TYPE_REFERENCE_MISSING`, `SECURITY_TYPE_UNKNOWN` and
-`SECURITY_IDENTITY_CONFLICT` only for symbols passing the local base-company gate.
+Missing reference rows and unknown/new type codes produce blocking
+`SECURITY_TYPE_REFERENCE_MISSING` and `SECURITY_TYPE_UNKNOWN` only for symbols
+passing the non-OTC local base-company gate. CIK conflicts instead produce
+nonblocking `EXCLUDED_IDENTITY_CONFLICT` with explicit provenance and quarantine.
 Static identity is qualified before historical ranking: unresolved
 metadata freezes no misleading replacement universe and preflight stays unready.
 Neither preflight nor validation repairs metadata or invokes Massive, Alpaca or SEC.
@@ -138,7 +173,7 @@ Current classifications carry `CURRENT_REFERENCE_SECURITY_TYPE_NOT_PIT` alongsid
 claimed. See [security-reference.md](security-reference.md) for the limiter proof,
 credential protection, mapping, storage, access-error policy and manual workflow.
 
-### Coverage qualification (manifest schema 4)
+### Coverage qualification (manifest schema 5)
 
 
 Apply the preceding-close price gate first: a known close below the configured
@@ -197,27 +232,35 @@ definition, including numeric `adv_lookback_sessions=20`, `calibration_sessions=
 `min_correlation=0.70`, `entry_z=2.0`, `long_weight=short_weight=0.50`,
 `slippage_bps=5.0`, `max_hold_sessions=5`, `top_n=5`, and `outcome_tail_sessions=5`.
 No new parameter choices are exposed. Simulation also rejects a prepared manifest
-whose definition differs from the current execution definition. Schema 4 binds
+whose definition differs from the current execution definition. Schema 5 binds
 security-reference source/semantics/fingerprint, catalog fingerprint, mapping
 version, CIK conflict policy,
-`company_universe_scope=LOCAL_TRADABLE_US_EQUITY_WITH_VALID_SEC_COMPANY_CIK_SIC`,
+`company_universe_scope=LOCAL_TRADABLE_NON_OTC_US_EQUITY_WITH_VALID_SEC_COMPANY_CIK_SIC`,
+`identity_conflict_policy=SYMBOL_QUARANTINE_NONBLOCKING`,
+`identity_conflict_classification_version=LOCAL_CACHED_SEC_MASSIVE_CIK_V1`,
+`identity_qualification_fingerprint`,
 `selection_gap_semantics`, `selection_membership_fail_closed=true`,
-`instrument_type_semantics`, and `company_only_requirement`. Schema 1/2/3 manifests
+`instrument_type_semantics`, and `company_only_requirement`. Schema 1/2/3/4 manifests
 are rejected. The earlier historical preflight fingerprint
 `f6985aad8b760cc654bce1c8f6220b6af16bfb78c01d93100f91738f1915a27d`
 is obsolete for validation. This patch follows a historical preflight and precedes
 any historical Pairs outcome evaluation; frozen signal/execution economics remain
-unchanged. The reference membership fingerprint covers every base-company symbol,
-including its missing reference marker or known non-common exclusion, and omits
-deterministically outside-scope assets. Older V4 manifests without this company
-scope or with mapping V1 are rejected without changing economics.
+unchanged. The reference membership fingerprint covers every non-OTC base-company
+symbol, including common stocks, missing reference markers, known non-common
+exclusions and quarantined identities, and omits outside-scope assets. Identity
+qualification binds symbol, normalized local/current SEC/Massive CIKs, conflict
+class, quarantine status, local exchange, SIC, eligibility and blocking status.
+Resolving or introducing a conflict invalidates the frozen manifest. Changing an
+OTC reference/cache row is irrelevant; changing its asset exchange to non-OTC can
+add it to the scope and invalidates the manifest. All V4 manifests are rejected.
 Do not reuse old manifests. Preserve existing report stems; an
 already-used `_v2` stem also refuses overwrite, so choose a new unused stem
 manually if needed. **Do not run historical preflight now.** First review the patch,
-manually sync security reference and run its read-only audit; the user-provided
-audit output must be reviewed before considering the following preflight command.
+manually run only the read-only security-reference audit. No Massive resync is
+needed if the active snapshot is V2/current. The user-provided audit output must
+be reviewed before considering the following preflight command.
 For that later reviewed workflow, the next manual
-preflight uses `_v2` (the report suffix is distinct from manifest schema **4**):
+preflight uses `_v2` (the report suffix is distinct from manifest schema **5**):
 
 ```powershell
 .\.venv\Scripts\python.exe -m trading_system.cli preflight-pairs-stat-arb-v1 `
@@ -226,9 +269,10 @@ preflight uses `_v2` (the report suffix is distinct from manifest schema **4**):
   --output-stem pairs_stat_arb_v1_preflight_2024-01-02_2026-08-12_v2
 ```
 
-Before manually syncing security reference, this command reports the
-company-security-type blocker. Manually review the new preflight before considering
-any validation; no historical run or synchronization was performed for this patch.
+The local audit exposes OTC exclusions, quarantine reasons and any remaining
+non-OTC missing/unknown blockers separately from global coverage. No historical
+run or synchronization was performed for this patch. Any later preflight and
+validation remain separate user decisions after that audit review.
 
 Signals are confined to the requested period. Five official sessions after its
 end are outcome-only. Missing required tail observations yield

@@ -238,8 +238,15 @@ def test_known_exclusion_inside_base_scope_is_fingerprinted(tmp_path, config, cl
         prepare_pairs_data(db, config, START, END, candidate_manifest=path, preflight=True)
 
 
-@pytest.mark.parametrize("old_scope", [None, "ALL_CURRENT_TRADABLE_US_EQUITY"])
-def test_previous_broader_v4_scope_is_rejected_even_with_updated_mapping_and_checksum(
+@pytest.mark.parametrize(
+    "old_scope",
+    [
+        None,
+        "ALL_CURRENT_TRADABLE_US_EQUITY",
+        "LOCAL_TRADABLE_US_EQUITY_WITH_VALID_SEC_COMPANY_CIK_SIC",
+    ],
+)
+def test_previous_broader_scope_is_rejected_even_with_updated_version_mapping_and_checksum(
     tmp_path, config, old_scope
 ):
     contract = manifest_contract(config, START, END)
@@ -249,9 +256,9 @@ def test_previous_broader_v4_scope_is_rejected_even_with_updated_mapping_and_che
     else:
         previous["company_universe_scope"] = old_scope
     previous["fingerprint"] = fingerprint(previous)
-    path = tmp_path / "old-v4.json"
+    path = tmp_path / "old-scope.json"
     path.write_text(json.dumps(previous))
-    assert previous["manifest_version"] == 4
+    assert previous["manifest_version"] == 5
     assert previous["provider_type_mapping_version"] == MAPPING_VERSION
     assert contract["company_universe_scope"] == PAIRS_COMPANY_UNIVERSE_SCOPE
     with pytest.raises(ValueError, match=f"{MISMATCH}: company_universe_scope"):

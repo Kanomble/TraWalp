@@ -21,17 +21,24 @@ Only the explicit user-run command may access Massive:
 
 It uses `MASSIVE_API_KEY` from the project's normal `.env`/environment mechanism.
 Normal F workflows need no Massive key or reference data. Pairs preflight and
-validation remain local and make no Massive, Alpaca or SEC calls. Manifest V4
-binds common-stock classification, SEC issuer/SIC/CIK checks and reference
+validation remain local and make no Massive, Alpaca or SEC calls. Manifest V5
+binds non-OTC company scope, common-stock classification, SEC issuer/SIC/CIK checks,
+explicit identity quarantine evidence and reference
 fingerprints. `CURRENT_UNIVERSE_ONLY`, `NOT_SURVIVORSHIP_CLEAN` and
 `CURRENT_REFERENCE_SECURITY_TYPE_NOT_PIT` apply together.
 Mapping `MASSIVE_STOCK_TYPES_V2` adds ETS/ETV/structured-product classifications
 and the authoritative `RIGHT / Rights` description. Pairs reference qualification
-and membership fingerprints apply only after the frozen local company/valid
-SEC CIK/SIC gate; irrelevant missing assets do not block Pairs. The local audit
-separates base-company missing/unknown references and common-stock CIK conflicts
-from global coverage. After review, manually sync a V2 snapshot and audit it;
-historical Pairs preflight remains deferred until that audit output is reviewed.
+and membership fingerprints apply only after the local non-OTC company/valid
+SEC CIK/SIC gate; irrelevant missing assets do not block Pairs. Exchange exclusion
+uses only the persisted Alpaca exchange field, normalized to `OTC`. Common-stock
+CIK conflicts are excluded through nonblocking symbol quarantine before ranking.
+This is a pre-outcome research-definition refinement, not performance tuning:
+the original definition did not contain the OTC rule, and no historical Pairs
+validation outcomes have been inspected. Trading economics are unchanged.
+The local audit separates OTC exclusions, identity quarantine reasons and genuine
+non-OTC missing/unknown references from global coverage. After review, manually run
+only `audit-security-reference`; no Massive resync is needed if the active snapshot
+is V2/current. Historical Pairs preflight remains deferred until that output is reviewed.
 See [security reference](docs/security-reference.md) for access errors, atomic
 snapshots, mapping, local audit and the manual-only preflight workflow.
 

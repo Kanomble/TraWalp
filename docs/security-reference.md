@@ -150,7 +150,7 @@ transport. Exception/retry diagnostics contain fixed statuses, never provider
 bodies, exception URLs or headers. The integration emits no HTTP trace or secret
 logging and introduces no SDK dependency; it uses existing `requests`.
 
-After code review, the user manually runs:
+Only when a reference refresh is separately needed, the user manually runs:
 
 ```powershell
 .\.venv\Scripts\python.exe -m trading_system.cli sync-security-reference
@@ -218,7 +218,8 @@ The old singular `RIGHT / Right` description is not accepted by V2. Description
 case, spacing and punctuation must match exactly; no symbol/name heuristic is
 introduced. Structured products are known non-common securities, excluded from
 Pairs without blocking it. Existing snapshots are not silently reclassified.
-A fresh explicit manual reference sync is required to obtain a V2 snapshot.
+A fresh explicit manual reference sync is required to upgrade a V1 snapshot to V2;
+this eligibility refinement does not require resyncing an already-current V2 snapshot.
 Missing/new codes or changed/unsupported descriptions become **UNKNOWN**;
 unknown never becomes common stock. No symbol/name heuristic or blacklist is used.
 The raw provider code remains available for later mapping audits. Extending the
@@ -227,57 +228,100 @@ mapping requires review and a new mapping version/reference sync.
 SEC CIK is never overwritten. Valid nonzero digit CIKs normalize to ten digits:
 `CIK_MATCH`, `CIK_MISMATCH`, `CIK_MISSING_MASSIVE`, `CIK_MISSING_LOCAL` are reported.
 Malformed nonempty provider CIK fails the sync. **Missing Massive CIK is accepted
-for Pairs when local SEC identity and SIC are valid**; it is reported as unavailable,
-not a verified match. For COMMON_STOCK eligibility, both existing CIKs must match.
+for Pairs when local SEC identity/SIC are valid and no cached SEC/local conflict
+exists**; it is reported as unavailable, not a verified match. For COMMON_STOCK
+eligibility, conflicts cause explicit symbol quarantine, never issuer migration.
 Known non-common-stock classifications are already outside Pairs; their CIK
 cross-check is retained diagnostically but cannot block that exclusion.
 
-## Pairs V1 boundary and Manifest V4
+## Pre-outcome Pairs V1 refinement and Manifest V5
+
+Pairs V1 has not inspected historical validation outcomes. The original definition
+did not contain the OTC rule. This is a pre-outcome research-definition refinement,
+not performance tuning. User-provided local diagnostics identified all 22 remaining
+base-company reference gaps as Alpaca `exchange=OTC`, exposing a deterministic
+market-scope mismatch. Pairs is a highly liquid long/short US-equity research family;
+OTC execution, borrow and reference semantics differ from the primary-listed
+universe. The exclusion was introduced before first Pairs outcome validation,
+without inspecting returns. Verification here uses synthetic equivalents only.
 
 The frozen **base-company gate is evaluated before Massive qualification**:
 local TradableAsset exists, tradable=true, asset_class=US_EQUITY, symbol is not
-SPY, local SEC CompanyIdentity exists, local SEC CIK is valid/nonzero and SIC is
+SPY, normalized local Alpaca exchange is not `OTC`, local SEC CompanyIdentity exists,
+local SEC CIK is valid/nonzero and SIC is
 valid/nonzero (three/four digits normalized to four). Missing or invalid local
 company/CIK/SIC metadata deterministically places an asset outside the frozen
 Pairs company universe. It creates no security-reference requirement or blocking
 diagnostic. General CompanyIdentity validation and F database helpers are unchanged.
+Exchange comparison strips whitespace and uppercases the persisted asset field;
+missing/other exchange values are not guessed to be OTC. No ticker suffix, security
+description, company name, ADR wording or symbol blacklist is consulted. OTC
+symbols are excluded before Massive lookup and before historical liquidity ranking.
 
 Within this base scope, `COMMON_STOCK_WITH_SEC_ISSUER_IDENTITY` requires Massive
-canonical `COMMON_STOCK` and no CIK conflict. SPY retains its frozen
+canonical `COMMON_STOCK` and no local/Massive or cached SEC/local CIK conflict.
+SPY retains its frozen
 diagnostic-only role. The unsupported `operating_company=true` requirement is
 removed; no Pairs economic parameter changes.
 
 Within the base scope, qualification blocks missing reference/unresolved type,
 then excludes known
 non-common instruments as `EXCLUDED_SECURITY_TYPE`, nonblocking regardless of CIK
-agreement. COMMON_STOCK then applies the accepted provider/local CIK cross-check.
-Missing
-reference is `SECURITY_TYPE_REFERENCE_MISSING`; unknown type is
-`SECURITY_TYPE_UNKNOWN`; common-stock conflicting CIK is `SECURITY_IDENTITY_CONFLICT`.
-Only unresolved reference identity inside the base-company scope blocks. It is
+agreement. COMMON_STOCK then applies three-source identity qualification. Missing
+reference is `SECURITY_TYPE_REFERENCE_MISSING`; unknown type is `SECURITY_TYPE_UNKNOWN`.
+Both remain blocking inside the non-OTC base scope. A common-stock disagreement is
+`EXCLUDED_IDENTITY_CONFLICT`, `validation_blocking=false`, and is excluded from
+ranking and pair formation through explicit identity quarantine. This static
+eligibility exclusion is distinct from silently replacing a member with missing
+Daily inputs. Only unresolved reference/type evidence inside this scope blocks. It is
 resolved **before historical ADV20 ranking**: preflight freezes no replacement
 names/pairs and remains unready. It reports metadata requirements separately
 from Daily-bar remediation. The overall unavailable status remains a fail-closed
 summary of unresolved evidence.
 
+Provenance uses only normalized ten-digit CIKs from the local company row, cached
+`sync_state / sec_reference / ticker_to_cik`, and the active Massive reference:
+
+| Local relationship | Quarantine class |
+| --- | --- |
+| local == cached current SEC; Massive exists and differs | `MASSIVE_REFERENCE_CIK_CONFLICT` |
+| cached current SEC == Massive; local differs | `LOCAL_IDENTITY_STALE_OR_TICKER_REUSE` |
+| Any other local/Massive or local/cached SEC disagreement | `UNRESOLVED_CROSS_SOURCE_IDENTITY` |
+
+Absent cached SEC evidence is not refreshed automatically. A missing Massive CIK
+remains accepted only without a cached SEC/local conflict. All three classes are
+quarantined; classification does not establish which history to rewrite. No
+company CIK, facts, bars or issuer histories are changed or merged. The existing
+general SEC sync conflict guard still retains persisted identity and skips
+conflicting updates. A symbol/issuer lifecycle model is a separate future task.
+
 Pairs preflight/validation are local and read-only: **0 Massive, Alpaca or SEC
-requests**. Manifest V4 binds source, current-reference semantics, company rule,
+requests**. Manifest V5 binds source, current-reference semantics, company rule,
 reference fingerprint, catalog fingerprint, mapping version, CIK conflict policy,
-`company_universe_scope=LOCAL_TRADABLE_US_EQUITY_WITH_VALID_SEC_COMPANY_CIK_SIC`,
-selection-gap semantics and fail-closed membership. V1/V2/V3 are rejected.
-The CIK policy remains
-`SEC_CANONICAL;COMMON_STOCK_BOTH_PRESENT_MUST_MATCH;MASSIVE_MISSING_ACCEPTED`.
-V4 manifests carrying the former all-security CIK policy, a previous/absent
-company scope, or mapping V1 are rejected as semantic drift; manifest version and
-economic parameters remain unchanged.
+`company_universe_scope=LOCAL_TRADABLE_NON_OTC_US_EQUITY_WITH_VALID_SEC_COMPANY_CIK_SIC`,
+`identity_conflict_policy=SYMBOL_QUARANTINE_NONBLOCKING`,
+`identity_conflict_classification_version=LOCAL_CACHED_SEC_MASSIVE_CIK_V1`,
+`identity_qualification_fingerprint`, selection-gap semantics and fail-closed
+membership. V1/V2/V3/V4 are rejected, including rehashed manifests. Mapping stays
+`MASSIVE_STOCK_TYPES_V2`. The CIK policy binds acceptance of missing Massive CIK
+only without cached SEC conflict, and symbol quarantine for identity disagreement.
+Economic parameters remain unchanged.
 The membership reference digest covers **every symbol passing the frozen local
-base-company gate**, including authoritative non-common exclusions and missing
+non-OTC base-company gate**, including common stocks, identity-quarantined symbols,
+authoritative non-common exclusions and missing
 markers within that scope: symbol,
 canonical/raw type, provider CIK, market/locale/active, exchange, both FIGIs,
 source/version and provider timestamp. Assets outside that base scope do not
 participate: changing/removing their Massive rows cannot invalidate Pairs
 membership. Adding valid local company/CIK/SIC metadata can bring a symbol into
-scope and changes the fingerprint. Local SEC identities/SIC and selection
+scope and changes the fingerprint. Changing an OTC Massive row or its cached SEC
+entry does not invalidate the manifest; changing its local exchange to non-OTC
+brings a valid company into scope and invalidates the old manifest. The separate
+identity qualification digest binds each base member's symbol, normalized local,
+cached current SEC and Massive CIKs, conflict class, quarantine status, normalized
+local exchange, SIC, qualification status and blocking flag. A new or resolved
+conflict therefore invalidates frozen membership before any price discovery.
+Local SEC identities/SIC and selection
 Daily inputs remain separately bound. Relevant corrections invalidate the old
 manifest through local checks; no network repair or rediscovery occurs.
 
@@ -295,9 +339,26 @@ pairs_base_company_unknown_type_count
 pairs_base_company_unknown_type_symbols
 common_stock_cik_mismatch_count
 common_stock_cik_mismatch_symbols
+pairs_otc_excluded_count
+pairs_otc_excluded_symbols
+pairs_identity_quarantine_count
+pairs_identity_quarantine_symbols
+pairs_identity_quarantine_by_reason
+pairs_non_otc_company_universe_count
+pairs_non_otc_missing_reference_count
+pairs_non_otc_missing_reference_symbols
+pairs_non_otc_unknown_type_count
+pairs_non_otc_unknown_type_symbols
+pairs_reference_identity_blocking_count
+company_security_types_complete
 ```
 
-The mismatch list applies only to common stocks inside the base-company scope;
+The older `pairs_base_company_*` fields now describe the non-OTC base scope.
+OTC exclusion counts cover valid local base companies excluded by their exchange.
+Quarantine counts also include cached SEC/local conflicts when Massive CIK is absent.
+`company_security_types_complete` reflects missing/unknown reference blockers only;
+it does not establish Daily readiness or authorize validation. The mismatch list
+applies only to common stocks inside the non-OTC base-company scope;
 ETF/fund/etc. CIK disagreements remain visible in broader CIK totals. Symbol lists
 are sorted and capped at 100 each; counts remain exact and corresponding
 `*_symbols_truncated` flags identify omitted entries. Outside-scope assets are
@@ -315,20 +376,18 @@ rank-six replacement rules remain intact.
 
 ## Manual verification after implementation
 
-`MANUAL_VERIFICATION_REQUIRED`: review the commit, confirm the key locally, run
-the explicit sync above, and inspect its summary before any historical research.
-Accept only `status=SUCCESS`, both request categories summing to total attempts,
-cap 5, `allowed_endpoints_only=true`, `paid_features_used=false`, a complete
-snapshot, and reviewed unknown/missing/CIK conflict counts. The limiter's timing
-guarantee is enforced by code and deterministic tests, not a billing-state claim.
-
-After the reviewed patch's manual reference sync, the user manually audits:
+`MANUAL_VERIFICATION_REQUIRED`: review this commit, then manually run only the
+read-only audit. No Massive resync is needed if the active snapshot is V2/current:
 
 ```powershell
 .\.venv\Scripts\python.exe -m trading_system.cli audit-security-reference
 ```
 
-Provide the sync JSON console summary and local audit JSON output for review;
+Provide the audit JSON console output for review. Expected observed-shape diagnostics
+are 22 OTC exclusions, four explicit identity quarantines (two per observed class),
+zero non-OTC missing/unknown references, and zero blocking reference/identity
+conditions; real counts must be reviewed, not presumed. These are metadata checks,
+not Pairs outcomes or trading authorization. Never provide credentials;
 never provide `.env` or the key. Historical Pairs preflight/validation remain
 deferred until the user-provided audit has been reviewed. No targeted ticker/CIK
 fallback requests or inactive-universe crawl have been added: the sync still
