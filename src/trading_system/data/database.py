@@ -142,67 +142,67 @@ class Database:
                 )
             _migrate_daily_bars(connection)
 
-    def upsert_symbol_identity_epochs(self, epochs, *, protect_existing=False):
-        """Explicit ingestion; protected provider batches are insert-only and return a count."""
+    def upsert_symbol_identity_epochs(self, epochs, *, protect_existing=True):
+        """Insert-only evidence batches; conflicts roll back and existing rows never change.
+
+        The compatibility keyword cannot disable protection. Fixture changes must
+        be made explicitly in their temporary databases, outside this ingestion API.
+        """
         from trading_system.data.security_identity import SymbolIdentityEpoch
 
+        if not protect_existing:
+            raise ValueError("IDENTITY_EPOCH_UNPROTECTED_INGESTION_NOT_ALLOWED")
         records = [SymbolIdentityEpoch.from_record(epoch.record()).record() for epoch in epochs]
         if not records:
-            return 0 if protect_existing else None
+            return 0
         columns = tuple(records[0])
         with self.connect() as connection:
-            if protect_existing:
-                connection.execute("BEGIN IMMEDIATE")
-                created = 0
-                for record in records:
-                    existing = [
-                        dict(row)
-                        for row in connection.execute(
-                            "SELECT * FROM symbol_identity_epochs WHERE symbol=?",
-                            (record["symbol"],),
-                        )
-                    ]
-                    # Keep manual/stronger evidence byte-for-byte, including its audit time.
-                    equivalent = False
-                    for old in existing:
-                        same_key = all(
-                            old[k] == record[k] for k in ("symbol", "source", "evidence_reference")
-                        )
-                        overlaps = (
-                            record["effective_end"] is None
-                            or old["effective_start"] < record["effective_end"]
-                        ) and (
-                            old["effective_end"] is None
-                            or record["effective_start"] < old["effective_end"]
-                        )
-                        if same_key or (old["verified"] and overlaps):
-                            same_interval = all(
-                                old[k] == record[k]
-                                for k in (
-                                    "cik",
-                                    "stable_security_identity",
-                                    "effective_start",
-                                    "effective_end",
-                                    "evidence_type",
-                                    "verified",
-                                )
+            connection.execute("BEGIN IMMEDIATE")
+            created = 0
+            for record in records:
+                existing = [
+                    dict(row)
+                    for row in connection.execute(
+                        "SELECT * FROM symbol_identity_epochs WHERE symbol=?",
+                        (record["symbol"],),
+                    )
+                ]
+                # Keep manual/stronger evidence byte-for-byte, including its audit time.
+                equivalent = False
+                for old in existing:
+                    same_key = all(
+                        old[k] == record[k] for k in ("symbol", "source", "evidence_reference")
+                    )
+                    overlaps = (
+                        record["effective_end"] is None
+                        or old["effective_start"] < record["effective_end"]
+                    ) and (
+                        old["effective_end"] is None
+                        or record["effective_start"] < old["effective_end"]
+                    )
+                    if same_key or (old["verified"] and overlaps):
+                        same_interval = all(
+                            old[k] == record[k]
+                            for k in (
+                                "cik",
+                                "stable_security_identity",
+                                "effective_start",
+                                "effective_end",
+                                "evidence_type",
+                                "verified",
                             )
-                            if not same_interval:
-                                raise ValueError("IDENTITY_EVIDENCE_CONFLICT")
-                            equivalent = True
-                    if not equivalent:
-                        connection.execute(
-                            f"INSERT INTO symbol_identity_epochs ({','.join(columns)}) "
-                            f"VALUES ({','.join('?' for _ in columns)})",
-                            tuple(record[k] for k in columns),
                         )
-                        created += 1
-                return created
-            connection.executemany(
-                f"INSERT OR REPLACE INTO symbol_identity_epochs ({','.join(columns)}) "
-                f"VALUES ({','.join('?' for _ in columns)})",
-                [tuple(record[k] for k in columns) for record in records],
-            )
+                        if not same_interval:
+                            raise ValueError("IDENTITY_EVIDENCE_CONFLICT")
+                        equivalent = True
+                if not equivalent:
+                    connection.execute(
+                        f"INSERT INTO symbol_identity_epochs ({','.join(columns)}) "
+                        f"VALUES ({','.join('?' for _ in columns)})",
+                        tuple(record[k] for k in columns),
+                    )
+                    created += 1
+            return created
 
     def ingest_security_corporate_actions(self, records):
         """Immutable provider events; changed payloads conflict rather than replace evidence."""

@@ -101,12 +101,21 @@ in den Epoch-Referenzen dokumentiert; ohne diese Zusatzquelle ist das Ergebnis B
 Raw-Events sind unter Provider/Action-ID idempotent, ohne ID unter einem natürlichen
 Hash-Schlüssel. Beobachtungszeit wird bei Wiederholung nicht überschrieben.
 Geänderte Payloads unter demselben Schlüssel: Konflikt, Original bleibt erhalten.
-Epoch-Promotion nutzt `upsert_symbol_identity_epochs(..., protect_existing=True)`:
+`SymbolIdentityEpoch(verified=True)` verlangt CIK **und** eine konkrete stabile
+Security-/Share-Class-ID, autoritativen Lifecycle-Evidenztyp, Quelle,
+Evidenzreferenz und timezone-aware `observed_at`. CIK allein ist keine
+Security-Bindung. Current-Matching verlangt exakt gleiche CIK und stabile ID
+(Share-Class FIGI, Composite FIGI oder explizite `stable_security_identity`).
+Legacy-Rows ohne diese Identität bleiben gespeichert, beim Auflösen aber Unknown;
+kein automatischer Datenumbau.
+
+Epoch-Ingestion ist standardmäßig geschützt (`protect_existing=True`):
 atomarer Batch, identische Intervalle unverändert, widersprüchliche Schlüssel oder
 überlappende verifizierte Intervalle erzeugen `IDENTITY_EVIDENCE_CONFLICT` und Rollback.
 Bestehende manuelle/verifizierte Epochen werden nicht ersetzt oder gelöscht.
-Die bisherige explizite manuelle API bleibt verfügbar; der neue Sync nutzt nur den
-geschützten Modus. Bei Konflikten oder Ergebnislimit werden keine neuen Epochen promoted.
+`protect_existing=False` wird abgelehnt; es gibt keinen ungeschützten Replace-Pfad.
+Leere Ingestion ist ein No-op. Bei Konflikten oder Ergebnislimit werden keine
+neuen Epochen promoted.
 
 Die CLI zeigt die angeforderten/empfangenen/gespeicherten/verifizierten Counts,
 Konflikte, Fehler sowie resolved/unresolved Symbole mit kurzen Reasons.
@@ -135,6 +144,16 @@ Bindings prüfen, liefern lokal aber keine vollständige CUSIP-/Class-/Ticker-Hi
 Ein Symbolwechsel-Event derselben Issue rekonstruiert **keine vollständige Ticker-Reuse-
 Historie verschiedener Issuer**. Eine leere Antwort beweist keine Kontinuität;
 alte Bars bleiben bis zur verifizierten heutigen Epoche unzugeordnet.
+
+Multi-Hop-Ketten wie `AAA → BBB → CCC` werden nicht automatisch aus Current-State-
+Bindings aufgelöst. Jeder NameChange wird separat gegen die heutige lokale
+Identity seines `new_symbol` geprüft. Ist nur CCC aktuell gebunden, wird der
+frühere Hop nach BBB nicht durch Rückwärtsverkettung verifiziert. Ein separat
+vollständig belegter letzter Hop kann unabhängig verifiziert werden; daraus
+entsteht keine vollständige AAA-Historie. Jeder weitere Hop benötigt eigene
+geprüfte Lifecycle-/Binding-Evidenz. Vollständige historische Symbolketten benötigen
+weiterhin eine externe Historical-Security-Master-/Ticker-Event-Quelle; eine
+Graph-/Chain-Reconstruction ist nicht implementiert.
 
 ## Reale kleine Probes und Ingestion am 2026-10-14
 

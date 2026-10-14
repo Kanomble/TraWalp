@@ -132,7 +132,12 @@ def test_calibration_cannot_cross_epoch_for_either_leg(tmp_path, config, leg):
     rows = identities()
     current = next(r for r in rows if r["symbol"] == leg)
     current["identity_epoch"] = synthetic_epoch(leg, current["cik"], sessions[30]).record()
-    db.upsert_symbol_identity_epochs([synthetic_epoch(leg, current["cik"], sessions[30])])
+    # Explicitly alter the temporary fixture; production ingestion never replaces evidence.
+    with db.connect() as c:
+        c.execute(
+            "UPDATE symbol_identity_epochs SET effective_start=? WHERE symbol=?",
+            (str(sessions[30]), leg),
+        )
     # Even an unfiltered raw bar map must not join the two blocks.
     mapping = {r["symbol"]: r for r in rows}
     stats = calibration(bars, sessions, 60, "A", "B", identity_by_symbol=mapping)
@@ -162,7 +167,11 @@ def test_adv_and_previous_close_cannot_use_foreign_epoch_prices(config):
 
 def test_epoch_end_protects_outcomes_and_readiness(tmp_path, config):
     db, sessions, *_ = seed(tmp_path, end=START)
-    db.upsert_symbol_identity_epochs([synthetic_epoch("A", "0000000001", end=sessions[62])])
+    with db.connect() as c:
+        c.execute(
+            "UPDATE symbol_identity_epochs SET effective_end=? WHERE symbol='A'",
+            (str(sessions[62]),),
+        )
     prepared = prepare_pairs_data(db, config, START, START, preflight=True)
     assert prepared.manifest["candidates"][0]["calibration_status"] == "ELIGIBLE"
     assert prepared.metadata["identity_epoch_outcome_requirements"] == 4

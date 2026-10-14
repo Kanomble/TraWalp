@@ -24,11 +24,15 @@ Das API validiert diesen Vertrag, prüft aber keine externen Dokumentinhalte sel
 Es existiert bewusst kein automatischer Converter von heutigen Metadaten,
 Bars, Bar-Lücken, Company-Namen oder SEC-Forms zu verifizierten Intervallen.
 
-Für Pairs muss die CIK zur heutigen Company passen. Eine vorhandene stabile ID
-muss ebenfalls mit der heutigen Referenz übereinstimmen; FIGIs werden als
-`SHARE_CLASS_FIGI:<id>` oder `COMPOSITE_FIGI:<id>` gespeichert. Ohne stabile ID
-muss die externe Lifecycle-Evidenz die genaue Security/Klasse trotzdem tragen;
-CIK-Gleichheit alleine reicht nicht. Überlappende verifizierte Symbolzuordnungen,
+Für `verified=True` sind eine nichtleere CIK **und** eine konkrete stabile
+Security-/Share-Class-ID verpflichtend, zusätzlich zum autoritativen Lifecycle-
+Evidenztyp, einer Quelle, Evidenzreferenz und timezone-aware `observed_at`.
+CIK allein identifiziert den Issuer, nicht dessen konkrete Share Class.
+Für Pairs müssen CIK und stabile ID exakt zur heutigen Referenz passen; FIGIs
+werden als `SHARE_CLASS_FIGI:<id>` oder `COMPOSITE_FIGI:<id>` gespeichert.
+Explizite `stable_security_identity` wird ebenfalls nur exakt verglichen.
+Fehlt eine stabile ID in der Epoche oder heutigen Referenz, gibt es kein Match.
+Überlappende verifizierte Symbolzuordnungen,
 unverifizierte aktuelle Zuordnungen und mehrere passende Intervalle bleiben
 unresolved. V1 verbindet auch mehrere belegte Intervalle derselben Security
 absichtlich nicht automatisch.
@@ -36,8 +40,20 @@ absichtlich nicht automatisch.
 `Database.initialize()` legt die leere Tabelle gemäß der bestehenden
 Schema-Konvention an. `Database.upsert_symbol_identity_epochs()` ist die kleine
 explizite Ingestion-Schnittstelle für zuvor geprüfte `SymbolIdentityEpoch`-Objekte.
+Geschützte, atomare Insert-only-Ingestion ist der Default (`protect_existing=True`);
+`False` wird abgelehnt. Es gibt keinen Replace-Pfad. Identische Evidenz bleibt
+unverändert, schwächere oder widersprüchliche Evidenz erzeugt
+`IDENTITY_EVIDENCE_CONFLICT`. Leere Ingestion ändert nichts.
 Sie befüllt nichts aus existierenden Daten. Research-Reads führen keine Migration
-aus; eine ältere Datenbank ohne die Tabelle liefert Unknown.
+aus; eine ältere Datenbank ohne die Tabelle liefert Unknown. Legacy-Rows mit
+`verified=true`, aber ohne CIK/stabile ID bleiben unverändert gespeichert und
+werden beim Auflösen als `IDENTITY_EPOCH_UNKNOWN` behandelt; keine Reparatur/Promotion.
+
+Multi-Hop-Tickerketten werden nicht aus Current-State-Bindings rekonstruiert:
+`AAA → BBB → CCC` bleibt ohne separat geprüfte Lifecycle-Evidenz und erforderliche
+Binding-Evidenz für jeden Hop unresolved. Die heutige CCC-Bindung belegt keinen
+früheren Hop nach BBB. Details im
+[Lifecycle-Ingestion-Vertrag](pairs-stat-arb-v1-security-lifecycle-ingestion.md).
 
 ## Untersuchte bestehende Quellen
 

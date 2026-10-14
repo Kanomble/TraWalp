@@ -83,6 +83,7 @@ def synthetic_security_types(monkeypatch):
                 "CS",
                 "MASSIVE_V3_REFERENCE_TICKERS",
                 reference_present=True,
+                share_class_figi=f"CLASS-{s}",
             )
             for s in symbols
         },
@@ -113,6 +114,7 @@ def identities(symbols=("A", "B"), sic="3571"):
         {
             "symbol": s,
             "cik": f"{i + 1:010d}",
+            "share_class_figi": f"CLASS-{s}",
             "sic": sic,
             "sic2": sic[:2],
             "asset_class": "US_EQUITY",
@@ -128,6 +130,7 @@ def synthetic_epoch(symbol, cik, start=date(2020, 1, 1), end=None):
     return SymbolIdentityEpoch(
         symbol=symbol,
         cik=cik,
+        stable_security_identity=f"SHARE_CLASS_FIGI:CLASS-{symbol}",
         effective_start=start,
         effective_end=end,
         source="SYNTHETIC_LIFECYCLE",

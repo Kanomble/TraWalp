@@ -194,8 +194,8 @@ def test_ticker_reuse_is_not_security_continuity(db):
 
 def test_existing_verified_epoch_survives_weak_evidence_and_empty_responses(db):
     original = epoch(source="MANUAL_REVIEWED_SOURCE")
-    assert db.upsert_symbol_identity_epochs([original]) is None
-    assert db.upsert_symbol_identity_epochs([], protect_existing=True) == 0
+    assert db.upsert_symbol_identity_epochs([original]) == 1
+    assert db.upsert_symbol_identity_epochs([]) == 0
     saved = db.symbol_identity_epochs(["NEW"])
     report = sync_security_lifecycle(db, client({"name_changes": [event()]}), ["NEW"], START, END)
     assert report["unverified_evidence"] == 1 and report["verified_epochs_created"] == 0
@@ -212,7 +212,6 @@ def test_epoch_conflict_rolls_back_whole_promotion_and_preserves_manual_record(d
     with pytest.raises(ValueError, match=CONFLICT):
         db.upsert_symbol_identity_epochs(
             [epoch("OLD", start=date(2020, 1, 1), end=date(2025, 6, 18)), epoch()],
-            protect_existing=True,
         )
     assert db.symbol_identity_epochs(["NEW", "OLD"]) == saved
 
@@ -232,6 +231,52 @@ def test_current_identifier_unavailable_does_not_become_an_identity_conflict():
         action(), {**identity(), "share_class_figi": None}, supplement()
     )
     assert outcome["status"] == "UNVERIFIED_EVIDENCE" and outcome["epochs"] == []
+
+
+def test_multi_hop_does_not_borrow_current_binding_from_final_symbol(db, monkeypatch):
+    from trading_system.data import security_lifecycle as lifecycle
+
+    first = event(old_symbol="AAA", new_symbol="BBB", process_date="2025-03-03")
+    second = event(
+        id="12345678-1234-5678-1234-567812345679",
+        old_symbol="BBB",
+        new_symbol="CCC",
+    )
+    proof = {
+        **supplement(),
+        "epochs": [
+            epoch("AAA", start=date(2020, 1, 1), end=date(2025, 3, 1)).record(),
+            epoch("BBB", start=date(2025, 3, 1), end=date(2025, 6, 18)).record(),
+        ],
+    }
+    # Even reviewed first-hop intervals cannot borrow the current CCC binding.
+    monkeypatch.setattr(
+        lifecycle,
+        "local_lifecycle_identities",
+        lambda *args: {"CCC": {**identity(), "symbol": "CCC"}},
+    )
+    report = sync_security_lifecycle(
+        db,
+        client({"name_changes": [first, second]}),
+        ["AAA", "BBB", "CCC"],
+        START,
+        END,
+        verifications=[proof],
+    )
+    assert report["corporate_actions_received"] == report["raw_evidence_inserted"] == 2
+    assert report["verified_epochs_created"] == report["identity_conflicts"] == 0
+    assert report["unverified_evidence"] == 2
+    assert report["symbols_resolved"] == []
+    assert report["symbols_unresolved"] == ["AAA", "BBB", "CCC"]
+    assert report["unresolved_sample"][0] == {
+        "symbol": "AAA",
+        "reason": "CURRENT_COMMON_STOCK_BINDING_UNAVAILABLE",
+    }
+    assert db.symbol_identity_epochs(["AAA", "BBB", "CCC"]) == {
+        "AAA": [],
+        "BBB": [],
+        "CCC": [],
+    }
 
 
 def test_installed_sdk_request_and_synthetic_envelope_parsing_are_bounded(monkeypatch):

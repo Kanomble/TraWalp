@@ -33,10 +33,16 @@ class SymbolIdentityEpoch:
         if self.effective_end is not None and self.effective_end <= self.effective_start:
             raise ValueError("IDENTITY_EPOCH_INVALID_INTERVAL")
         if self.verified and (
+            not self.cik
+            or not self.cik.strip()
+            or not self.stable_security_identity
+            or not self.stable_security_identity.rpartition(":")[2].strip()
+        ):
+            raise ValueError("IDENTITY_EPOCH_SECURITY_IDENTITY_REQUIRED")
+        if self.verified and (
             self.evidence_type != LIFECYCLE_EVIDENCE
             or not self.source.strip()
             or not self.evidence_reference.strip()
-            or not (self.cik or self.stable_security_identity)
             or datetime.fromisoformat(self.observed_at).tzinfo is None
         ):
             raise ValueError("IDENTITY_EPOCH_TEMPORAL_EVIDENCE_REQUIRED")
@@ -68,13 +74,12 @@ class SymbolIdentityEpoch:
 
 
 def _matches_current(epoch, identity):
-    # CIK alone is not lifecycle evidence. The evidence contract explicitly covers
-    # this exact common-share security/class, including its current association.
-    if epoch.symbol != identity["symbol"] or epoch.cik != identity.get("cik"):
+    # Issuer equality cannot bind a particular security/share class.
+    if not epoch.cik or epoch.symbol != identity["symbol"] or epoch.cik != identity.get("cik"):
         return False
     stable = epoch.stable_security_identity
-    if stable is None:
-        return True
+    if not stable or not stable.rpartition(":")[2].strip():
+        return False
     current = {identity.get("stable_security_identity")}
     for field in ("share_class_figi", "composite_figi"):
         if identity.get(field):
@@ -104,6 +109,7 @@ def current_identity_epoch(identity, records):
                 return None
         return epoch.record()
     except (KeyError, TypeError, ValueError, AttributeError):
+        # Legacy verified rows without concrete security IDs remain stored but unresolved.
         return None
 
 
