@@ -107,19 +107,27 @@ rapid restarts; requests made by external software or other computers are outsid
 TraWalp's control.
 
 The company-only requirement is `COMMON_STOCK_WITH_SEC_ISSUER_IDENTITY`:
-Massive canonical `COMMON_STOCK`, local SEC CompanyIdentity with a valid CIK,
-valid SIC, and matching ten-digit CIKs whenever both sources provide one. Missing
+first require a local tradable US_EQUITY asset other than SPY, local SEC
+CompanyIdentity with a valid CIK and valid/nonzero SIC. Assets failing that frozen
+base-company gate are outside Pairs; they create no Massive-reference blockers.
+Only inside this scope require Massive canonical `COMMON_STOCK` and matching
+ten-digit CIKs whenever both sources provide one. Missing
 Massive CIK is accepted with valid SEC identity/SIC and explicitly reported;
 SEC CIK is never overwritten. This corrects the unsupported operating-company
 metadata requirement without changing Pairs economics.
 
-Known ETF/ETP/fund/preferred/ADR/warrant/unit/right/bond/other types are excluded
-nonblocking before SEC/SIC/CIK eligibility checks, even if their diagnostic CIK
-cross-check mismatches. Missing reference rows, unknown/new type codes and
+Reviewed mapping `MASSIVE_STOCK_TYPES_V2` accepts exact catalog entries
+`ETS / Single-security ETF -> ETF`, `ETV / Exchange Traded Vehicle -> ETP`,
+`RIGHT / Rights -> RIGHT`, `SP / Structured Product -> STRUCTURED_PRODUCT`.
+Wrong descriptions/new codes remain UNKNOWN. A new manual V2 snapshot is required.
+Known ETF/ETP/fund/preferred/ADR/warrant/unit/right/structured-product/bond/other
+types inside the base scope are excluded nonblocking before the provider CIK
+eligibility check, even if their diagnostic CIK cross-check mismatches.
+Missing reference rows, unknown/new type codes and
 common-stock conflicting CIKs
 produce blocking `SECURITY_TYPE_REFERENCE_MISSING`, `SECURITY_TYPE_UNKNOWN` and
-`SECURITY_IDENTITY_CONFLICT`. Common stock without valid SEC identity/SIC also
-blocks. Static identity is qualified before historical ranking: unresolved
+`SECURITY_IDENTITY_CONFLICT` only for symbols passing the local base-company gate.
+Static identity is qualified before historical ranking: unresolved
 metadata freezes no misleading replacement universe and preflight stays unready.
 Neither preflight nor validation repairs metadata or invokes Massive, Alpaca or SEC.
 
@@ -192,15 +200,23 @@ No new parameter choices are exposed. Simulation also rejects a prepared manifes
 whose definition differs from the current execution definition. Schema 4 binds
 security-reference source/semantics/fingerprint, catalog fingerprint, mapping
 version, CIK conflict policy,
+`company_universe_scope=LOCAL_TRADABLE_US_EQUITY_WITH_VALID_SEC_COMPANY_CIK_SIC`,
 `selection_gap_semantics`, `selection_membership_fail_closed=true`,
 `instrument_type_semantics`, and `company_only_requirement`. Schema 1/2/3 manifests
 are rejected. The earlier historical preflight fingerprint
 `f6985aad8b760cc654bce1c8f6220b6af16bfb78c01d93100f91738f1915a27d`
 is obsolete for validation. This patch follows a historical preflight and precedes
 any historical Pairs outcome evaluation; frozen signal/execution economics remain
-unchanged. Do not reuse old manifests. Preserve existing report stems; an
+unchanged. The reference membership fingerprint covers every base-company symbol,
+including its missing reference marker or known non-common exclusion, and omits
+deterministically outside-scope assets. Older V4 manifests without this company
+scope or with mapping V1 are rejected without changing economics.
+Do not reuse old manifests. Preserve existing report stems; an
 already-used `_v2` stem also refuses overwrite, so choose a new unused stem
-manually if needed. After the explicit manual security-reference sync, the next manual
+manually if needed. **Do not run historical preflight now.** First review the patch,
+manually sync security reference and run its read-only audit; the user-provided
+audit output must be reviewed before considering the following preflight command.
+For that later reviewed workflow, the next manual
 preflight uses `_v2` (the report suffix is distinct from manifest schema **4**):
 
 ```powershell

@@ -19,6 +19,7 @@ from trading_system.data.market_sessions import trading_sessions_between
 from trading_system.data.security_reference import (
     CIK_CONFLICT_POLICY,
     MAPPING_VERSION,
+    PAIRS_COMPANY_UNIVERSE_SCOPE,
     REFERENCE_SEMANTICS,
     SOURCE,
 )
@@ -68,6 +69,7 @@ def manifest_contract(config, start, end):
         "selection_membership_fail_closed": True,
         "instrument_type_semantics": INSTRUMENT_TYPE_SEMANTICS,
         "company_only_requirement": COMPANY_ONLY_REQUIREMENT,
+        "company_universe_scope": PAIRS_COMPANY_UNIVERSE_SCOPE,
         "security_reference_source": SOURCE,
         "security_reference_semantics": REFERENCE_SEMANTICS,
         "provider_type_mapping_version": MAPPING_VERSION,

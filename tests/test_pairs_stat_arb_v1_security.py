@@ -65,7 +65,22 @@ def test_asset_sec_metadata_without_reference_stays_blocking_before_price_reads(
 
 @pytest.mark.parametrize(
     "code",
-    ["ETF", "ETP", "ETN", "FUND", "PFD", "ADRC", "WARRANT", "UNIT", "RIGHT", "BOND", "OTHER"],
+    [
+        "ETF",
+        "ETS",
+        "ETP",
+        "ETV",
+        "SP",
+        "ETN",
+        "FUND",
+        "PFD",
+        "ADRC",
+        "WARRANT",
+        "UNIT",
+        "RIGHT",
+        "BOND",
+        "OTHER",
+    ],
 )
 def test_known_non_common_types_are_excluded_without_blocking(tmp_path, client_factory, code):
     db, *_ = seed(tmp_path)
@@ -96,8 +111,6 @@ def test_common_stock_with_sec_identity_and_sic_accepts_matching_or_absent_massi
         ("missing", "SECURITY_TYPE_REFERENCE_MISSING"),
         ("unknown", "SECURITY_TYPE_UNKNOWN"),
         ("conflict", "SECURITY_IDENTITY_CONFLICT"),
-        ("no_sec", "SEC_ISSUER_IDENTITY_MISSING"),
-        ("no_sic", "SEC_SIC_MISSING_OR_INVALID"),
     ],
 )
 def test_unresolved_static_identity_blocks_all_discovery_before_adv_ranking(
@@ -115,11 +128,6 @@ def test_unresolved_static_identity_blocks_all_discovery_before_adv_ranking(
     if change == "missing":
         rows = rows[1:]
     populate(db, client_factory, rows)
-    with db.connect() as connection:
-        if change == "no_sec":
-            connection.execute("DELETE FROM companies WHERE symbol='A'")
-        if change == "no_sic":
-            connection.execute("UPDATE companies SET sic=NULL WHERE symbol='A'")
     _, diagnostics = company_universe(db, with_diagnostics=True)
     assert diagnostics[0]["status"] == expected and diagnostics[0]["validation_blocking"]
     monkeypatch.setattr(data, "discover_pairs", forbidden)

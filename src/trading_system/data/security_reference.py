@@ -10,7 +10,8 @@ from datetime import UTC, datetime
 SOURCE = "MASSIVE"
 SOURCE_VERSION = "MASSIVE_V3_REFERENCE_TICKERS"
 REFERENCE_SEMANTICS = "CURRENT_REFERENCE_SECURITY_TYPE_NOT_PIT"
-MAPPING_VERSION = "MASSIVE_STOCK_TYPES_V1"
+MAPPING_VERSION = "MASSIVE_STOCK_TYPES_V2"
+PAIRS_COMPANY_UNIVERSE_SCOPE = "LOCAL_TRADABLE_US_EQUITY_WITH_VALID_SEC_COMPANY_CIK_SIC"
 CIK_CONFLICT_POLICY = "SEC_CANONICAL;COMMON_STOCK_BOTH_PRESENT_MUST_MATCH;MASSIVE_MISSING_ACCEPTED"
 SECURITY_TYPES = (
     "COMMON_STOCK",
@@ -23,6 +24,7 @@ SECURITY_TYPES = (
     "WARRANT",
     "UNIT",
     "RIGHT",
+    "STRUCTURED_PRODUCT",
     "BOND",
     "OTHER",
     "UNKNOWN",
@@ -34,7 +36,9 @@ _MAPPING = {
     "CS": ("COMMON_STOCK", {"Common Stock"}),
     "PFD": ("PREFERRED_STOCK", {"Preferred Stock"}),
     "ETF": ("ETF", {"Exchange Traded Fund"}),
+    "ETS": ("ETF", {"Single-security ETF"}),
     "ETP": ("ETP", {"Exchange Traded Product"}),
+    "ETV": ("ETP", {"Exchange Traded Vehicle"}),
     "ETN": ("ETN", {"Exchange Traded Note"}),
     "FUND": ("FUND", {"Fund"}),
     "ADRC": ("ADR", {"American Depository Receipt Common"}),
@@ -43,7 +47,8 @@ _MAPPING = {
     "ADRW": ("ADR", {"American Depository Receipt Warrants"}),
     "WARRANT": ("WARRANT", {"Warrant"}),
     "UNIT": ("UNIT", {"Unit"}),
-    "RIGHT": ("RIGHT", {"Right"}),
+    "RIGHT": ("RIGHT", {"Rights"}),
+    "SP": ("STRUCTURED_PRODUCT", {"Structured Product"}),
     "BOND": ("BOND", {"Bond"}),
     "OTHER": ("OTHER", {"Other"}),
 }
@@ -87,6 +92,65 @@ def cik_state(local, provider):
 def valid_sic(value):
     value = str(value or "").strip()
     return value.zfill(4) if re.fullmatch(r"[0-9]{3,4}", value) and int(value) else None
+
+
+def _local_company_metadata(database):
+    """Read only local asset/identity metadata; exclude invalid CIKs before hydration.
+
+    This reader does not change CompanyIdentity validation or the general/F
+    database helpers. It is used only by the Pairs base gate and reference audit.
+    """
+    with database.read_only() as connection:
+        connection.execute("BEGIN")
+        assets = [
+            {
+                "symbol": row["symbol"],
+                "tradable": bool(row["tradable"]),
+                "asset_class": dict(row).get("asset_class", "UNKNOWN"),
+            }
+            for row in connection.execute("SELECT * FROM assets WHERE tradable=1 ORDER BY symbol")
+        ]
+        companies = {
+            row["symbol"]: dict(row)
+            for row in connection.execute(
+                "SELECT c.symbol,c.cik,c.sic FROM companies c JOIN assets a ON a.symbol=c.symbol "
+                "WHERE a.tradable=1 ORDER BY c.symbol"
+            )
+        }
+    return assets, companies
+
+
+def pairs_base_company_universe(database, *, assets=None, companies=None):
+    """Frozen local company/CIK/SIC gate, independent of Massive reference coverage."""
+    if assets is None or companies is None:
+        local_assets, local_companies = _local_company_metadata(database)
+        assets = local_assets if assets is None else assets
+        companies = local_companies if companies is None else companies
+    base = []
+    for asset in assets:
+        company = companies.get(asset["symbol"])
+        if (
+            not asset["tradable"]
+            or asset["asset_class"] != "US_EQUITY"
+            or asset["symbol"] == "SPY"
+            or company is None
+            or normalize_cik(company["cik"]) is None
+        ):
+            continue
+        sic = valid_sic(company["sic"])
+        if sic is None:
+            continue
+        base.append(
+            {
+                "symbol": asset["symbol"],
+                "cik": company["cik"],
+                "sic": sic,
+                "sic2": sic[:2],
+                "tradable": True,
+                "asset_class": asset["asset_class"],
+            }
+        )
+    return sorted(base, key=lambda row: row["symbol"])
 
 
 def normalize_catalog(records):
@@ -183,12 +247,17 @@ def membership_fingerprint(records, symbols):
 
 def reference_audit(database, *, now=None):
     records, snapshot = database.security_reference_snapshot()
-    assets = [a for a in database.list_tradable_assets() if a.asset_class == "US_EQUITY"]
-    companies = {c.symbol: c for c in database.list_tradable_companies()}
-    symbols = {a.symbol for a in assets}
+    assets, companies = _local_company_metadata(database)
+    assets = [a for a in assets if a["asset_class"] == "US_EQUITY"]
+    base = {
+        r["symbol"]: r
+        for r in pairs_base_company_universe(database, assets=assets, companies=companies)
+    }
+    symbols = {a["symbol"] for a in assets}
     matched = symbols & records.keys()
     states = Counter(
-        cik_state(companies[s].cik if s in companies else None, records[s]["cik"]) for s in matched
+        cik_state(companies[s]["cik"] if s in companies else None, records[s]["cik"])
+        for s in matched
     )
     distribution = Counter(r["security_type"] for r in records.values())
     eligible = sum(
@@ -198,13 +267,32 @@ def reference_audit(database, *, now=None):
         and records[s]["market"] == "stocks"
         and records[s]["locale"] == "us"
         and records[s]["active"]
-        and s in companies
-        and normalize_cik(companies[s].cik) is not None
-        and valid_sic(companies[s].sic) is not None
-        and cik_state(companies[s].cik, records[s]["cik"]) != "CIK_MISMATCH"
-        and s != "SPY"
-        for s in matched
+        and cik_state(base[s]["cik"], records[s]["cik"]) != "CIK_MISMATCH"
+        for s in base.keys() & records.keys()
     )
+    base_missing = sorted(base.keys() - records.keys())
+    base_unknown = sorted(
+        s for s in base.keys() & records.keys() if records[s]["security_type"] == "UNKNOWN"
+    )
+    common_conflicts = sorted(
+        s
+        for s in base.keys() & records.keys()
+        if records[s]["security_type"] == "COMMON_STOCK"
+        and cik_state(base[s]["cik"], records[s]["cik"]) == "CIK_MISMATCH"
+    )
+    pairs_diagnostics = {}
+    for key, values in (
+        ("pairs_base_company_missing_reference", base_missing),
+        ("pairs_base_company_unknown_type", base_unknown),
+        ("common_stock_cik_mismatch", common_conflicts),
+    ):
+        pairs_diagnostics.update(
+            {
+                key + "_count": len(values),
+                key + "_symbols": values[:100],
+                key + "_symbols_truncated": len(values) > 100,
+            }
+        )
     observed = snapshot.get("observed_at") if snapshot else None
     age = (
         ((now or datetime.now(UTC)) - datetime.fromisoformat(observed)).total_seconds()
@@ -220,6 +308,10 @@ def reference_audit(database, *, now=None):
         else None,
         "type_catalog_fingerprint": snapshot.get("type_catalog_fingerprint") if snapshot else None,
         "provider_type_mapping_version": snapshot.get("mapping_version") if snapshot else None,
+        "expected_provider_type_mapping_version": MAPPING_VERSION,
+        "security_reference_mapping_current": bool(
+            snapshot and snapshot.get("mapping_version") == MAPPING_VERSION
+        ),
         "snapshot_age_seconds": age,
         "provider_records_received": len(records),
         "local_symbols_total": len(symbols),
@@ -239,7 +331,13 @@ def reference_audit(database, *, now=None):
         "cik_unavailable": states["CIK_MISSING_LOCAL"] + states["CIK_MISSING_MASSIVE"],
         "cik_states": dict(states),
         "eligible_pairs_common_stocks": eligible,
+        "company_universe_scope": PAIRS_COMPANY_UNIVERSE_SCOPE,
+        "pairs_base_company_universe_count": len(base),
+        "outside_pairs_company_universe_count": len(symbols - base.keys()),
+        **pairs_diagnostics,
         "massive_requests_total": 0,
+        "alpaca_requests_total": 0,
+        "sec_requests_total": 0,
         "paid_features_used": False,
     }
 

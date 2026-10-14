@@ -25,6 +25,13 @@ validation remain local and make no Massive, Alpaca or SEC calls. Manifest V4
 binds common-stock classification, SEC issuer/SIC/CIK checks and reference
 fingerprints. `CURRENT_UNIVERSE_ONLY`, `NOT_SURVIVORSHIP_CLEAN` and
 `CURRENT_REFERENCE_SECURITY_TYPE_NOT_PIT` apply together.
+Mapping `MASSIVE_STOCK_TYPES_V2` adds ETS/ETV/structured-product classifications
+and the authoritative `RIGHT / Rights` description. Pairs reference qualification
+and membership fingerprints apply only after the frozen local company/valid
+SEC CIK/SIC gate; irrelevant missing assets do not block Pairs. The local audit
+separates base-company missing/unknown references and common-stock CIK conflicts
+from global coverage. After review, manually sync a V2 snapshot and audit it;
+historical Pairs preflight remains deferred until that audit output is reviewed.
 See [security reference](docs/security-reference.md) for access errors, atomic
 snapshots, mapping, local audit and the manual-only preflight workflow.
 

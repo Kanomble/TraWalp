@@ -198,12 +198,27 @@ are not persisted. Snapshot ID includes observation time; the reference digest
 excludes observation time/ID so identical classification does not invalidate
 membership merely because it was observed again.
 
-The reviewed `MASSIVE_STOCK_TYPES_V1` mapping validates codes **and exact
+The reviewed `MASSIVE_STOCK_TYPES_V2` mapping validates codes **and exact
 descriptions against the fetched US Stocks catalog**. `CS` / `Common Stock`
 maps to `COMMON_STOCK`; ETF, PFD, ADRC/ADRP/ADRR/ADRW, WARRANT, UNIT, RIGHT,
 ETP, ETN, FUND, BOND and OTHER map only when their expected descriptions are
 present. The canonical model contains `COMMON_STOCK`, `PREFERRED_STOCK`, `ETF`,
-`ETP`, `ETN`, `FUND`, `ADR`, `WARRANT`, `UNIT`, `RIGHT`, `BOND`, `OTHER`, `UNKNOWN`.
+`ETP`, `ETN`, `FUND`, `ADR`, `WARRANT`, `UNIT`, `RIGHT`, `STRUCTURED_PRODUCT`,
+`BOND`, `OTHER`, `UNKNOWN`. The V2 corrections use the exact catalog entries
+supplied from the user's authoritative stored Massive Stocks US catalog:
+
+| Provider code | Required exact description | Canonical type |
+| --- | --- | --- |
+| ETS | Single-security ETF | ETF |
+| ETV | Exchange Traded Vehicle | ETP |
+| RIGHT | Rights | RIGHT |
+| SP | Structured Product | STRUCTURED_PRODUCT |
+
+The old singular `RIGHT / Right` description is not accepted by V2. Description
+case, spacing and punctuation must match exactly; no symbol/name heuristic is
+introduced. Structured products are known non-common securities, excluded from
+Pairs without blocking it. Existing snapshots are not silently reclassified.
+A fresh explicit manual reference sync is required to obtain a V2 snapshot.
 Missing/new codes or changed/unsupported descriptions become **UNKNOWN**;
 unknown never becomes common stock. No symbol/name heuristic or blacklist is used.
 The raw provider code remains available for later mapping audits. Extending the
@@ -219,19 +234,28 @@ cross-check is retained diagnostically but cannot block that exclusion.
 
 ## Pairs V1 boundary and Manifest V4
 
-`COMMON_STOCK_WITH_SEC_ISSUER_IDENTITY` means current tradable US_EQUITY,
-Massive canonical type `COMMON_STOCK`, local SEC CompanyIdentity with valid CIK,
-valid nonzero three/four-digit SIC, and no CIK conflict. SPY retains its frozen
+The frozen **base-company gate is evaluated before Massive qualification**:
+local TradableAsset exists, tradable=true, asset_class=US_EQUITY, symbol is not
+SPY, local SEC CompanyIdentity exists, local SEC CIK is valid/nonzero and SIC is
+valid/nonzero (three/four digits normalized to four). Missing or invalid local
+company/CIK/SIC metadata deterministically places an asset outside the frozen
+Pairs company universe. It creates no security-reference requirement or blocking
+diagnostic. General CompanyIdentity validation and F database helpers are unchanged.
+
+Within this base scope, `COMMON_STOCK_WITH_SEC_ISSUER_IDENTITY` requires Massive
+canonical `COMMON_STOCK` and no CIK conflict. SPY retains its frozen
 diagnostic-only role. The unsupported `operating_company=true` requirement is
 removed; no Pairs economic parameter changes.
 
-Qualification first blocks missing reference/unresolved type, then excludes known
+Within the base scope, qualification blocks missing reference/unresolved type,
+then excludes known
 non-common instruments as `EXCLUDED_SECURITY_TYPE`, nonblocking regardless of CIK
-agreement. Only COMMON_STOCK proceeds to SEC/SIC/CIK eligibility checks. Missing
+agreement. COMMON_STOCK then applies the accepted provider/local CIK cross-check.
+Missing
 reference is `SECURITY_TYPE_REFERENCE_MISSING`; unknown type is
 `SECURITY_TYPE_UNKNOWN`; common-stock conflicting CIK is `SECURITY_IDENTITY_CONFLICT`.
-Common stock without valid SEC identity/SIC also blocks. All unresolved metadata
-is resolved **before historical ADV20 ranking**: preflight freezes no replacement
+Only unresolved reference identity inside the base-company scope blocks. It is
+resolved **before historical ADV20 ranking**: preflight freezes no replacement
 names/pairs and remains unready. It reports metadata requirements separately
 from Daily-bar remediation. The overall unavailable status remains a fail-closed
 summary of unresolved evidence.
@@ -239,17 +263,48 @@ summary of unresolved evidence.
 Pairs preflight/validation are local and read-only: **0 Massive, Alpaca or SEC
 requests**. Manifest V4 binds source, current-reference semantics, company rule,
 reference fingerprint, catalog fingerprint, mapping version, CIK conflict policy,
+`company_universe_scope=LOCAL_TRADABLE_US_EQUITY_WITH_VALID_SEC_COMPANY_CIK_SIC`,
 selection-gap semantics and fail-closed membership. V1/V2/V3 are rejected.
-The follow-up corrects only the CIK policy to
+The CIK policy remains
 `SEC_CANONICAL;COMMON_STOCK_BOTH_PRESENT_MUST_MATCH;MASSIVE_MISSING_ACCEPTED`.
-V4 manifests carrying the former all-security CIK policy are rejected as semantic
-drift; manifest version and economic parameters remain unchanged.
-The membership reference digest covers stable reference fields for all current
-US_EQUITY assets, including known exclusions and missing markers: symbol,
+V4 manifests carrying the former all-security CIK policy, a previous/absent
+company scope, or mapping V1 are rejected as semantic drift; manifest version and
+economic parameters remain unchanged.
+The membership reference digest covers **every symbol passing the frozen local
+base-company gate**, including authoritative non-common exclusions and missing
+markers within that scope: symbol,
 canonical/raw type, provider CIK, market/locale/active, exchange, both FIGIs,
-source/version and provider timestamp. Local SEC identities/SIC and selection
+source/version and provider timestamp. Assets outside that base scope do not
+participate: changing/removing their Massive rows cannot invalidate Pairs
+membership. Adding valid local company/CIK/SIC metadata can bring a symbol into
+scope and changes the fingerprint. Local SEC identities/SIC and selection
 Daily inputs remain separately bound. Relevant corrections invalidate the old
 manifest through local checks; no network repair or rediscovery occurs.
+
+## Local audit coverage
+
+The read-only audit retains provider/global `missing_local_references`,
+`coverage_fraction`, `security_type_counts`, `unknown_provider_type_counts` and
+SEC CIK diagnostics. It separately reports:
+
+```text
+pairs_base_company_universe_count
+pairs_base_company_missing_reference_count
+pairs_base_company_missing_reference_symbols
+pairs_base_company_unknown_type_count
+pairs_base_company_unknown_type_symbols
+common_stock_cik_mismatch_count
+common_stock_cik_mismatch_symbols
+```
+
+The mismatch list applies only to common stocks inside the base-company scope;
+ETF/fund/etc. CIK disagreements remain visible in broader CIK totals. Symbol lists
+are sorted and capped at 100 each; counts remain exact and corresponding
+`*_symbols_truncated` flags identify omitted entries. Outside-scope assets are
+counted separately as `outside_pairs_company_universe_count`; they are not Massive
+blockers. `expected_provider_type_mapping_version` and
+`security_reference_mapping_current` make old V1 snapshots visible without any
+network repair. Auditing an old snapshot remains permitted and read-only.
 
 These limitations apply together: **CURRENT_UNIVERSE_ONLY**,
 **NOT_SURVIVORSHIP_CLEAN**, **CURRENT_REFERENCE_SECURITY_TYPE_NOT_PIT**.
@@ -267,23 +322,17 @@ cap 5, `allowed_endpoints_only=true`, `paid_features_used=false`, a complete
 snapshot, and reviewed unknown/missing/CIK conflict counts. The limiter's timing
 guarantee is enforced by code and deterministic tests, not a billing-state claim.
 
-Then manually rerun outcome-clean Pairs preflight:
+After the reviewed patch's manual reference sync, the user manually audits:
 
 ```powershell
-.\.venv\Scripts\python.exe -m trading_system.cli preflight-pairs-stat-arb-v1 `
-  --start 2024-01-02 `
-  --end 2026-08-12 `
-  --output-stem pairs_stat_arb_v1_preflight_2024-01-02_2026-08-12_v2
+.\.venv\Scripts\python.exe -m trading_system.cli audit-security-reference
 ```
 
-Reports are immutable. If that exact stem already exists, preserve it and choose
-a new unused stem manually; the command will refuse to overwrite it. Review
-reference blockers and ADV20 gaps, remediate genuine gaps manually, then repeat
-preflight with a fresh stem. Only when `ready_for_local_validation=true` should
-frozen V1 validation be considered; **do not run validation at this stage**.
-For review, provide the sync JSON console summary and the preflight
-`*_summary.json`, `*_coverage.csv`, `*_daily_requirements.json`, and
-`*_pair_candidates.json`; never provide `.env` or the key.
+Provide the sync JSON console summary and local audit JSON output for review;
+never provide `.env` or the key. Historical Pairs preflight/validation remain
+deferred until the user-provided audit has been reviewed. No targeted ticker/CIK
+fallback requests or inactive-universe crawl have been added: the sync still
+fetches one type catalog and the same sequential active-stock bulk pages.
 
 Implementation verification uses narrow mock/synthetic tests and static checks.
 No real provider access, rate-limit sleeps, historical outcomes, full repository

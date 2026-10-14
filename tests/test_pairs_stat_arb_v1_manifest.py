@@ -61,6 +61,7 @@ def test_every_primary_economic_semantic_rejected_even_with_recomputed_checksum(
         "selection_membership_fail_closed",
         "instrument_type_semantics",
         "company_only_requirement",
+        "company_universe_scope",
         "security_reference_source",
         "security_reference_semantics",
         "provider_type_mapping_version",

@@ -25,8 +25,7 @@ from trading_system.data.security_reference import (
     MAPPING_VERSION,
     cik_state,
     membership_fingerprint,
-    normalize_cik,
-    valid_sic,
+    pairs_base_company_universe,
 )
 from trading_system.data.security_reference import (
     digest as reference_digest,
@@ -46,34 +45,19 @@ class PreparedPairs:
     metadata: dict
 
 
-def company_universe(database, *, with_diagnostics=False, reference_snapshot=None):
-    assets = sorted(
-        (
-            a
-            for a in database.list_tradable_assets()
-            if a.tradable
-            and a.asset_class == definitions.PAIRS_STAT_ARB_V1.asset_class
-            and a.symbol != definitions.PAIRS_STAT_ARB_V1.benchmark_symbol
-        ),
-        key=lambda a: a.symbol,
-    )
-    companies = {c.symbol: c for c in database.list_tradable_companies()}
+def company_universe(
+    database, *, with_diagnostics=False, reference_snapshot=None, base_universe=None
+):
+    base = pairs_base_company_universe(database) if base_universe is None else base_universe
     evidence = security.local_security_types(
-        database, [a.symbol for a in assets], reference_snapshot=reference_snapshot
+        database, [r["symbol"] for r in base], reference_snapshot=reference_snapshot
     )
     qualified, diagnostics = [], []
-    for asset in assets:
-        company = companies.get(asset.symbol)
-        sic = valid_sic(company.sic) if company else None
-        kind = evidence.get(asset.symbol, security.SecurityTypeEvidence())
-        identity_state = cik_state(company.cik if company else None, kind.provider_cik)
+    for identity in base:
+        kind = evidence.get(identity["symbol"], security.SecurityTypeEvidence())
+        identity_state = cik_state(identity["cik"], kind.provider_cik)
         row = {
-            "symbol": asset.symbol,
-            "cik": company.cik if company else None,
-            "sic": sic,
-            "sic2": sic[:2] if sic else None,
-            "tradable": True,
-            "asset_class": asset.asset_class,
+            **identity,
             "cik_cross_check": identity_state,
             **asdict(kind),
         }
@@ -85,10 +69,6 @@ def company_universe(database, *, with_diagnostics=False, reference_snapshot=Non
             status, blocking = "EXCLUDED_SECURITY_TYPE", False
         elif identity_state == "CIK_MISMATCH":
             status, blocking = "SECURITY_IDENTITY_CONFLICT", True
-        elif company is None or normalize_cik(company.cik) is None:
-            status, blocking = "SEC_ISSUER_IDENTITY_MISSING", True
-        elif sic is None:
-            status, blocking = "SEC_SIC_MISSING_OR_INVALID", True
         else:
             qualified.append(row)
             continue
@@ -286,11 +266,8 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
     sessions, days, tail = calendar_window(start, end)
     reference_snapshot = database.security_reference_snapshot()
     reference_records, snapshot_metadata = reference_snapshot
-    reference_symbols = [
-        a.symbol
-        for a in database.list_tradable_assets()
-        if a.asset_class == definitions.PAIRS_STAT_ARB_V1.asset_class
-    ]
+    base_universe = pairs_base_company_universe(database)
+    reference_symbols = [row["symbol"] for row in base_universe]
     contract.update(
         security_reference_fingerprint=membership_fingerprint(reference_records, reference_symbols),
         provider_type_catalog_fingerprint=(
@@ -302,7 +279,10 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
     if candidate_manifest is not None:
         payload = load_manifest(candidate_manifest, contract)
     universe, security_diagnostics = company_universe(
-        database, with_diagnostics=True, reference_snapshot=reference_snapshot
+        database,
+        with_diagnostics=True,
+        reference_snapshot=reference_snapshot,
+        base_universe=base_universe,
     )
     security_complete = not any(r["validation_blocking"] for r in security_diagnostics)
     if payload is not None and (

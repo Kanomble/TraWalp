@@ -13,6 +13,7 @@ from test_massive_reference import offline as offline
 from trading_system.data.database import Database
 from trading_system.data.massive_reference import MassiveReferenceError
 from trading_system.data.security_reference import (
+    MAPPING_VERSION,
     SECURITY_TYPES,
     canonical_type,
     cik_state,
@@ -132,6 +133,9 @@ def test_promotion_database_failure_rolls_back_rows_pointer_and_success_metadata
     [
         ("CS", "COMMON_STOCK"),
         ("ETF", "ETF"),
+        ("ETS", "ETF"),
+        ("ETV", "ETP"),
+        ("SP", "STRUCTURED_PRODUCT"),
         ("PFD", "PREFERRED_STOCK"),
         ("ADRC", "ADR"),
         ("WARRANT", "WARRANT"),
@@ -164,6 +168,67 @@ def test_common_stock_requires_matching_catalog_and_new_codes_fail_closed():
     assert canonical_type("CS", normalize_catalog(catalog)) == "UNKNOWN"
     catalog[0].update(code="FUTURE_COMMON", description="Common Stock")
     assert canonical_type("FUTURE_COMMON", normalize_catalog(catalog)) == "UNKNOWN"
+
+
+AUTHORITATIVE_V2_CATALOG = [
+    {"asset_class": "stocks", "code": "ETS", "description": "Single-security ETF", "locale": "us"},
+    {
+        "asset_class": "stocks",
+        "code": "ETV",
+        "description": "Exchange Traded Vehicle",
+        "locale": "us",
+    },
+    {"asset_class": "stocks", "code": "RIGHT", "description": "Rights", "locale": "us"},
+    {"asset_class": "stocks", "code": "SP", "description": "Structured Product", "locale": "us"},
+]
+
+
+@pytest.mark.parametrize(
+    "code,expected",
+    [("ETS", "ETF"), ("ETV", "ETP"), ("RIGHT", "RIGHT"), ("SP", "STRUCTURED_PRODUCT")],
+)
+def test_v2_mapping_uses_exact_user_supplied_authoritative_catalog(code, expected):
+    assert MAPPING_VERSION == "MASSIVE_STOCK_TYPES_V2"
+    assert canonical_type(code, normalize_catalog(AUTHORITATIVE_V2_CATALOG)) == expected
+    changed = [
+        {**row, "description": row["description"] + " "} if row["code"] == code else row
+        for row in AUTHORITATIVE_V2_CATALOG
+    ]
+    assert canonical_type(code, normalize_catalog(changed)) == "UNKNOWN"
+
+
+def test_v2_old_right_description_and_future_codes_remain_unknown():
+    catalog = normalize_catalog(
+        [
+            {"asset_class": "stocks", "code": "RIGHT", "description": "Right", "locale": "us"},
+            {
+                "asset_class": "stocks",
+                "code": "NEW_ETS",
+                "description": "Single-security ETF",
+                "locale": "us",
+            },
+            {
+                "asset_class": "stocks",
+                "code": "NEW_CS",
+                "description": "Common Stock",
+                "locale": "us",
+            },
+        ]
+    )
+    assert all(
+        canonical_type(code, catalog) == "UNKNOWN" for code in ("RIGHT", "NEW_ETS", "NEW_CS")
+    )
+
+
+def test_v2_snapshot_retains_provider_codes_and_structured_product_counts(db, client_factory):
+    rows = [ticker(code, code, "1") for code in ("ETS", "ETV", "RIGHT", "SP")]
+    client, _ = client_factory([response(results=AUTHORITATIVE_V2_CATALOG), response(results=rows)])
+    summary = sync_security_reference(db, client)
+    records, metadata = db.security_reference_snapshot()
+    assert metadata["mapping_version"] == "MASSIVE_STOCK_TYPES_V2"
+    assert summary["security_type_counts"]["STRUCTURED_PRODUCT"] == 1
+    assert summary["unknown_provider_type_counts"] == {}
+    assert {r["provider_security_type"] for r in records.values()} == {"ETS", "ETV", "RIGHT", "SP"}
 
 
 @pytest.mark.parametrize(
