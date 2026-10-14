@@ -124,7 +124,10 @@ def test_weights_fills_holding_and_requirements_read_definition(monkeypatch, con
     ]
     assert trade["pair_mfe"] == max(path) and trade["pair_mae"] == min(path)
     selected, pairs, _ = discover_pairs(identities(), bars, sessions, [days[0]], config)
-    required, _ = daily_requirements(selected, sessions, pairs, bars)
+    required, _, _ = daily_requirements(
+        selected, sessions, pairs, bars,
+        identity_by_symbol={row["symbol"]: row for row in identities()},
+    )
     assert max(day for _, day in required) == sessions[63]
     prepared = SimpleNamespace(signal_dates={str(day): day for day in days})
     metrics, tables = diagnostics(prepared, [row], [trade])

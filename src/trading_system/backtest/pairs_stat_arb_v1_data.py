@@ -5,7 +5,7 @@ import math
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
-from itertools import combinations
+from itertools import combinations, groupby
 
 from trading_system.backtest import pairs_stat_arb_v1_security as security
 from trading_system.backtest import research_definitions as definitions
@@ -21,6 +21,12 @@ from trading_system.backtest.pairs_stat_arb_v1_manifest import (
 )
 from trading_system.backtest.pairs_stat_arb_v1_selection import selection_inputs
 from trading_system.data.qualification import provider_range_verified
+from trading_system.data.security_identity import (
+    ACTIVE,
+    UNKNOWN,
+    current_identity_epoch,
+    identity_epoch,
+)
 from trading_system.data.security_reference import (
     MAPPING_VERSION,
     cached_sec_ticker_ciks,
@@ -89,39 +95,67 @@ def company_universe(
                 "roles": "COMPANY_COMMON_STOCK_IDENTITY",
             }
         )
-    if with_diagnostics:
-        return qualified, diagnostics
-    return qualified
+    epochs = database.symbol_identity_epochs(row["symbol"] for row in qualified)
+    for row in qualified:
+        row["identity_epoch_evidence"] = epochs[row["symbol"]]
+        row["identity_epoch"] = current_identity_epoch(row, epochs[row["symbol"]])
+    return (qualified, diagnostics) if with_diagnostics else qualified
 
 
-def load_history_anchors(database, symbols, end):
-    """Earliest stored Daily observation, including history before calibration.
-
-    Only timestamps are read. The per-T qualifier ignores anchors later than T.
-    An invalid price record still demonstrates observation of that symbol/session;
-    it remains unusable as a price and requires remediation inside selection.
-    """
+def load_history_anchors(database, symbols, end, *, identity_by_symbol=None):
+    """Earliest usable, unambiguous Daily bar within the verified current epoch."""
     anchors = {}
-    symbols = sorted(set(symbols))
+    identities = identity_by_symbol or {}
     with database.read_only() as connection:
-        for offset in range(0, len(symbols), 300):
-            batch = symbols[offset : offset + 300]
-            placeholders = ",".join("?" for _ in batch)
+        for symbol in sorted(set(symbols)):
+            epoch = identity_epoch(identities.get(symbol, {}))
+            if epoch is None or epoch.effective_start > end:
+                continue
+            stop = min(end + timedelta(days=1), epoch.effective_end or end + timedelta(days=1))
             rows = connection.execute(
-                f"SELECT symbol,MIN(timestamp) FROM bars WHERE symbol IN ({placeholders}) "
-                "AND timeframe=? AND timestamp<? GROUP BY symbol",
-                [*batch, definitions.PAIRS_STAT_ARB_V1.timeframe, str(end + timedelta(days=1))],
+                "SELECT timestamp,open,high,low,close,volume FROM bars WHERE symbol=? "
+                "AND timeframe=? AND timestamp>=? AND timestamp<? ORDER BY timestamp",
+                (
+                    symbol,
+                    definitions.PAIRS_STAT_ARB_V1.timeframe,
+                    str(epoch.effective_start),
+                    str(stop),
+                ),
             )
-            anchors.update(
-                (symbol, date.fromisoformat(timestamp[:10])) for symbol, timestamp in rows
-            )
+            for day, observations in groupby(rows, lambda row: date.fromisoformat(row[0][:10])):
+                observations = list(observations)
+                if len(observations) == 1 and _usable_bar(*observations[0][1:]) is not None:
+                    anchors[symbol] = day
+                    break
     return anchors
 
 
-def load_daily(database, symbols, start, end):
+def _usable_bar(op, high, low, close, volume):
+    try:
+        op, high, low, close = map(float, (op, high, low, close))
+        if (
+            all(math.isfinite(v) for v in (op, high, low, close))
+            and 0 < low <= min(op, close) <= max(op, close) <= high
+            and isinstance(volume, int)
+            and volume >= 0
+        ):
+            return PairBar(op, high, low, close, volume)
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return None
+
+
+def load_daily(database, symbols, start, end, *, identity_by_symbol=None):
     """Batch-load compact bars; invalid/duplicate sessions are unusable, never filled."""
     bars = {}
+    epochs = (
+        {s: identity_epoch(row) for s, row in identity_by_symbol.items()}
+        if identity_by_symbol is not None
+        else None
+    )
     symbols = sorted(set(symbols))
+    if epochs is not None:
+        symbols = [symbol for symbol in symbols if epochs.get(symbol) is not None]
     with database.read_only() as connection:
         for offset in range(0, len(symbols), 300):
             batch = symbols[offset : offset + 300]
@@ -139,20 +173,12 @@ def load_daily(database, symbols, start, end):
             )
             for symbol, timestamp, op, high, low, close, volume in rows:
                 day = date.fromisoformat(timestamp[:10])
+                if epochs is not None and (
+                    epochs.get(symbol) is None or not epochs[symbol].contains(day)
+                ):
+                    continue
                 key = symbol, day
-                try:
-                    op, high, low, close = map(float, (op, high, low, close))
-                    valid = (
-                        all(math.isfinite(v) for v in (op, high, low, close))
-                        and 0 < low <= min(op, close) <= max(op, close) <= high
-                        and isinstance(volume, int)
-                        and volume >= 0
-                    )
-                except (TypeError, ValueError, OverflowError):
-                    valid = False
-                bars[key] = (
-                    PairBar(op, high, low, close, volume) if valid and key not in bars else None
-                )
+                bars[key] = _usable_bar(op, high, low, close, volume) if key not in bars else None
     return bars
 
 
@@ -173,6 +199,7 @@ def discover_pairs(universe, bars, sessions, days, config, history_anchors=None)
     definition = definitions.PAIRS_STAT_ARB_V1
     selected, candidates = {}, []
     indexes = {day: index for index, day in enumerate(sessions)}
+    identities = {row["symbol"]: row for row in universe}
 
     def freeze_session(day, groups):
         index = indexes[day]
@@ -192,7 +219,7 @@ def discover_pairs(universe, bars, sessions, days, config, history_anchors=None)
                         "sic2": sic2,
                         "adv20_a": by_symbol[a]["adv20"],
                         "adv20_b": by_symbol[b]["adv20"],
-                        **calibration(bars, sessions, index, a, b),
+                        **calibration(bars, sessions, index, a, b, identity_by_symbol=identities),
                     }
                 )
 
@@ -202,17 +229,19 @@ def discover_pairs(universe, bars, sessions, days, config, history_anchors=None)
     return selected, candidates, counts
 
 
-def daily_requirements(selected, sessions, candidates, bars, history_anchors=None):
+def daily_requirements(
+    selected, sessions, candidates, bars, history_anchors=None, *, identity_by_symbol
+):
     """Only frozen selection/pair inputs, never the source-fingerprint Cartesian product.
 
-    Missing calibration prefixes with no earlier local observation are insufficient
-    history, not inferred provider gaps. Missing bars after an observed history start
-    in a required candidate window remain blocking. No post-T observation establishes
-    a candidate's history: each selected symbol already has a complete ADV window at T.
+    Calibration prefixes outside the verified epoch are insufficient history.
+    Every required session inside it remains blocking when missing. An outcome
+    outside it is an explicit identity terminal, never a price from another epoch.
     """
     definition = definitions.PAIRS_STAT_ARB_V1
     required = defaultdict(set)
     insufficient_calibration = set()
+    epoch_requirements = {}
     indexes = {str(day): i for i, day in enumerate(sessions)}
     for signal, groups in selected.items():
         i = indexes[signal]
@@ -222,22 +251,26 @@ def daily_requirements(selected, sessions, candidates, bars, history_anchors=Non
                 for day in sessions[i - definition.adv_lookback_sessions + 1 : i + 1]:
                     required[symbol, day].add("SELECTED_ADV_WINDOW")
                 required[symbol, sessions[i - 1]].add("SELECTED_PREVIOUS_CLOSE")
-    first_observed = dict(history_anchors or {})
-    for (symbol, day), bar in bars.items():
-        if bar is not None:
-            first_observed[symbol] = min(first_observed.get(symbol, day), day)
     for candidate in candidates:
         i = indexes[candidate["signal_session"]]
         for symbol in (candidate["symbol_a"], candidate["symbol_b"]):
+            epoch = identity_epoch(identity_by_symbol.get(symbol, {}))
             for day in sessions[i - definition.calibration_sessions : i + 1]:
-                if day < first_observed[symbol]:
+                if epoch is not None and not epoch.contains(day):
                     insufficient_calibration.add((symbol, day))
+                elif epoch is None:
+                    epoch_requirements[symbol, day] = UNKNOWN
                 else:
                     required[symbol, day].add("PAIR_CALIBRATION_AND_OBSERVATION")
             if candidate["calibration_status"] == "ELIGIBLE":
                 for day in sessions[i + 1 : i + definition.max_hold_sessions + 1]:
-                    required[symbol, day].add("POSSIBLE_OUTCOME_ONLY")
-    return required, insufficient_calibration
+                    if epoch is None or not epoch.contains(day):
+                        epoch_requirements[symbol, day] = (
+                            UNKNOWN if epoch is None else "IDENTITY_EPOCH_CROSSING"
+                        )
+                    else:
+                        required[symbol, day].add("POSSIBLE_OUTCOME_ONLY")
+    return required, insufficient_calibration, epoch_requirements
 
 
 def compact_coverage(rows, sessions):
@@ -248,7 +281,7 @@ def compact_coverage(rows, sessions):
         comparable = {
             k: v for k, v in row.items() if k not in {"session", "session_end", "sessions"}
         }
-        if result and row["status"] != "LOCAL_MISSING_FETCHABLE":
+        if result and row["status"] != "LOCAL_MISSING":
             last = result[-1]
             if (
                 comparable
@@ -292,6 +325,11 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
     contract["identity_qualification_fingerprint"] = identity_qualification_fingerprint(
         [*universe, *security_diagnostics]
     )
+    symbols = [row["symbol"] for row in universe]
+    identities = {row["symbol"]: row for row in universe}
+    contract["identity_epoch_fingerprint"] = reference_digest(
+        {symbol: row["identity_epoch_evidence"] for symbol, row in identities.items()}
+    )
     if candidate_manifest is not None:
         payload = load_manifest(candidate_manifest, contract)
     security_complete = not any(r["validation_blocking"] for r in security_diagnostics)
@@ -300,12 +338,19 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
         or payload["discovery_counts"]["security_type_diagnostics"] != security_diagnostics
     ):
         raise ValueError(f"{MISMATCH}: security identity qualification changed")
-    symbols = [row["symbol"] for row in universe]
     if not preflight and not security_complete:
         raise ValueError(security.UNAVAILABLE)
     # Resolve the entire static identity boundary before touching historical prices.
-    bars = load_daily(database, symbols, sessions[0], days[-1]) if security_complete else {}
-    history_anchors = load_history_anchors(database, symbols, days[-1]) if security_complete else {}
+    bars = (
+        load_daily(database, symbols, sessions[0], days[-1], identity_by_symbol=identities)
+        if security_complete
+        else {}
+    )
+    history_anchors = (
+        load_history_anchors(database, symbols, days[-1], identity_by_symbol=identities)
+        if security_complete
+        else {}
+    )
     digest = source_digest(universe, bars, [s for s in sessions if s <= days[-1]], history_anchors)
     if payload is None:
         if security_complete:
@@ -338,8 +383,13 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
         verify_membership(payload, universe, digest, bars, sessions, counts)
     if not preflight and not payload["discovery_counts"]["selection_membership_resolved"]:
         raise ValueError("PAIRS_STAT_ARB_SELECTION_MEMBERSHIP_UNRESOLVED")
-    required, insufficient_calibration = daily_requirements(
-        payload["selected"], sessions, payload["candidates"], bars, history_anchors
+    required, insufficient_calibration, epoch_requirements = daily_requirements(
+        payload["selected"],
+        sessions,
+        payload["candidates"],
+        bars,
+        history_anchors,
+        identity_by_symbol=identities,
     )
     selection_gaps = {
         (row["symbol"], date.fromisoformat(row["session"])): row
@@ -350,7 +400,9 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
     tail_symbols = {symbol for symbol, day in required if day > end}
     # Discovery and source hashing above never receive post-T outcome data.
     if tail_symbols:
-        bars.update(load_daily(database, tail_symbols, tail[0], tail[-1]))
+        bars.update(
+            load_daily(database, tail_symbols, tail[0], tail[-1], identity_by_symbol=identities)
+        )
     if not preflight:
         bars.update(
             load_daily(
@@ -390,9 +442,13 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
                 "input_scope": "VALIDATION_BLOCKING_REQUIREMENT",
                 "validation_blocking": True,
                 "roles": ";".join(sorted(roles)),
-                "status": "REQUIRED_PRESENT" if present else "LOCAL_MISSING_FETCHABLE",
+                "status": "REQUIRED_PRESENT" if present else "LOCAL_MISSING",
                 "provider_range_verified": verified,
+                "provider_range_status": "PROVIDER_RANGE_CHECKED" if verified else "NOT_CHECKED",
                 "provider_session_absence": "NOT_ESTABLISHED",
+                "provider_session_absence_status": "PROVIDER_SESSION_ABSENCE_UNKNOWN",
+                "fetchability": "UNKNOWN" if not present else "NOT_APPLICABLE",
+                "identity_epoch_status": ACTIVE,
                 **(
                     {
                         "sic2": selection_gaps[symbol, day]["sic2"],
@@ -409,6 +465,21 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
             }
         )
     coverage = compact_coverage(coverage, sessions)
+    coverage.extend(
+        {
+            "symbol": symbol,
+            "session": str(day),
+            "session_end": str(day),
+            "sessions": 1,
+            "timeframe": definitions.PAIRS_STAT_ARB_V1.timeframe,
+            "record_kind": "SESSION_RANGE",
+            "roles": "POSSIBLE_OUTCOME_IDENTITY",
+            "input_scope": "IDENTITY_EPOCH_REQUIREMENT",
+            "validation_blocking": True,
+            "status": status,
+        }
+        for (symbol, day), status in sorted(epoch_requirements.items())
+    )
     requirements = list(coverage)
     coverage.extend(
         compact_coverage(
@@ -429,6 +500,7 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
         )
     )
     coverage.extend(payload["discovery_counts"]["selection_history_diagnostics"])
+    coverage.extend(payload["discovery_counts"]["identity_epoch_diagnostics"])
     coverage.extend(security_diagnostics)
     observed = [day for (symbol, day), bar in bars.items() if bar and (symbol, day) in required]
     return PreparedPairs(
@@ -447,6 +519,7 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
             "outcome_data_end": str(max(observed)) if observed else None,
             "blocking_required_symbol_sessions": len(required),
             "insufficient_calibration_symbol_sessions": len(insufficient_calibration),
+            "identity_epoch_outcome_requirements": len(epoch_requirements),
             "company_security_type_status": "AVAILABLE"
             if security_complete
             else security.UNAVAILABLE,

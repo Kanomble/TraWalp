@@ -115,6 +115,23 @@ class Database:
                     raw_fingerprint TEXT NOT NULL,
                     snapshot_id TEXT NOT NULL REFERENCES security_reference_snapshots(snapshot_id)
                 );
+                CREATE TABLE IF NOT EXISTS symbol_identity_epochs (
+                    symbol TEXT NOT NULL, stable_security_identity TEXT, cik TEXT,
+                    effective_start TEXT NOT NULL, effective_end TEXT,
+                    source TEXT NOT NULL, evidence_type TEXT NOT NULL,
+                    verified INTEGER NOT NULL CHECK(verified IN (0,1)),
+                    observed_at TEXT NOT NULL, evidence_reference TEXT NOT NULL,
+                    PRIMARY KEY(symbol,source,evidence_reference),
+                    CHECK(effective_end IS NULL OR effective_end > effective_start)
+                );
+                CREATE TABLE IF NOT EXISTS security_corporate_actions (
+                    provider TEXT NOT NULL, event_key TEXT NOT NULL, provider_action_id TEXT,
+                    action_type TEXT NOT NULL, old_symbol TEXT, new_symbol TEXT,
+                    old_cusip TEXT, new_cusip TEXT, process_date TEXT, effective_date TEXT,
+                    observed_at TEXT NOT NULL, request_reference TEXT NOT NULL,
+                    raw_fingerprint TEXT NOT NULL, raw_payload TEXT NOT NULL,
+                    PRIMARY KEY(provider,event_key)
+                );
                 """
             )
             if "asset_class" not in {
@@ -124,6 +141,136 @@ class Database:
                     "ALTER TABLE assets ADD COLUMN asset_class TEXT NOT NULL DEFAULT 'UNKNOWN'"
                 )
             _migrate_daily_bars(connection)
+
+    def upsert_symbol_identity_epochs(self, epochs, *, protect_existing=False):
+        """Explicit ingestion; protected provider batches are insert-only and return a count."""
+        from trading_system.data.security_identity import SymbolIdentityEpoch
+
+        records = [SymbolIdentityEpoch.from_record(epoch.record()).record() for epoch in epochs]
+        if not records:
+            return 0 if protect_existing else None
+        columns = tuple(records[0])
+        with self.connect() as connection:
+            if protect_existing:
+                connection.execute("BEGIN IMMEDIATE")
+                created = 0
+                for record in records:
+                    existing = [
+                        dict(row)
+                        for row in connection.execute(
+                            "SELECT * FROM symbol_identity_epochs WHERE symbol=?",
+                            (record["symbol"],),
+                        )
+                    ]
+                    # Keep manual/stronger evidence byte-for-byte, including its audit time.
+                    equivalent = False
+                    for old in existing:
+                        same_key = all(
+                            old[k] == record[k] for k in ("symbol", "source", "evidence_reference")
+                        )
+                        overlaps = (
+                            record["effective_end"] is None
+                            or old["effective_start"] < record["effective_end"]
+                        ) and (
+                            old["effective_end"] is None
+                            or record["effective_start"] < old["effective_end"]
+                        )
+                        if same_key or (old["verified"] and overlaps):
+                            same_interval = all(
+                                old[k] == record[k]
+                                for k in (
+                                    "cik",
+                                    "stable_security_identity",
+                                    "effective_start",
+                                    "effective_end",
+                                    "evidence_type",
+                                    "verified",
+                                )
+                            )
+                            if not same_interval:
+                                raise ValueError("IDENTITY_EVIDENCE_CONFLICT")
+                            equivalent = True
+                    if not equivalent:
+                        connection.execute(
+                            f"INSERT INTO symbol_identity_epochs ({','.join(columns)}) "
+                            f"VALUES ({','.join('?' for _ in columns)})",
+                            tuple(record[k] for k in columns),
+                        )
+                        created += 1
+                return created
+            connection.executemany(
+                f"INSERT OR REPLACE INTO symbol_identity_epochs ({','.join(columns)}) "
+                f"VALUES ({','.join('?' for _ in columns)})",
+                [tuple(record[k] for k in columns) for record in records],
+            )
+
+    def ingest_security_corporate_actions(self, records):
+        """Immutable provider events; changed payloads conflict rather than replace evidence."""
+        inserted, conflicts = 0, []
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            for record in records:
+                old = connection.execute(
+                    "SELECT raw_fingerprint FROM security_corporate_actions "
+                    "WHERE provider=? AND event_key=?",
+                    (record["provider"], record["event_key"]),
+                ).fetchone()
+                if old is not None:
+                    if old[0] != record["raw_fingerprint"]:
+                        conflicts.append(record["event_key"])
+                    continue
+                columns = tuple(record)
+                connection.execute(
+                    f"INSERT INTO security_corporate_actions ({','.join(columns)}) "
+                    f"VALUES ({','.join('?' for _ in columns)})",
+                    tuple(record[k] for k in columns),
+                )
+                inserted += 1
+        return inserted, conflicts
+
+    def security_corporate_actions(self, symbols):
+        symbols = sorted(set(symbols))
+        if not symbols:
+            return []
+        with self.read_only() as connection:
+            if not connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='security_corporate_actions' "
+                "AND type='table'"
+            ).fetchone():
+                return []
+            placeholders = ",".join("?" for _ in symbols)
+            return [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM security_corporate_actions "
+                    f"WHERE old_symbol IN ({placeholders}) "
+                    f"OR new_symbol IN ({placeholders}) ORDER BY provider,event_key",
+                    [*symbols, *symbols],
+                )
+            ]
+
+    def symbol_identity_epochs(self, symbols):
+        """Old databases have unknown epochs; research reads never run migrations."""
+        symbols = sorted(set(symbols))
+        result = {symbol: [] for symbol in symbols}
+        with self.read_only() as connection:
+            if not connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='symbol_identity_epochs'"
+            ).fetchone():
+                return result
+            for offset in range(0, len(symbols), 300):
+                batch = symbols[offset : offset + 300]
+                rows = connection.execute(
+                    "SELECT * FROM symbol_identity_epochs "
+                    f"WHERE symbol IN ({','.join('?' for _ in batch)}) "
+                    "ORDER BY symbol,effective_start,source,evidence_reference",
+                    batch,
+                )
+                for row in rows:
+                    record = dict(row)
+                    record["verified"] = bool(record["verified"])
+                    result[row["symbol"]].append(record)
+        return result
 
     def promote_security_reference(self, records, metadata) -> None:
         """Commit rows, successful metadata and active pointer as one SQLite transaction."""

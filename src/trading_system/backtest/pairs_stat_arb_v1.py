@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from statistics import correlation, mean, stdev
 
 from trading_system.backtest import research_definitions as definitions
+from trading_system.data.security_identity import ACTIVE, same_epoch_window
 
 PAIRS_V1 = definitions.PAIRS_STAT_ARB_V1  # Compatibility identity; runtime reads the definition.
 
@@ -19,10 +20,20 @@ class PairBar:
     volume: int
 
 
-def calibration(bars, sessions, index, symbol_a, symbol_b):
+def calibration(bars, sessions, index, symbol_a, symbol_b, *, identity_by_symbol=None):
     """Only the preceding 60 closes; the observation at index is never consumed."""
     definition = definitions.PAIRS_STAT_ARB_V1
     length = definition.calibration_sessions
+    # The bare primitive remains available for synthetic mathematics. Every
+    # repository-data caller supplies the verified identity map explicitly.
+    if identity_by_symbol is not None:
+        state = same_epoch_window(
+            identity_by_symbol,
+            (symbol_a, symbol_b),
+            sessions[max(0, index - length) : index + 1],
+        )
+        if state != ACTIVE:
+            return {"calibration_status": state}
     if index < length:
         return {"calibration_status": "INCOMPLETE_CALIBRATION"}
     a, b = [], []
@@ -51,8 +62,8 @@ def calibration(bars, sessions, index, symbol_a, symbol_b):
     }
 
 
-def observe(bars, sessions, index, a, b):
-    stats = calibration(bars, sessions, index, a, b)
+def observe(bars, sessions, index, a, b, *, identity_by_symbol=None):
+    stats = calibration(bars, sessions, index, a, b, identity_by_symbol=identity_by_symbol)
     ba, bb = bars.get((a, sessions[index])), bars.get((b, sessions[index]))
     if ba is None or bb is None or not stats.get("calibration_std"):
         return None
@@ -125,7 +136,7 @@ TRADE_FIELDS = [
 ]
 
 
-def simulate_trade(candidate, bars, sessions, index, signal_end):
+def simulate_trade(candidate, bars, sessions, index, signal_end, *, identity_by_symbol=None):
     """Resolve one fixed pair, including data terminals, within its five-session horizon."""
     a, b = candidate["symbol_a"], candidate["symbol_b"]
     definition = definitions.PAIRS_STAT_ARB_V1
@@ -150,6 +161,11 @@ def simulate_trade(candidate, bars, sessions, index, signal_end):
         return row, blocked_until
     entry = sessions[index + 1]
     row["entry_session"] = entry.isoformat()
+    if identity_by_symbol is not None:
+        state = same_epoch_window(identity_by_symbol, (a, b), [sessions[index], entry])
+        if state != ACTIVE:
+            row.update(status=state, exit_reason=state)
+            return row, sessions[index]
     ea, eb = bars.get((a, entry)), bars.get((b, entry))
     if ea is None or eb is None:
         result, _ = unavailable(entry, "ENTRY_UNOBSERVABLE")
@@ -165,6 +181,11 @@ def simulate_trade(candidate, bars, sessions, index, signal_end):
     ):
         ba, bb = bars.get((a, session)), bars.get((b, session))
         row["holding_sessions"] = holding
+        if identity_by_symbol is not None:
+            state = same_epoch_window(identity_by_symbol, (a, b), [sessions[index], session])
+            if state != ACTIVE:
+                row.update(status=state, exit_reason=state)
+                return row, blocked_until
         if ba is None or bb is None:
             return unavailable(session, "EXIT_UNOBSERVABLE")
         if scheduled is not None:
@@ -178,7 +199,9 @@ def simulate_trade(candidate, bars, sessions, index, signal_end):
             )
             path.append(pnl)
             row.update(pair_mfe=max(path), pair_mae=min(path))
-            observation = observe(bars, sessions, index + holding, a, b)
+            observation = observe(
+                bars, sessions, index + holding, a, b, identity_by_symbol=identity_by_symbol
+            )
             if holding == definition.max_hold_sessions:
                 reason, reference = "MAX_HOLD_5", "close"
                 row["exit_trigger_session"] = session.isoformat()
@@ -218,6 +241,11 @@ def simulate_prepared_pairs(prepared):
         raise ValueError("AUTHORITATIVE_COMPANY_SECURITY_TYPE_UNAVAILABLE")
     if not qualification.get("selection_membership_resolved"):
         raise ValueError("PAIRS_STAT_ARB_SELECTION_MEMBERSHIP_UNRESOLVED")
+    if not qualification.get("identity_epochs_complete"):
+        raise ValueError("IDENTITY_EPOCH_UNKNOWN")
+    if prepared.metadata.get("identity_epoch_outcome_requirements"):
+        raise ValueError("IDENTITY_EPOCH_OUTCOME_UNRESOLVED")
+    identities = {row["symbol"]: row for row in prepared.manifest["universe"]}
     indexes = {day: index for index, day in enumerate(prepared.sessions)}
     evaluations, signals = [], []
     grouped = defaultdict(list)
@@ -234,7 +262,14 @@ def simulate_prepared_pairs(prepared):
             elif candidate["calibration_status"] != "ELIGIBLE":
                 row["status"] = candidate["calibration_status"]
             else:
-                observation = observe(prepared.bars, prepared.sessions, indexes[session], a, b)
+                observation = observe(
+                    prepared.bars,
+                    prepared.sessions,
+                    indexes[session],
+                    a,
+                    b,
+                    identity_by_symbol=identities,
+                )
                 if observation is None:
                     row["status"] = "SIGNAL_UNOBSERVABLE"
                 else:
@@ -243,7 +278,12 @@ def simulate_prepared_pairs(prepared):
                     row.update(status=status, direction_a=da, direction_b=db)
                     if status != "NO_SIGNAL":
                         trade, blocked_until = simulate_trade(
-                            row, prepared.bars, prepared.sessions, indexes[session], prepared.end
+                            row,
+                            prepared.bars,
+                            prepared.sessions,
+                            indexes[session],
+                            prepared.end,
+                            identity_by_symbol=identities,
                         )
                         signals.append(trade)
             evaluations.append(row)

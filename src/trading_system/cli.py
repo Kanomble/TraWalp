@@ -291,6 +291,18 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser(
         "audit-security-reference", help="Read-only local reference coverage; no provider calls"
     )
+    lifecycle = commands.add_parser(
+        "sync-security-lifecycle", help="Small explicit Alpaca NameChange evidence sync; no bars"
+    )
+    lifecycle.add_argument("--start", type=date.fromisoformat, required=True)
+    lifecycle.add_argument("--end", type=date.fromisoformat, required=True)
+    lifecycle.add_argument("--symbols", required=True, help="One to seven comma-separated symbols")
+    lifecycle.add_argument("--limit", type=_positive_int, default=100)
+    lifecycle.add_argument(
+        "--verified-evidence",
+        type=Path,
+        help="Externally reviewed interval/CUSIP evidence JSON; raw API JSON is insufficient",
+    )
     sync = commands.add_parser("sync", help="Synchronize SEC data or run a complete refresh")
     mode = sync.add_mutually_exclusive_group()
     mode.add_argument("--full", action="store_true", help="Run the complete legacy sync pipeline")
@@ -678,6 +690,45 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
     database = Database(settings.strategy.storage.database_path)
+    if args.command == "sync-security-lifecycle":
+        from sqlite3 import Error as SQLiteError
+
+        from trading_system.data.alpaca_corporate_actions import (
+            AlpacaCorporateActionClient,
+            lifecycle_scope,
+        )
+        from trading_system.data.security_lifecycle import (
+            load_lifecycle_verifications,
+            sync_security_lifecycle,
+        )
+
+        client = None
+        try:
+            symbols = lifecycle_scope(args.symbols.split(","), args.start, args.end, args.limit)
+            verifications = load_lifecycle_verifications(args.verified_evidence)
+            client = AlpacaCorporateActionClient(
+                settings.alpaca_api_key, settings.alpaca_secret_key
+            )
+            summary = sync_security_lifecycle(
+                database,
+                client,
+                symbols,
+                args.start,
+                args.end,
+                limit=args.limit,
+                verifications=verifications,
+            )
+            print(json.dumps(summary, sort_keys=True, indent=2))
+            return 1 if summary["errors"] or summary["identity_conflicts"] else 0
+        except KeyboardInterrupt:
+            print("SECURITY_LIFECYCLE_SYNC_INTERRUPTED", file=sys.stderr)
+            return 130
+        except (OSError, ValueError, SQLiteError) as exc:
+            print(f"Security lifecycle refused: {exc}", file=sys.stderr)
+            return 1
+        finally:
+            if client is not None:
+                client.close()
     if args.command in {"sync-security-reference", "audit-security-reference"}:
         from sqlite3 import Error as SQLiteError
 

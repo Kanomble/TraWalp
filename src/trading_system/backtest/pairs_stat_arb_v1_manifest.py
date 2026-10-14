@@ -16,6 +16,7 @@ from trading_system.backtest.pairs_stat_arb_v1_security import (
 )
 from trading_system.backtest.pairs_stat_arb_v1_selection import SELECTION_GAP_SEMANTICS
 from trading_system.data.market_sessions import trading_sessions_between
+from trading_system.data.security_identity import ACTIVE, EPOCH_SEMANTICS, same_epoch_window
 from trading_system.data.security_reference import (
     CIK_CONFLICT_POLICY,
     IDENTITY_CONFLICT_CLASSIFICATION_VERSION,
@@ -62,13 +63,14 @@ def manifest_contract(config, start, end):
         raise ValueError("PAIRS_STAT_ARB_REQUIRES_ADJUSTED_DAILY")
     return {
         "manifest_type": "pairs_stat_arb_v1_manifest",
-        "manifest_version": 5,
+        "manifest_version": 6,
         "coverage_semantics": (
             "SELECTED_ADV_PAIR_CALIBRATION_ELIGIBLE_OUTCOMES;PREFIX_HISTORY_NONBLOCKING;"
             "INTERNAL_SELECTION_GAPS_BLOCKING"
         ),
         "selection_gap_semantics": SELECTION_GAP_SEMANTICS,
         "selection_membership_fail_closed": True,
+        "identity_epoch_semantics": EPOCH_SEMANTICS,
         "instrument_type_semantics": INSTRUMENT_TYPE_SEMANTICS,
         "company_only_requirement": COMPANY_ONLY_REQUIREMENT,
         "company_universe_scope": PAIRS_COMPANY_UNIVERSE_SCOPE,
@@ -166,6 +168,13 @@ def verify_membership(payload, universe, digest, bars, sessions, discovery_count
                         raise ValueError("company/SIC/liquidity semantics")
                     index = indexes[day]
                     symbol = row["symbol"]
+                    if (
+                        same_epoch_window(
+                            identities, [symbol], sessions[index - lookback + 1 : index + 1]
+                        )
+                        != ACTIVE
+                    ):
+                        raise ValueError("selected identity epoch window")
                     prior = bars.get((symbol, sessions[index - 1]))
                     window = [
                         bars.get((symbol, s)) for s in sessions[index - lookback + 1 : index + 1]
@@ -179,7 +188,9 @@ def verify_membership(payload, universe, digest, bars, sessions, discovery_count
                         raise ValueError("saved liquidity observations")
                 by_symbol = {row["symbol"]: row for row in names}
                 for a, b in combinations(sorted(by_symbol), 2):
-                    stats = calibration(bars, sessions, indexes[day], a, b)
+                    stats = calibration(
+                        bars, sessions, indexes[day], a, b, identity_by_symbol=identities
+                    )
                     expected.append(
                         {
                             "signal_session": day,

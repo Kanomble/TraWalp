@@ -210,9 +210,9 @@ def test_observed_shape_does_not_block_or_enter_historical_ranking(tmp_path, con
     original = data.load_daily
     loaded = set()
 
-    def load(database, symbols, *args):
+    def load(database, symbols, *args, **kwargs):
         loaded.update(symbols)
-        return original(database, symbols, *args)
+        return original(database, symbols, *args, **kwargs)
 
     monkeypatch.setattr(data, "load_daily", load)
     before = db.path.read_bytes()
@@ -326,7 +326,7 @@ def test_identity_evidence_changes_reject_manifest_before_prices(
     db = observed_shape(tmp_path)
     prepared = prepare_pairs_data(db, config, START, END, preflight=True)
     path = save_manifest(tmp_path, prepared)
-    assert prepared.manifest["manifest_version"] == 5
+    assert prepared.manifest["manifest_version"] == 6
     assert prepared.manifest["company_universe_scope"] == PAIRS_COMPANY_UNIVERSE_SCOPE
     assert prepared.manifest["identity_conflict_policy"] == IDENTITY_CONFLICT_POLICY
     assert (

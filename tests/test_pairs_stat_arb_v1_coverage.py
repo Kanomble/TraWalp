@@ -5,7 +5,7 @@ import json
 from datetime import date
 
 import pytest
-from test_pairs_stat_arb_v1 import END, START, identities, seed, synthetic
+from test_pairs_stat_arb_v1 import END, START, identities, seed, synthetic, synthetic_epoch
 from test_pairs_stat_arb_v1 import offline as offline
 from test_pairs_stat_arb_v1 import synthetic_security_types as synthetic_security_types
 from test_pairs_stat_arb_v1_security import config as config
@@ -35,6 +35,7 @@ def add_short_history(db, first_session):
     db.upsert_company(
         CompanyIdentity(symbol="NEW", name="Current company", cik="0000000999", sic="3571")
     )
+    db.upsert_symbol_identity_epochs([synthetic_epoch("NEW", "0000000999", first_session)])
     with db.connect() as connection:
         connection.execute(
             "INSERT INTO bars SELECT 'NEW',timeframe,timestamp,open,high,low,close,volume,"
@@ -65,17 +66,17 @@ def test_shortened_history_is_visible_nonblocking_and_export_is_bounded(tmp_path
         if r["symbol"] == "NEW" and r["status"] == "INSUFFICIENT_SELECTION_HISTORY"
     ]
     assert len(diagnostics) == 1
-    assert diagnostics[0]["sessions"] == 21
+    assert diagnostics[0]["sessions"] == 19
     assert diagnostics[0]["validation_blocking"] is False
     assert not any(
-        r["symbol"] == "NEW" and r["status"] == "LOCAL_MISSING_FETCHABLE" for r in prepared.coverage
+        r["symbol"] == "NEW" and r["status"] == "LOCAL_MISSING" for r in prepared.coverage
     )
     assert all(
         r["session"] >= str(first_session) for r in prepared.requirements if r["symbol"] == "NEW"
     )
     assert any(r["status"] == "INSUFFICIENT_CALIBRATION_HISTORY" for r in prepared.coverage)
     assert all(
-        r["calibration_status"] == "INCOMPLETE_CALIBRATION"
+        r["calibration_status"] == "IDENTITY_EPOCH_CROSSING"
         for r in prepared.manifest["candidates"]
         if "NEW" in (r["symbol_a"], r["symbol_b"])
     )
@@ -83,7 +84,8 @@ def test_shortened_history_is_visible_nonblocking_and_export_is_bounded(tmp_path
         db, config, START, end, tmp_path, stem="short_history", preflight=True
     )
     assert "CURRENT_UNIVERSE_ONLY" in summary["limitations"]
-    assert summary["unavailable_liquidity_symbol_sessions"] == 21
+    assert summary["unavailable_liquidity_symbol_sessions"] == 19
+    assert summary["outside_identity_epoch_symbol_sessions"] == 2
     assert summary["local_missing_data"] == 0
     assert summary["ready_for_local_validation"] is True
     requirements = json.loads(paths["daily_requirements"].read_text())
@@ -105,7 +107,7 @@ def test_shortened_history_is_visible_nonblocking_and_export_is_bounded(tmp_path
 
 
 @pytest.mark.parametrize("gap_kind", ["calibration", "outcome"])
-def test_genuine_missing_required_candidate_bar_stays_blocking_fetchable(
+def test_genuine_missing_required_candidate_bar_stays_blocking_with_unknown_fetchability(
     tmp_path, config, gap_kind
 ):
     db, sessions, _, tail, _ = seed(tmp_path)
@@ -124,7 +126,7 @@ def test_genuine_missing_required_candidate_bar_stays_blocking_fetchable(
     assert len(exported["required_sessions"]) == 1
     gap = exported["required_sessions"][0]
     assert gap["symbol"] == "A" and gap["session"] == str(day)
-    assert gap["status"] == "LOCAL_MISSING_FETCHABLE"
+    assert gap["status"] == "LOCAL_MISSING"
     assert gap["input_scope"] == "VALIDATION_BLOCKING_REQUIREMENT"
     assert gap["validation_blocking"] and gap["sessions"] == 1
 
@@ -143,13 +145,13 @@ def test_selection_history_diagnostic_does_not_use_future_listing_observations(t
     )
     assert original == changed
     assert (
-        original[2]["selection_history_diagnostics"][0]["status"]
-        == "INSUFFICIENT_SELECTION_HISTORY"
+        original[2]["identity_epoch_diagnostics"][0]["status"]
+        == "VERIFIED_OUTSIDE_EPOCH"
     )
     assert summary_metadata(prepared, preflight=True)["ready_for_local_validation"] is True
 
 
-def test_fingerprint_only_missing_inputs_do_not_expand_required_coverage(tmp_path, config):
+def test_unknown_identity_requires_evidence_without_inventing_bar_fetches(tmp_path, config):
     db, *_ = seed(tmp_path)
     baseline = prepare_pairs_data(db, config, START, END, preflight=True)
     for index in range(25):
@@ -169,10 +171,11 @@ def test_fingerprint_only_missing_inputs_do_not_expand_required_coverage(tmp_pat
             CompanyIdentity(symbol=symbol, name=symbol, cik=f"{1000 + index:010d}", sic="3571")
         )
     expanded = prepare_pairs_data(db, config, START, END, preflight=True)
-    assert expanded.requirements == baseline.requirements
+    assert expanded.requirements == []
     assert expanded.manifest["source_fingerprint"] != baseline.manifest["source_fingerprint"]
-    assert len(expanded.coverage) == len(baseline.coverage) + 25  # One diagnostic per extra name.
-    assert summary_metadata(expanded, preflight=True)["ready_for_local_validation"] is True
+    assert len(expanded.coverage) == 25  # One blocking identity diagnostic per extra name.
+    assert all(r["status"] == "IDENTITY_EPOCH_UNKNOWN" for r in expanded.coverage)
+    assert not summary_metadata(expanded, preflight=True)["ready_for_local_validation"]
 
 
 def seed_six(tmp_path, *, end=END):
@@ -193,6 +196,7 @@ def seed_six(tmp_path, *, end=END):
         db.upsert_company(
             CompanyIdentity(symbol=symbol, name=symbol, cik=f"{ord(symbol):010d}", sic="3571")
         )
+        db.upsert_symbol_identity_epochs([synthetic_epoch(symbol, f"{ord(symbol):010d}")])
         with db.connect() as connection:
             connection.execute(
                 "INSERT INTO bars SELECT ?,timeframe,timestamp,open,high,low,close,?,"
@@ -220,6 +224,7 @@ def test_internal_gap_blocks_group_never_uses_rank_six_and_exports_once(tmp_path
         db.upsert_company(
             CompanyIdentity(symbol=symbol, name=symbol, cik=f"{ord(symbol):010d}", sic="6021")
         )
+        db.upsert_symbol_identity_epochs([synthetic_epoch(symbol, f"{ord(symbol):010d}")])
         with db.connect() as connection:
             connection.execute(
                 "INSERT INTO bars SELECT ?,timeframe,timestamp,open,high,low,close,volume,"
@@ -263,10 +268,10 @@ def test_internal_gap_blocks_group_never_uses_rank_six_and_exports_once(tmp_path
     assert gap["sic2"] == "35"
     assert gap["affected_signal_sessions"] == [str(d) for d in days]
     assert gap["roles"] == "LIQUIDITY_SELECTION_INTERNAL_GAP"
-    assert gap["status"] == "LOCAL_MISSING_FETCHABLE"
+    assert gap["status"] == "LOCAL_MISSING"
     assert gap["input_scope"] == "VALIDATION_BLOCKING_REQUIREMENT" and gap["validation_blocking"]
     with paths["coverage"].open(newline="", encoding="utf-8") as handle:
-        exported = [r for r in csv.DictReader(handle) if r["status"] == "LOCAL_MISSING_FETCHABLE"]
+        exported = [r for r in csv.DictReader(handle) if r["status"] == "LOCAL_MISSING"]
     assert len(exported) == 1 and exported[0]["session"] == str(missing_day)
     with db.connect() as connection:
         connection.execute(f"INSERT INTO bars VALUES ({','.join('?' for _ in saved)})", saved)
@@ -334,22 +339,24 @@ def test_prefix_and_internal_classification_use_only_observations_through_t(conf
     # First observation occurs after the earlier signal. It cannot establish history at T.
     bars = {(s, d): b for (s, d), b in bars.items() if s != "A" or d >= days[2]}
     earlier = days[:2]
-    original = selection_inputs(identities(), bars, sessions, earlier, config, {"A": days[2]})
+    universe = identities()
+    universe[0]["identity_epoch"] = synthetic_epoch("A", "0000000001", days[2]).record()
+    original = selection_inputs(universe, bars, sessions, earlier, config, {"A": days[2]})
     truncated = {key: b for key, b in bars.items() if key[1] <= earlier[-1]}
-    assert original == selection_inputs(identities(), truncated, sessions, earlier, config)
+    assert original == selection_inputs(universe, truncated, sessions, earlier, config)
     assert (
-        original[1]["selection_history_diagnostics"][0]["status"]
-        == "INSUFFICIENT_SELECTION_HISTORY"
+        original[1]["identity_epoch_diagnostics"][0]["status"]
+        == "VERIFIED_OUTSIDE_EPOCH"
     )
     assert not original[1]["internal_selection_gaps"]
     # During warmup, a hole AFTER the first observation is still an internal gap.
     bars.pop(("A", days[3]))
-    inputs, counts = selection_inputs(identities(), bars, sessions, [days[4]], config)
+    inputs, counts = selection_inputs(universe, bars, sessions, [days[4]], config)
     assert inputs[str(days[4])] == {}
     assert counts["internal_selection_gaps"][0]["session"] == str(days[3])
     truncated = {key: b for key, b in bars.items() if key[1] <= days[4]}
     assert (inputs, counts) == selection_inputs(
-        identities(), truncated, sessions, [days[4]], config
+        universe, truncated, sessions, [days[4]], config
     )
 
 
@@ -366,7 +373,7 @@ def test_old_history_anchor_keeps_a_calibration_prefix_gap_blocking(tmp_path, co
             "DELETE FROM bars WHERE symbol='A' AND timestamp LIKE ?", (f"{sessions[0]}%",)
         )
     prepared = prepare_pairs_data(db, config, START, START, preflight=True)
-    gaps = [r for r in prepared.requirements if r["status"] == "LOCAL_MISSING_FETCHABLE"]
+    gaps = [r for r in prepared.requirements if r["status"] == "LOCAL_MISSING"]
     assert len(gaps) == 1 and gaps[0]["session"] == str(sessions[0])
     assert gaps[0]["roles"] == "PAIR_CALIBRATION_AND_OBSERVATION"
     assert not summary_metadata(prepared, preflight=True)["ready_for_local_validation"]

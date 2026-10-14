@@ -49,6 +49,7 @@ from trading_system.backtest.research_registry import (
 )
 from trading_system.config import load_settings
 from trading_system.data.database import Database
+from trading_system.data.security_identity import LIFECYCLE_EVIDENCE, SymbolIdentityEpoch
 from trading_system.models.backtest import PositionManagementPreset, StrategyVariant
 from trading_system.models.fundamentals import CompanyIdentity
 from trading_system.models.market_data import DailyBar, TradableAsset
@@ -116,9 +117,25 @@ def identities(symbols=("A", "B"), sic="3571"):
             "sic2": sic[:2],
             "asset_class": "US_EQUITY",
             "tradable": True,
+            "identity_epoch": synthetic_epoch(s, f"{i + 1:010d}").record(),
         }
         for i, s in enumerate(symbols)
     ]
+
+
+def synthetic_epoch(symbol, cik, start=date(2020, 1, 1), end=None):
+    # Explicit fictional lifecycle evidence, independent of generated price history.
+    return SymbolIdentityEpoch(
+        symbol=symbol,
+        cik=cik,
+        effective_start=start,
+        effective_end=end,
+        source="SYNTHETIC_LIFECYCLE",
+        evidence_type=LIFECYCLE_EVIDENCE,
+        verified=True,
+        observed_at="2026-10-14T00:00:00+00:00",
+        evidence_reference=f"fixture:{symbol}",
+    )
 
 
 def seed(tmp_path, *, end=END, crossing_after=None):
@@ -137,6 +154,9 @@ def seed(tmp_path, *, end=END, crossing_after=None):
         db.upsert_company(
             CompanyIdentity(**{k: row[k] for k in ("symbol", "cik", "sic")}, name=row["symbol"])
         )
+    db.upsert_symbol_identity_epochs(
+        [synthetic_epoch(row["symbol"], row["cik"]) for row in identities()]
+    )
     db.upsert_bars(
         [
             DailyBar(
@@ -446,18 +466,21 @@ def test_repeated_active_signals_ignored_then_reentry(monkeypatch):
     candidates = [candidate(bars, sessions, i, z=2) for i in range(60, 60 + len(days))]
     for row in candidates:
         row["calibration_status"] = "ELIGIBLE"
-    monkeypatch.setattr(engine, "observe", lambda *args: (0.1, 2.0))
+    monkeypatch.setattr(engine, "observe", lambda *args, **kwargs: (0.1, 2.0))
     prepared = SimpleNamespace(
         sessions=sessions,
         signal_dates={str(d): d for d in days},
         bars=bars,
         end=END,
+        metadata={},
         manifest={
             "candidates": candidates,
+            "universe": identities(),
             "strategy_definition": asdict(PAIRS_V1),
             "discovery_counts": {
                 "company_security_types_complete": True,
                 "selection_membership_resolved": True,
+                "identity_epochs_complete": True,
             },
         },
     )
@@ -518,12 +541,15 @@ def test_no_signal_evaluation_produces_no_trade(config):
         signal_dates={str(d): d for d in days},
         bars=bars,
         end=START,
+        metadata={},
         manifest={
             "candidates": candidates,
+            "universe": identities(),
             "strategy_definition": asdict(PAIRS_V1),
             "discovery_counts": {
                 "company_security_types_complete": True,
                 "selection_membership_resolved": True,
+                "identity_epochs_complete": True,
             },
         },
     )

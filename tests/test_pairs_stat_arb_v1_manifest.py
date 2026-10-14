@@ -59,6 +59,7 @@ def test_every_primary_economic_semantic_rejected_even_with_recomputed_checksum(
         "coverage_semantics",
         "selection_gap_semantics",
         "selection_membership_fail_closed",
+        "identity_epoch_semantics",
         "instrument_type_semantics",
         "company_only_requirement",
         "company_universe_scope",
@@ -208,10 +209,10 @@ def test_normal_manifest_validation_exports_without_discovery(tmp_path, config, 
     assert "trades" in outputs
 
 
-@pytest.mark.parametrize("version", [1, 2, 3, 4])
+@pytest.mark.parametrize("version", [1, 2, 3, 4, 5])
 def test_pre_patch_manifest_versions_are_obsolete_even_if_rehashed(tmp_path, config, version):
     contract = manifest_contract(config, START, END)
-    assert contract["manifest_version"] == 5
+    assert contract["manifest_version"] == 6
     old = {**contract, "manifest_version": version}
     with pytest.raises(ValueError, match=f"{MISMATCH}: manifest_version"):
         load_manifest(save(tmp_path / "obsolete.json", old), contract)

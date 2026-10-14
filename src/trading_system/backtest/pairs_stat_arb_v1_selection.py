@@ -4,10 +4,11 @@ from collections import defaultdict
 from decimal import Decimal
 
 from trading_system.backtest import research_definitions as definitions
+from trading_system.data.security_identity import ACTIVE, OUTSIDE, UNKNOWN, identity_epoch
 
 SELECTION_GAP_SEMANTICS = (
-    "PRICE_GATE_FIRST;FIRST_LOCAL_OBSERVATION_ON_OR_BEFORE_T;"
-    "PREFIX_NONBLOCKING;INTERNAL_PREVIOUS_CLOSE_OR_ADV_GAP_BLOCKS_SIC2_SESSION"
+    "VERIFIED_IDENTITY_EPOCH_FIRST;EPOCH_PRICE_GATE;OUTSIDE_EPOCH_NONMEMBER;"
+    "EPOCH_WARMUP_NONBLOCKING;WITHIN_EPOCH_MISSING_AND_UNKNOWN_IDENTITY_BLOCK_SIC2_SESSION"
 )
 
 
@@ -16,26 +17,67 @@ def selection_inputs(
 ):
     """Qualify inputs only, without ranking or forming replacement membership.
 
-    An anchor after T is treated exactly like no observation. Prefix absence
-    never requests a fetch. Once a bar has been observed, later missing/invalid
-    inputs are internal gaps, even if that symbol is still in its initial warmup.
+    Unknown identity blocks before price/ADV gates. Verified outside-epoch
+    sessions are nonmembers. Missing inputs inside a verified interval block;
+    observations before the interval are never consumed, even during warmup.
     A consumer processes each resolved session immediately without retaining all
     eligible current-universe symbol-sessions in memory.
     """
     definition = definitions.PAIRS_STAT_ARB_V1
     lookback = definition.adv_lookback_sessions
-    first_observed = dict(history_anchors or {})
-    for symbol, day in bars:
-        first_observed[symbol] = min(first_observed.get(symbol, day), day)
+    epochs = {row["symbol"]: identity_epoch(row) for row in universe}
+    first_observed = {
+        symbol: day
+        for symbol, day in (history_anchors or {}).items()
+        if epochs.get(symbol) is not None and epochs[symbol].contains(day)
+    }
+    for (symbol, day), bar in bars.items():
+        epoch = epochs.get(symbol)
+        if bar is not None and epoch is not None and epoch.contains(day):
+            first_observed[symbol] = min(first_observed.get(symbol, day), day)
     indexes = {day: i for i, day in enumerate(sessions)}
-    inputs, prefix, gaps, unresolved = {}, {}, {}, []
+    inputs, prefix, gaps, unresolved, epoch_diagnostics = {}, {}, {}, [], {}
     counts = {"eligible_symbol_sessions": 0, "unavailable_liquidity_symbol_sessions": 0}
     for day in days:
         i = indexes[day]
         groups, blocked = defaultdict(list), defaultdict(list)
         for identity in universe:
             symbol, sic2 = identity["symbol"], identity["sic2"]
-            previous = bars.get((symbol, sessions[i - 1])) if i else None
+            epoch = epochs[symbol]
+            state = UNKNOWN if epoch is None else ACTIVE if epoch.contains(day) else OUTSIDE
+            if state != ACTIVE:
+                key = symbol, state
+                row = epoch_diagnostics.setdefault(
+                    key,
+                    {
+                        "symbol": symbol,
+                        "sic2": sic2,
+                        "session": str(day),
+                        "session_end": str(day),
+                        "sessions": 0,
+                        "record_kind": "SYMBOL_SUMMARY",
+                        "timeframe": definition.timeframe,
+                        "roles": "HISTORICAL_SECURITY_IDENTITY",
+                        "input_scope": "IDENTITY_EPOCH_REQUIREMENT"
+                        if state == UNKNOWN
+                        else "SELECTION_DIAGNOSTIC",
+                        "status": state,
+                        "validation_blocking": state == UNKNOWN,
+                        "resolved_epoch": epoch.record() if epoch else None,
+                        "epoch_source": epoch.source if epoch else None,
+                        "epoch_verified": epoch is not None,
+                    },
+                )
+                row["session_end"] = str(day)
+                row["sessions"] += 1
+                if state == UNKNOWN:
+                    blocked[sic2].append(symbol)
+                continue
+            previous = (
+                bars.get((symbol, sessions[i - 1]))
+                if i and epoch.contains(sessions[i - 1])
+                else None
+            )
             # This earlier frozen gate determines exclusion without requiring ADV.
             if previous is not None and previous.close < config.universe.min_price:
                 continue
@@ -43,12 +85,16 @@ def selection_inputs(
             needed = set(window_days)
             if i:
                 needed.add(sessions[i - 1])
-            missing = sorted(s for s in needed if bars.get((symbol, s)) is None)
-            if previous is None or len(window_days) != lookback or missing:
+            missing = sorted(
+                s for s in needed if epoch.contains(s) and bars.get((symbol, s)) is None
+            )
+            outside_window = any(not epoch.contains(s) for s in needed)
+            if previous is None or len(window_days) != lookback or missing or outside_window:
                 counts["unavailable_liquidity_symbol_sessions"] += 1
                 first = first_observed.get(symbol)
                 first = first if first is not None and first <= day else None
-                internal = [s for s in missing if first is not None and s >= first]
+                # Existence/mapping is established by lifecycle evidence, not the first bar.
+                internal = missing
                 if internal:
                     blocked[sic2].append(symbol)
                     for missing_day in internal:
@@ -58,10 +104,15 @@ def selection_inputs(
                                 "symbol": symbol,
                                 "session": str(missing_day),
                                 "sic2": sic2,
-                                "first_observed_session_on_or_before_T": str(first),
+                                "first_observed_session_on_or_before_T": (
+                                    str(first) if first else None
+                                ),
                                 "affected_signal_sessions": [],
                                 "roles": "LIQUIDITY_SELECTION_INTERNAL_GAP",
-                                "status": "LOCAL_MISSING_FETCHABLE",
+                                "status": "LOCAL_MISSING",
+                                "identity_epoch_status": ACTIVE,
+                                "epoch_source": epoch.source,
+                                "epoch_verified": True,
                                 "input_scope": "VALIDATION_BLOCKING_REQUIREMENT",
                                 "validation_blocking": True,
                             },
@@ -121,5 +172,13 @@ def selection_inputs(
         unresolved_selection_membership=unresolved,
         unresolved_sic2_sessions=len(unresolved),
         selection_membership_resolved=not unresolved,
+        identity_epoch_diagnostics=[epoch_diagnostics[k] for k in sorted(epoch_diagnostics)],
+        identity_epochs_complete=not any(k[1] == UNKNOWN for k in epoch_diagnostics),
+        unknown_identity_symbol_sessions=sum(
+            r["sessions"] for r in epoch_diagnostics.values() if r["status"] == UNKNOWN
+        ),
+        outside_identity_epoch_symbol_sessions=sum(
+            r["sessions"] for r in epoch_diagnostics.values() if r["status"] == OUTSIDE
+        ),
     )
     return inputs, counts

@@ -309,7 +309,11 @@ def summary_metadata(prepared, *, preflight):
     missing = sum(
         row["sessions"]
         for row in prepared.coverage
-        if row["validation_blocking"] and row["status"] == "LOCAL_MISSING_FETCHABLE"
+        if row["validation_blocking"] and row["status"] == "LOCAL_MISSING"
+    )
+    identity_blocked = any(
+        row["validation_blocking"] and row["input_scope"] == "IDENTITY_EPOCH_REQUIREMENT"
+        for row in prepared.coverage
     )
     selected = manifest["selected"]
     return {
@@ -336,14 +340,22 @@ def summary_metadata(prepared, *, preflight):
         ),
         "unique_pairs": len({(r["symbol_a"], r["symbol_b"]) for r in candidates}),
         "pair_session_candidates": len(candidates),
-        "complete_calibration_pairs": len(candidates) - counts["INCOMPLETE_CALIBRATION"],
-        "incomplete_calibration_pairs": counts["INCOMPLETE_CALIBRATION"],
+        "complete_calibration_pairs": sum(
+            counts[status] for status in ("ELIGIBLE", "LOW_CORRELATION", "ZERO_SPREAD_VARIANCE")
+        ),
+        "incomplete_calibration_pairs": sum(
+            counts[status]
+            for status in (
+                "INCOMPLETE_CALIBRATION", "IDENTITY_EPOCH_CROSSING", "IDENTITY_EPOCH_UNKNOWN"
+            )
+        ),
         "eligible_correlated_pair_sessions": counts["ELIGIBLE"],
         "calibration_status_counts": dict(counts),
         "local_missing_data": missing,
         "ready_for_local_validation": (
             bool(candidates)
             and not missing
+            and not identity_blocked
             and manifest["discovery_counts"]["selection_membership_resolved"]
             and manifest["discovery_counts"]["company_security_types_complete"]
         ),
@@ -415,7 +427,7 @@ def run_pairs_stat_arb_v1(
             daily_requirements={
                 "research_family": definition.research_family,
                 "research_id": definition.research_id,
-                "requirements_version": 3,
+                "requirements_version": 4,
                 "manifest_fingerprint": prepared.manifest["fingerprint"],
                 "market_data_feed": prepared.manifest["market_data_feed"],
                 "market_data_adjustment": prepared.manifest["market_data_adjustment"],
@@ -424,9 +436,7 @@ def run_pairs_stat_arb_v1(
                 "required_ranges": prepared.requirements,
                 "required_sessions_scope": "UNRESOLVED_VALIDATION_BLOCKING_REQUIREMENTS_ONLY",
                 "required_sessions": [
-                    row
-                    for row in prepared.requirements
-                    if row["status"] == "LOCAL_MISSING_FETCHABLE"
+                    row for row in prepared.requirements if row["status"] == "LOCAL_MISSING"
                 ],
                 "nonblocking_diagnostics": [
                     row for row in prepared.coverage if not row["validation_blocking"]
@@ -436,6 +446,11 @@ def run_pairs_stat_arb_v1(
                 ],
                 "company_security_type_requirements": prepared.manifest["discovery_counts"][
                     "security_type_diagnostics"
+                ],
+                "identity_epoch_requirements": [
+                    row
+                    for row in prepared.coverage
+                    if row["input_scope"] == "IDENTITY_EPOCH_REQUIREMENT"
                 ],
                 "source_fingerprint_inputs": prepared.metadata["source_fingerprint_inputs"],
             },
