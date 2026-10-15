@@ -1,0 +1,2770 @@
+{
+  "epoch_rows_after": 0,
+  "epoch_rows_before": 0,
+  "follow_up_probe": {
+    "observed_at": "2026-10-15T20:19:43.350638+00:00",
+    "reason": "Early FLY 8-K had no inline DEI; one later periodic filing checked",
+    "requests": {
+      "identity_research_filing": 1
+    }
+  },
+  "nasdaq_search_scope": "Two discovered public notices; no matching DSAC/ALPS notice found in bounded search; not exhaustive",
+  "observed_at": "2026-10-15T20:18:37.210623+00:00",
+  "production_promotion": false,
+  "sec_http_attempts": {
+    "identity_research_filing": 12,
+    "submissions": 4
+  },
+  "source_checks": [
+    {
+      "http_status": 200,
+      "notice_id": "ECA2021-196",
+      "records": [
+        {
+          "complete_interval": false,
+          "date_semantics": "MARKETPLACE_EFFECTIVE_DATE",
+          "effective_date": "2021-09-10",
+          "event_type": "NAME_SYMBOL_CUSIP_CHANGE",
+          "new_cusip": "18271L107",
+          "new_symbol": "CRXT",
+          "old_cusip": "09607T104",
+          "old_symbol": "BLUW",
+          "raw_fields": {
+            "Current CUSIP": "09607T104",
+            "Current Company Name & Issue Type": "Blue Water Acquisition Corp. Class A Common Stock",
+            "Current Symbol": "BLUW",
+            "Marketplace Effective Date": "Friday, September 10, 2021",
+            "New CUSIP": "18271L107",
+            "New Company Name & Issue Type": "Clarus Therapeutics Holdings, Inc. Common Stock",
+            "New Symbol": "CRXT"
+          },
+          "source": "NASDAQ_TRADER",
+          "source_reference": "https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2021-196"
+        },
+        {
+          "complete_interval": false,
+          "date_semantics": "MARKETPLACE_EFFECTIVE_DATE",
+          "effective_date": "2021-09-10",
+          "event_type": "NAME_SYMBOL_CUSIP_CHANGE",
+          "new_cusip": "18271L115",
+          "new_symbol": "CRXTW",
+          "old_cusip": "09607T112",
+          "old_symbol": "BLUWW",
+          "raw_fields": {
+            "Current CUSIP": "09607T112",
+            "Current Company Name & Issue Type": "Blue Water Acquisition Corp. Warrant",
+            "Current Symbol": "BLUWW",
+            "Marketplace Effective Date": "Friday, September 10, 2021",
+            "New CUSIP": "18271L115",
+            "New Company Name & Issue Type": "Clarus Therapeutics Holdings, Inc. Warrant expiring 9/9/2026",
+            "New Symbol": "CRXTW"
+          },
+          "source": "NASDAQ_TRADER",
+          "source_reference": "https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2021-196"
+        }
+      ],
+      "response_sha256": "2b71f22a82b9ebe7a80faf925d88f99e0e4c3ffd7d22b5553f771d5f7d068460",
+      "source": "NASDAQ_TRADER",
+      "source_reference": "https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2021-196"
+    },
+    {
+      "http_status": 200,
+      "notice_id": "dtn2023-7",
+      "records": [
+        {
+          "complete_interval": false,
+          "date_semantics": "EXCHANGE_TRANSFER_AS_OF",
+          "effective_date": "2023-03-21",
+          "event_type": "EXCHANGE_TRANSFER",
+          "issue_type": "Ordinary",
+          "new_cusip": "G9TY5A101",
+          "new_symbol": "ZURA",
+          "old_cusip": "G50752107",
+          "old_symbol": "JATT",
+          "old_valid_through": "2023-03-20",
+          "raw_fields": {
+            "NASDAQ Ticker/CUSIP as of Tuesday, March 21, 2023": "Ordinary ZURA: G9TY5A101 Warrants ZURAW: G9TY5A119",
+            "NYSE Ticker/CUSIP through Monday, March 20, 2023": "Ordinary JATT: G50752107 Units JATT U: G50752115 Warrants JATT WS: G50752123"
+          },
+          "source": "NASDAQ_TRADER",
+          "source_reference": "https://www.nasdaqtrader.com/TraderNews.aspx?id=dtn2023-7"
+        }
+      ],
+      "response_sha256": "76561084edf85257cc51176f8fc0550c630558052954015df3239822805a3675",
+      "source": "NASDAQ_TRADER",
+      "source_reference": "https://www.nasdaqtrader.com/TraderNews.aspx?id=dtn2023-7"
+    },
+    {
+      "http_status": 200,
+      "results": [
+        {
+          "interval_proof": false,
+          "mappings": [
+            {
+              "compositeFIGI": "BBG012V1Q8J1",
+              "exchCode": "US",
+              "figi": "BBG012V1Q8J1",
+              "marketSector": "Equity",
+              "name": "ALPINE SUMMIT ENERGY PARTNER",
+              "securityType": "Common Stock",
+              "securityType2": "Common Stock",
+              "shareClassFIGI": "BBG001T8ZD74",
+              "ticker": "ALPSQ"
+            }
+          ],
+          "outcome": "MAPPED",
+          "query": {
+            "exchCode": "US",
+            "idType": "ID_CUSIP",
+            "idValue": "021009105",
+            "includeUnlistedEquities": true
+          }
+        },
+        {
+          "interval_proof": false,
+          "mappings": [],
+          "outcome": "NO_IDENTIFIER_FOUND",
+          "query": {
+            "exchCode": "US",
+            "idType": "ID_CUSIP",
+            "idValue": "09607T104",
+            "includeUnlistedEquities": true
+          }
+        },
+        {
+          "interval_proof": false,
+          "mappings": [
+            {
+              "compositeFIGI": "BBG00Z6DQJL4",
+              "exchCode": "US",
+              "figi": "BBG00Z6DQJL4",
+              "marketSector": "Equity",
+              "name": "CLARUS THERAPEUTICS HOLDINGS",
+              "securityType": "Common Stock",
+              "securityType2": "Common Stock",
+              "shareClassFIGI": "BBG00Z6DQKF8",
+              "ticker": "CRXTQ"
+            }
+          ],
+          "outcome": "MAPPED",
+          "query": {
+            "exchCode": "US",
+            "idType": "ID_CUSIP",
+            "idValue": "18271L107",
+            "includeUnlistedEquities": true
+          }
+        },
+        {
+          "interval_proof": false,
+          "mappings": [],
+          "outcome": "NO_IDENTIFIER_FOUND",
+          "query": {
+            "exchCode": "US",
+            "idType": "ID_CUSIP",
+            "idValue": "337655104",
+            "includeUnlistedEquities": true
+          }
+        },
+        {
+          "interval_proof": false,
+          "mappings": [],
+          "outcome": "NO_IDENTIFIER_FOUND",
+          "query": {
+            "exchCode": "US",
+            "idType": "ID_CUSIP",
+            "idValue": "G50752107",
+            "includeUnlistedEquities": true
+          }
+        }
+      ],
+      "source": "OPENFIGI"
+    },
+    {
+      "http_status": 200,
+      "results": [
+        {
+          "interval_proof": false,
+          "mappings": [],
+          "outcome": "NO_IDENTIFIER_FOUND",
+          "query": {
+            "exchCode": "US",
+            "idType": "ID_CUSIP",
+            "idValue": "G9TY5A101",
+            "includeUnlistedEquities": true
+          }
+        },
+        {
+          "interval_proof": false,
+          "mappings": [
+            {
+              "compositeFIGI": "BBG00255V2N4",
+              "exchCode": "US",
+              "figi": "BBG00255V2N4",
+              "marketSector": "Equity",
+              "name": "CARIS LIFE SCIENCES INC",
+              "securityType": "Common Stock",
+              "securityType2": "Common Stock",
+              "shareClassFIGI": "BBG00255V2P2",
+              "ticker": "CAI"
+            }
+          ],
+          "outcome": "MAPPED",
+          "query": {
+            "exchCode": "US",
+            "idType": "TICKER",
+            "idValue": "CAI"
+          }
+        },
+        {
+          "interval_proof": false,
+          "mappings": [
+            {
+              "compositeFIGI": "BBG00NGNL3X5",
+              "exchCode": "US",
+              "figi": "BBG00NGNL3X5",
+              "marketSector": "Equity",
+              "name": "FIREFLY AEROSPACE INC",
+              "securityType": "Common Stock",
+              "securityType2": "Common Stock",
+              "shareClassFIGI": "BBG00NGNL3Y4",
+              "ticker": "FLY"
+            }
+          ],
+          "outcome": "MAPPED",
+          "query": {
+            "exchCode": "US",
+            "idType": "TICKER",
+            "idValue": "FLY"
+          }
+        },
+        {
+          "interval_proof": false,
+          "mappings": [
+            {
+              "compositeFIGI": "BBG020ZK3PR6",
+              "exchCode": "US",
+              "figi": "BBG020ZK3PR6",
+              "marketSector": "Equity",
+              "name": "JATT II ACQUISITION CORP",
+              "securityType": "Common Stock",
+              "securityType2": "Common Stock",
+              "shareClassFIGI": "BBG020ZK3QW8",
+              "ticker": "JATT"
+            }
+          ],
+          "outcome": "MAPPED",
+          "query": {
+            "exchCode": "US",
+            "idType": "TICKER",
+            "idValue": "JATT"
+          }
+        },
+        {
+          "interval_proof": false,
+          "mappings": [
+            {
+              "compositeFIGI": "BBG0151PS6S6",
+              "exchCode": "US",
+              "figi": "BBG0151PS6S6",
+              "marketSector": "Equity",
+              "name": "ALPS GROUP INC",
+              "securityType": "Common Stock",
+              "securityType2": "Common Stock",
+              "shareClassFIGI": "BBG0151PS6V2",
+              "ticker": "ALPS"
+            }
+          ],
+          "outcome": "MAPPED",
+          "query": {
+            "exchCode": "US",
+            "idType": "TICKER",
+            "idValue": "ALPS"
+          }
+        }
+      ],
+      "source": "OPENFIGI"
+    },
+    {
+      "http_status": 200,
+      "results": [
+        {
+          "interval_proof": false,
+          "mappings": [
+            {
+              "compositeFIGI": "BBG01THFR0W8",
+              "exchCode": "US",
+              "figi": "BBG01THFR0W8",
+              "marketSector": "Equity",
+              "name": "BLUE WATER ACQUISITION C-A",
+              "securityType": "Common Stock",
+              "securityType2": "Common Stock",
+              "shareClassFIGI": "BBG01THFR1T0",
+              "ticker": "BLUW"
+            }
+          ],
+          "outcome": "MAPPED",
+          "query": {
+            "exchCode": "US",
+            "idType": "TICKER",
+            "idValue": "BLUW"
+          }
+        },
+        {
+          "interval_proof": false,
+          "mappings": [
+            {
+              "compositeFIGI": "BBG01X61Y143",
+              "exchCode": "US",
+              "figi": "BBG01X61Y143",
+              "marketSector": "Equity",
+              "name": "DAEDALUS SPECIAL ACQUIS-CL A",
+              "securityType": "Common Stock",
+              "securityType2": "Common Stock",
+              "shareClassFIGI": "BBG01X61Y223",
+              "ticker": "DSAC"
+            }
+          ],
+          "outcome": "MAPPED",
+          "query": {
+            "exchCode": "US",
+            "idType": "TICKER",
+            "idValue": "DSAC"
+          }
+        }
+      ],
+      "source": "OPENFIGI"
+    }
+  ],
+  "symbols": [
+    {
+      "alpaca": [],
+      "candidate_epoch": null,
+      "cik": "0002019410",
+      "classification": "CORROBORATING_ONLY",
+      "conflicts": [],
+      "current": {
+        "active": true,
+        "cik": "0002019410",
+        "composite_figi": "BBG00255V2N4",
+        "list_date": "2025-06-18",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNAS",
+        "share_class_figi": "BBG00255V2P2",
+        "ticker": "CAI",
+        "type": "CS"
+      },
+      "effective_dates": [],
+      "evidence_found": {
+        "alpaca": 0,
+        "massive_observations": 5,
+        "nasdaq": 0,
+        "openfigi_mapping_jobs": 1
+      },
+      "free_sec_different_issuers_proven": true,
+      "identity_status": "IDENTITY_EPOCH_UNKNOWN",
+      "massive": [
+        {
+          "as_of": "2026-10-14",
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "CAI",
+          "observed_at": "2026-10-15T19:35:23.286559+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/CAI",
+          "query": "date=2026-10-14",
+          "records_received": 1,
+          "request_id": "b3adf58da91b4d003ecae24ad421bf58",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "d99666a39e34b2c2ae1a140b5786e6dfc580a87b2f88fb0492ddcf228c4ec79b",
+          "result_fields": [
+            "active",
+            "address",
+            "branding",
+            "cik",
+            "composite_figi",
+            "currency_name",
+            "description",
+            "homepage_url",
+            "list_date",
+            "locale",
+            "market",
+            "market_cap",
+            "name",
+            "phone_number",
+            "primary_exchange",
+            "round_lot",
+            "share_class_figi",
+            "sic_code",
+            "sic_description",
+            "ticker",
+            "ticker_root",
+            "total_employees",
+            "type",
+            "weighted_shares_outstanding"
+          ],
+          "results": {
+            "active": true,
+            "cik": "0002019410",
+            "composite_figi": "BBG00255V2N4",
+            "list_date": "2025-06-18",
+            "locale": "us",
+            "market": "stocks",
+            "primary_exchange": "XNAS",
+            "share_class_figi": "BBG00255V2P2",
+            "ticker": "CAI",
+            "type": "CS"
+          },
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": null,
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "CAI",
+          "observed_at": "2026-10-15T19:36:24.591931+00:00",
+          "operation": "events",
+          "path": "/vX/reference/tickers/CAI/events",
+          "query": "types=ticker_change",
+          "records_received": 1,
+          "request_id": "ae41a1f31d16d3df29e6aba0c07dd826",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "112c45db2b744ec58bcc06b9b697ca8bafd04069bc1f8b5b74afbaebc8d3a527",
+          "result_fields": [
+            "cik",
+            "composite_figi",
+            "events",
+            "name"
+          ],
+          "results": {
+            "events": [
+              {
+                "date": "2025-06-18",
+                "ticker_change": {
+                  "ticker": "CAI"
+                },
+                "type": "ticker_change"
+              }
+            ],
+            "name": "Caris Life Sciences, Inc. Common Stock"
+          },
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": "2021-06-15",
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "CAI",
+          "observed_at": "2026-10-15T19:37:25.485223+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/CAI",
+          "query": "date=2021-06-15",
+          "records_received": 1,
+          "request_id": "4d9238580fe6e141ebe1cb2d35618065",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "e535922e1000fa7897c737be2bd225627812d6ce3d5a93a57b79549ad1f638ef",
+          "result_fields": [
+            "active",
+            "cik",
+            "composite_figi",
+            "currency_name",
+            "locale",
+            "market",
+            "name",
+            "phone_number",
+            "primary_exchange",
+            "round_lot",
+            "share_class_figi",
+            "share_class_shares_outstanding",
+            "sic_code",
+            "sic_description",
+            "ticker",
+            "ticker_root",
+            "type"
+          ],
+          "results": {
+            "active": true,
+            "cik": "0001388430",
+            "composite_figi": "BBG00JYJ6VB2",
+            "locale": "us",
+            "market": "stocks",
+            "primary_exchange": "XNYS",
+            "share_class_figi": "BBG001SQBPD7",
+            "ticker": "CAI",
+            "type": "CS"
+          },
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": "2024-01-02",
+          "classification": "ENDPOINT_OR_RECORD_UNAVAILABLE",
+          "error": "MASSIVE_REFERENCE_NOT_FOUND",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 404,
+              "provider_status": "NOT_FOUND"
+            }
+          ],
+          "http_status": 404,
+          "identifier": "CAI",
+          "observed_at": "2026-10-15T19:37:25.725600+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/CAI",
+          "query": "date=2024-01-02",
+          "records_received": 0,
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "24aa560d792b8472318e37856c8e82c9b7043d9749fac1f77825bdafd7265193",
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": "2025-08-12",
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "CAI",
+          "observed_at": "2026-10-15T19:37:25.919081+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/CAI",
+          "query": "date=2025-08-12",
+          "records_received": 1,
+          "request_id": "8b4ec58bafc0b53ffb317bb9a3d7cf4b",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "740adf739bab664c5645624e1cb39f321143111fc4e7c00b3e2e32a605606291",
+          "result_fields": [
+            "active",
+            "address",
+            "cik",
+            "composite_figi",
+            "currency_name",
+            "description",
+            "homepage_url",
+            "list_date",
+            "locale",
+            "market",
+            "market_cap",
+            "name",
+            "phone_number",
+            "primary_exchange",
+            "round_lot",
+            "share_class_figi",
+            "share_class_shares_outstanding",
+            "sic_code",
+            "sic_description",
+            "ticker",
+            "ticker_root",
+            "type",
+            "weighted_shares_outstanding"
+          ],
+          "results": {
+            "active": true,
+            "cik": "0002019410",
+            "composite_figi": "BBG00255V2N4",
+            "list_date": "2025-06-18",
+            "locale": "us",
+            "market": "stocks",
+            "primary_exchange": "XNAS",
+            "share_class_figi": "BBG00255V2P2",
+            "ticker": "CAI",
+            "type": "CS"
+          },
+          "unconfirmed_transport_attempts": 0
+        }
+      ],
+      "massive_semantics": "CORROBORATING_ONLY;LOCAL_ARTIFACT_REUSED",
+      "nasdaq": [],
+      "openfigi": [
+        {
+          "interval_proof": false,
+          "mappings": [
+            {
+              "compositeFIGI": "BBG00255V2N4",
+              "exchCode": "US",
+              "figi": "BBG00255V2N4",
+              "marketSector": "Equity",
+              "name": "CARIS LIFE SCIENCES INC",
+              "securityType": "Common Stock",
+              "securityType2": "Common Stock",
+              "shareClassFIGI": "BBG00255V2P2",
+              "ticker": "CAI"
+            }
+          ],
+          "outcome": "MAPPED",
+          "query": {
+            "exchCode": "US",
+            "idType": "TICKER",
+            "idValue": "CAI"
+          }
+        }
+      ],
+      "reason": "COMPLETE_REVIEWED_INTERVAL_AND_SECURITY_CONTINUITY_UNPROVEN",
+      "recommendation": "KEEP_BLOCKED",
+      "reviewed_interval": null,
+      "sec": [
+        {
+          "accession": "0002019410-25-000012",
+          "cik_context": "0002019410",
+          "document_ciks": [
+            "0002019410"
+          ],
+          "entity_names": [
+            "CARIS LIFE SCIENCES, INC."
+          ],
+          "facts": {
+            "dei:DocumentPeriodEndDate": [
+              "June 30, 2025"
+            ],
+            "dei:DocumentType": [
+              "10-Q"
+            ],
+            "dei:EntityCentralIndexKey": [
+              "0002019410"
+            ],
+            "dei:EntityRegistrantName": [
+              "CARIS LIFE SCIENCES, INC."
+            ],
+            "dei:TradingSymbol": [
+              "CAI"
+            ]
+          },
+          "filing_date": "2025-08-12",
+          "form": "10-Q",
+          "http_status": 200,
+          "interval_proof": false,
+          "issuer_binding_confirmed": true,
+          "period": "2025-06-30",
+          "response_sha256": "6addab40f195221bf6add1a669cb332eb9105a54e769e19bd1463ef05d7bf56b",
+          "source": "SEC_EDGAR",
+          "source_reference": "https://www.sec.gov/Archives/edgar/data/2019410/000201941025000012/cai-20250630.htm",
+          "trading_symbols": [
+            "CAI"
+          ]
+        },
+        {
+          "accession": "0001388430-21-000007",
+          "cik_context": "0001388430",
+          "document_ciks": [
+            "0001388430"
+          ],
+          "entity_names": [
+            "CAI International, Inc."
+          ],
+          "facts": {
+            "dei:DocumentPeriodEndDate": [
+              "March 31, 2021"
+            ],
+            "dei:DocumentType": [
+              "10-Q"
+            ],
+            "dei:EntityCentralIndexKey": [
+              "0001388430"
+            ],
+            "dei:EntityRegistrantName": [
+              "CAI International, Inc."
+            ],
+            "dei:TradingSymbol": [
+              "CAI",
+              "CAI-PA",
+              "CAI-PB"
+            ]
+          },
+          "filing_date": "2021-04-30",
+          "form": "10-Q",
+          "http_status": 200,
+          "interval_proof": false,
+          "issuer_binding_confirmed": true,
+          "period": "2021-03-31",
+          "response_sha256": "ced3d8b6f92d3ea293b8b167f5eaf3f9b89f608aa53477c0f08b0345b713c21b",
+          "source": "SEC_EDGAR",
+          "source_reference": "https://www.sec.gov/Archives/edgar/data/1388430/000138843021000007/cai-20210331x10q.htm",
+          "trading_symbols": [
+            "CAI",
+            "CAI-PA",
+            "CAI-PB"
+          ]
+        }
+      ],
+      "sec_submissions": [
+        {
+          "cik": "0002019410",
+          "entity_name": "Caris Life Sciences, Inc.",
+          "from_local_cache": true,
+          "observed_at": "2026-08-10T19:54:47.651946+00:00",
+          "semantics": "CURRENT_STATE_ONLY",
+          "source": "SEC_SUBMISSIONS",
+          "source_reference": "https://data.sec.gov/submissions/CIK0002019410.json",
+          "tickers": [
+            "CAI"
+          ]
+        },
+        {
+          "cik": "0001388430",
+          "entity_name": "CAI International, Inc.",
+          "from_local_cache": false,
+          "observed_at": "2026-10-15T20:18:18.281309+00:00",
+          "semantics": "CURRENT_STATE_ONLY",
+          "source": "SEC_SUBMISSIONS",
+          "source_reference": "https://data.sec.gov/submissions/CIK0001388430.json",
+          "tickers": []
+        }
+      ],
+      "source_coverage": "BOUNDED_NONEXHAUSTIVE;NO_INFERRED_INTERVALS",
+      "sources_checked": [
+        "NASDAQ_TRADER",
+        "OPENFIGI",
+        "SEC_EDGAR",
+        "MASSIVE_ARTIFACT",
+        "ALPACA_SQLITE"
+      ],
+      "stable_ids": [
+        "COMPOSITE_FIGI:BBG00255V2N4",
+        "SHARE_CLASS_FIGI:BBG00255V2P2"
+      ],
+      "symbol": "CAI",
+      "ticker_transitions": []
+    },
+    {
+      "alpaca": [],
+      "candidate_epoch": null,
+      "cik": "0001860160",
+      "classification": "CORROBORATING_ONLY",
+      "conflicts": [],
+      "current": {
+        "active": true,
+        "cik": "0001860160",
+        "composite_figi": "BBG00NGNL3X5",
+        "list_date": "2025-08-07",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNAS",
+        "share_class_figi": "BBG00NGNL3Y4",
+        "ticker": "FLY",
+        "type": "CS"
+      },
+      "effective_dates": [],
+      "evidence_found": {
+        "alpaca": 0,
+        "massive_observations": 5,
+        "nasdaq": 0,
+        "openfigi_mapping_jobs": 1
+      },
+      "free_sec_different_issuers_proven": true,
+      "identity_status": "IDENTITY_EPOCH_UNKNOWN",
+      "massive": [
+        {
+          "as_of": "2026-10-14",
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "FLY",
+          "observed_at": "2026-10-15T19:35:23.925843+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/FLY",
+          "query": "date=2026-10-14",
+          "records_received": 1,
+          "request_id": "8a6695db8fe561aef8660800d9faeba0",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "2d441c5c2bc09e4ceccc4dc13af4cf480af4273e25b07cf27820910a47b3361b",
+          "result_fields": [
+            "active",
+            "address",
+            "branding",
+            "cik",
+            "composite_figi",
+            "currency_name",
+            "description",
+            "homepage_url",
+            "list_date",
+            "locale",
+            "market",
+            "market_cap",
+            "name",
+            "phone_number",
+            "primary_exchange",
+            "round_lot",
+            "share_class_figi",
+            "sic_code",
+            "sic_description",
+            "ticker",
+            "ticker_root",
+            "total_employees",
+            "type",
+            "weighted_shares_outstanding"
+          ],
+          "results": {
+            "active": true,
+            "cik": "0001860160",
+            "composite_figi": "BBG00NGNL3X5",
+            "list_date": "2025-08-07",
+            "locale": "us",
+            "market": "stocks",
+            "primary_exchange": "XNAS",
+            "share_class_figi": "BBG00NGNL3Y4",
+            "ticker": "FLY",
+            "type": "CS"
+          },
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": null,
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "FLY",
+          "observed_at": "2026-10-15T19:36:24.871768+00:00",
+          "operation": "events",
+          "path": "/vX/reference/tickers/FLY/events",
+          "query": "types=ticker_change",
+          "records_received": 1,
+          "request_id": "7b8db0c2db7ff94280389a94332a9e84",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "e9b62b2cbe6d48897dddf91acc45dff151f2a0e231642c9038405b218278cda6",
+          "result_fields": [
+            "cik",
+            "composite_figi",
+            "events",
+            "name"
+          ],
+          "results": {
+            "events": [
+              {
+                "date": "2025-08-07",
+                "ticker_change": {
+                  "ticker": "FLY"
+                },
+                "type": "ticker_change"
+              }
+            ],
+            "name": "Firefly Aerospace Inc. Common Stock"
+          },
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": "2021-06-15",
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "FLY",
+          "observed_at": "2026-10-15T19:37:26.153923+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/FLY",
+          "query": "date=2021-06-15",
+          "records_received": 1,
+          "request_id": "de700f4f457c77488e2e98cff59783e7",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "4e5e9f3d12bcffa7c9627fb9979d6d0085c3481651460c36ec6596c3fd5431a4",
+          "result_fields": [
+            "active",
+            "cik",
+            "composite_figi",
+            "currency_name",
+            "locale",
+            "market",
+            "name",
+            "primary_exchange",
+            "round_lot",
+            "share_class_figi",
+            "share_class_shares_outstanding",
+            "ticker",
+            "ticker_root",
+            "type"
+          ],
+          "results": {
+            "active": true,
+            "cik": "0001407298",
+            "composite_figi": "BBG00JYGRW87",
+            "locale": "us",
+            "market": "stocks",
+            "primary_exchange": "XNYS",
+            "share_class_figi": "BBG001SPTMR2",
+            "ticker": "FLY",
+            "type": "ADRC"
+          },
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": "2024-01-02",
+          "classification": "ENDPOINT_OR_RECORD_UNAVAILABLE",
+          "error": "MASSIVE_REFERENCE_NOT_FOUND",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 404,
+              "provider_status": "NOT_FOUND"
+            }
+          ],
+          "http_status": 404,
+          "identifier": "FLY",
+          "observed_at": "2026-10-15T19:38:25.975812+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/FLY",
+          "query": "date=2024-01-02",
+          "records_received": 0,
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "34ef11e01e3c52f4cce6dc6bee710f77d3e5b6c4e46b9485b39d161ee72bfae1",
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": "2025-08-12",
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "FLY",
+          "observed_at": "2026-10-15T19:38:26.218978+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/FLY",
+          "query": "date=2025-08-12",
+          "records_received": 1,
+          "request_id": "27c65dc5ab7a090e24df2fa236bcb01c",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "3e2344f5eeeb8902e77827edd9d34afa6097223c9b5c8b2ddb0d1b6854b04e97",
+          "result_fields": [
+            "active",
+            "cik",
+            "composite_figi",
+            "currency_name",
+            "description",
+            "homepage_url",
+            "list_date",
+            "locale",
+            "market",
+            "market_cap",
+            "name",
+            "primary_exchange",
+            "round_lot",
+            "share_class_figi",
+            "share_class_shares_outstanding",
+            "ticker",
+            "ticker_root",
+            "type",
+            "weighted_shares_outstanding"
+          ],
+          "results": {
+            "active": true,
+            "cik": "0001860160",
+            "composite_figi": "BBG00NGNL3X5",
+            "list_date": "2025-08-07",
+            "locale": "us",
+            "market": "stocks",
+            "primary_exchange": "XNAS",
+            "share_class_figi": "BBG00NGNL3Y4",
+            "ticker": "FLY",
+            "type": "CS"
+          },
+          "unconfirmed_transport_attempts": 0
+        }
+      ],
+      "massive_semantics": "CORROBORATING_ONLY;LOCAL_ARTIFACT_REUSED",
+      "nasdaq": [],
+      "openfigi": [
+        {
+          "interval_proof": false,
+          "mappings": [
+            {
+              "compositeFIGI": "BBG00NGNL3X5",
+              "exchCode": "US",
+              "figi": "BBG00NGNL3X5",
+              "marketSector": "Equity",
+              "name": "FIREFLY AEROSPACE INC",
+              "securityType": "Common Stock",
+              "securityType2": "Common Stock",
+              "shareClassFIGI": "BBG00NGNL3Y4",
+              "ticker": "FLY"
+            }
+          ],
+          "outcome": "MAPPED",
+          "query": {
+            "exchCode": "US",
+            "idType": "TICKER",
+            "idValue": "FLY"
+          }
+        }
+      ],
+      "reason": "COMPLETE_REVIEWED_INTERVAL_AND_SECURITY_CONTINUITY_UNPROVEN",
+      "recommendation": "KEEP_BLOCKED",
+      "reviewed_interval": null,
+      "sec": [
+        {
+          "accession": "0001193125-25-177023",
+          "cik_context": "0001860160",
+          "document_ciks": [],
+          "entity_names": [],
+          "facts": {},
+          "filing_date": "2025-08-08",
+          "form": "8-K",
+          "http_status": 200,
+          "interval_proof": false,
+          "issuer_binding_confirmed": false,
+          "period": "2025-08-06",
+          "response_sha256": "3773f8796d90439af628482873e335485d85b7bdf57d7d628d7f64eb08a85f5c",
+          "source": "SEC_EDGAR",
+          "source_reference": "https://www.sec.gov/Archives/edgar/data/1860160/000119312525177023/d58174d8k.htm",
+          "trading_symbols": []
+        },
+        {
+          "accession": "0001140361-21-006687",
+          "cik_context": "0001407298",
+          "document_ciks": [
+            "0001407298"
+          ],
+          "entity_names": [
+            "FLY LEASING LIMITED"
+          ],
+          "facts": {
+            "dei:DocumentPeriodEndDate": [
+              "December 31, 2020"
+            ],
+            "dei:DocumentType": [
+              "20-F"
+            ],
+            "dei:EntityCentralIndexKey": [
+              "0001407298"
+            ],
+            "dei:EntityRegistrantName": [
+              "FLY LEASING LIMITED"
+            ],
+            "dei:TradingSymbol": [
+              "FLY"
+            ]
+          },
+          "filing_date": "2021-03-01",
+          "form": "20-F",
+          "http_status": 200,
+          "interval_proof": false,
+          "issuer_binding_confirmed": true,
+          "period": "2020-12-31",
+          "response_sha256": "c5b40eab9d55514e74bfb872184465217d5e355dd27c80def3c7552f1792b299",
+          "source": "SEC_EDGAR",
+          "source_reference": "https://www.sec.gov/Archives/edgar/data/1407298/000114036121006687/brhc10020948_20f.htm",
+          "trading_symbols": [
+            "FLY"
+          ]
+        },
+        {
+          "accession": "0001860160-26-000009",
+          "cik_context": "0001860160",
+          "document_ciks": [
+            "0001860160"
+          ],
+          "entity_names": [
+            "Firefly Aerospace Inc."
+          ],
+          "facts": {
+            "dei:DocumentPeriodEndDate": [
+              "March 31, 2026"
+            ],
+            "dei:DocumentType": [
+              "10-Q"
+            ],
+            "dei:EntityCentralIndexKey": [
+              "0001860160"
+            ],
+            "dei:EntityRegistrantName": [
+              "Firefly Aerospace Inc."
+            ],
+            "dei:TradingSymbol": [
+              "FLY"
+            ]
+          },
+          "filing_date": "2026-05-04",
+          "form": "10-Q",
+          "http_status": 200,
+          "interval_proof": false,
+          "issuer_binding_confirmed": true,
+          "period": "2026-03-31",
+          "response_sha256": "18deb03a33c5f3dd1c134071ee96e500415a9a5cc46f253957fdc6ac2a7ab8b3",
+          "source": "SEC_EDGAR",
+          "source_reference": "https://www.sec.gov/Archives/edgar/data/1860160/000186016026000009/fly-20260331.htm",
+          "trading_symbols": [
+            "FLY"
+          ]
+        }
+      ],
+      "sec_submissions": [
+        {
+          "cik": "0001860160",
+          "entity_name": "Firefly Aerospace Inc.",
+          "from_local_cache": true,
+          "observed_at": "2026-08-11T07:13:58.856394+00:00",
+          "semantics": "CURRENT_STATE_ONLY",
+          "source": "SEC_SUBMISSIONS",
+          "source_reference": "https://data.sec.gov/submissions/CIK0001860160.json",
+          "tickers": [
+            "FLY"
+          ]
+        },
+        {
+          "cik": "0001407298",
+          "entity_name": "Fly Leasing Ltd",
+          "from_local_cache": false,
+          "observed_at": "2026-10-15T20:18:21.180180+00:00",
+          "semantics": "CURRENT_STATE_ONLY",
+          "source": "SEC_SUBMISSIONS",
+          "source_reference": "https://data.sec.gov/submissions/CIK0001407298.json",
+          "tickers": []
+        }
+      ],
+      "source_coverage": "BOUNDED_NONEXHAUSTIVE;NO_INFERRED_INTERVALS",
+      "sources_checked": [
+        "NASDAQ_TRADER",
+        "OPENFIGI",
+        "SEC_EDGAR",
+        "MASSIVE_ARTIFACT",
+        "ALPACA_SQLITE"
+      ],
+      "stable_ids": [
+        "COMPOSITE_FIGI:BBG00NGNL3X5",
+        "SHARE_CLASS_FIGI:BBG00NGNL3Y4"
+      ],
+      "symbol": "FLY",
+      "ticker_transitions": []
+    },
+    {
+      "alpaca": [
+        {
+          "effective_date": null,
+          "new_cusip": "G9TY5A101",
+          "new_symbol": "ZURA",
+          "old_cusip": "G9TY5A101",
+          "old_symbol": "JATT",
+          "process_date": "2023-03-21",
+          "provider_action_id": "43df2d22-e18c-48d9-aeff-ccb797d742e1"
+        }
+      ],
+      "candidate_epoch": null,
+      "cik": "0002112446",
+      "classification": "CONFLICT",
+      "conflicts": [
+        {
+          "alpaca_action_id": "43df2d22-e18c-48d9-aeff-ccb797d742e1",
+          "alpaca_cusip": "G9TY5A101",
+          "nasdaq_cusip": "G50752107",
+          "nasdaq_reference": "https://www.nasdaqtrader.com/TraderNews.aspx?id=dtn2023-7",
+          "reason": "CUSIP_BEFORE_DISAGREEMENT",
+          "scope": "HISTORICAL_TRANSITION_UNRECONCILED_EVENT_ALIGNMENT"
+        }
+      ],
+      "current": {
+        "active": true,
+        "cik": "0002112446",
+        "list_date": "2026-04-17",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNAS",
+        "ticker": "JATT",
+        "type": "CS"
+      },
+      "effective_dates": [
+        "2023-03-21"
+      ],
+      "evidence_found": {
+        "alpaca": 1,
+        "massive_observations": 5,
+        "nasdaq": 1,
+        "openfigi_mapping_jobs": 3
+      },
+      "free_sec_different_issuers_proven": true,
+      "identity_status": "IDENTITY_EPOCH_UNKNOWN",
+      "massive": [
+        {
+          "as_of": "2026-10-14",
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "JATT",
+          "observed_at": "2026-10-15T19:35:24.078643+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/JATT",
+          "query": "date=2026-10-14",
+          "records_received": 1,
+          "request_id": "6d5441406e60c978947c75a8a67ccda8",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "7be8d4dec25a47fe503fc95f6c5435be94e3f0f68873ca53eab1b15bfaa46da5",
+          "result_fields": [
+            "active",
+            "address",
+            "cik",
+            "currency_name",
+            "description",
+            "list_date",
+            "locale",
+            "market",
+            "market_cap",
+            "name",
+            "phone_number",
+            "primary_exchange",
+            "round_lot",
+            "sic_code",
+            "sic_description",
+            "ticker",
+            "ticker_root",
+            "type",
+            "weighted_shares_outstanding"
+          ],
+          "results": {
+            "active": true,
+            "cik": "0002112446",
+            "list_date": "2026-04-17",
+            "locale": "us",
+            "market": "stocks",
+            "primary_exchange": "XNAS",
+            "ticker": "JATT",
+            "type": "CS"
+          },
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": null,
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "JATT",
+          "observed_at": "2026-10-15T19:36:25.033352+00:00",
+          "operation": "events",
+          "path": "/vX/reference/tickers/JATT/events",
+          "query": "types=ticker_change",
+          "records_received": 1,
+          "request_id": "3467ccc69bf1609a6eb5ae5314c0a764",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "e8b64cf283e32657c25d3ad9a16292187887bbca413efd08dba3e6289b47a4ed",
+          "result_fields": [
+            "cik",
+            "events",
+            "name"
+          ],
+          "results": {
+            "events": [
+              {
+                "date": "2026-04-17",
+                "ticker_change": {
+                  "ticker": "JATT"
+                },
+                "type": "ticker_change"
+              }
+            ],
+            "name": "JATT II Acquisition Corp Ordinary Shares"
+          },
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": "2022-06-15",
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "JATT",
+          "observed_at": "2026-10-15T19:38:26.443484+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/JATT",
+          "query": "date=2022-06-15",
+          "records_received": 1,
+          "request_id": "8a135aa68508721856e4b9ed7b220bda",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "a5f2075b16bad86251405ee439da068b7a2a124e8b299cf073eb14649320be4f",
+          "result_fields": [
+            "active",
+            "address",
+            "cik",
+            "currency_name",
+            "description",
+            "homepage_url",
+            "list_date",
+            "locale",
+            "market",
+            "market_cap",
+            "name",
+            "phone_number",
+            "primary_exchange",
+            "round_lot",
+            "share_class_shares_outstanding",
+            "sic_code",
+            "sic_description",
+            "ticker",
+            "ticker_root",
+            "total_employees",
+            "type",
+            "weighted_shares_outstanding"
+          ],
+          "results": {
+            "active": true,
+            "cik": "0001855644",
+            "list_date": "2021-09-03",
+            "locale": "us",
+            "market": "stocks",
+            "primary_exchange": "XNYS",
+            "ticker": "JATT",
+            "type": "CS"
+          },
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": "2023-03-20",
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "JATT",
+          "observed_at": "2026-10-15T19:38:26.665852+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/JATT",
+          "query": "date=2023-03-20",
+          "records_received": 1,
+          "request_id": "331207d43a80c2101fc704d24388528a",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "2b1297f5d5fc6e2131866596458c3f17ed068aaf3c503a5131fba1b5c065ac2e",
+          "result_fields": [
+            "active",
+            "address",
+            "cik",
+            "currency_name",
+            "description",
+            "homepage_url",
+            "list_date",
+            "locale",
+            "market",
+            "market_cap",
+            "name",
+            "phone_number",
+            "primary_exchange",
+            "round_lot",
+            "share_class_shares_outstanding",
+            "sic_code",
+            "sic_description",
+            "ticker",
+            "ticker_root",
+            "total_employees",
+            "type",
+            "weighted_shares_outstanding"
+          ],
+          "results": {
+            "active": true,
+            "cik": "0001855644",
+            "list_date": "2021-09-03",
+            "locale": "us",
+            "market": "stocks",
+            "primary_exchange": "XNYS",
+            "ticker": "JATT",
+            "type": "CS"
+          },
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": "2024-01-02",
+          "classification": "ENDPOINT_OR_RECORD_UNAVAILABLE",
+          "error": "MASSIVE_REFERENCE_NOT_FOUND",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 404,
+              "provider_status": "NOT_FOUND"
+            }
+          ],
+          "http_status": 404,
+          "identifier": "JATT",
+          "observed_at": "2026-10-15T19:38:26.813764+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/JATT",
+          "query": "date=2024-01-02",
+          "records_received": 0,
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "d5f8e0e5795aececf41b8d6ad33055166cc2dc026cb2b1a1924be0f7676761d8",
+          "unconfirmed_transport_attempts": 0
+        }
+      ],
+      "massive_semantics": "CORROBORATING_ONLY;LOCAL_ARTIFACT_REUSED",
+      "nasdaq": [
+        {
+          "complete_interval": false,
+          "date_semantics": "EXCHANGE_TRANSFER_AS_OF",
+          "effective_date": "2023-03-21",
+          "event_type": "EXCHANGE_TRANSFER",
+          "issue_type": "Ordinary",
+          "new_cusip": "G9TY5A101",
+          "new_symbol": "ZURA",
+          "old_cusip": "G50752107",
+          "old_symbol": "JATT",
+          "old_valid_through": "2023-03-20",
+          "raw_fields": {
+            "NASDAQ Ticker/CUSIP as of Tuesday, March 21, 2023": "Ordinary ZURA: G9TY5A101 Warrants ZURAW: G9TY5A119",
+            "NYSE Ticker/CUSIP through Monday, March 20, 2023": "Ordinary JATT: G50752107 Units JATT U: G50752115 Warrants JATT WS: G50752123"
+          },
+          "source": "NASDAQ_TRADER",
+          "source_reference": "https://www.nasdaqtrader.com/TraderNews.aspx?id=dtn2023-7"
+        }
+      ],
+      "openfigi": [
+        {
+          "interval_proof": false,
+          "mappings": [],
+          "outcome": "NO_IDENTIFIER_FOUND",
+          "query": {
+            "exchCode": "US",
+            "idType": "ID_CUSIP",
+            "idValue": "G50752107",
+            "includeUnlistedEquities": true
+          }
+        },
+        {
+          "interval_proof": false,
+          "mappings": [],
+          "outcome": "NO_IDENTIFIER_FOUND",
+          "query": {
+            "exchCode": "US",
+            "idType": "ID_CUSIP",
+            "idValue": "G9TY5A101",
+            "includeUnlistedEquities": true
+          }
+        },
+        {
+          "interval_proof": false,
+          "mappings": [
+            {
+              "compositeFIGI": "BBG020ZK3PR6",
+              "exchCode": "US",
+              "figi": "BBG020ZK3PR6",
+              "marketSector": "Equity",
+              "name": "JATT II ACQUISITION CORP",
+              "securityType": "Common Stock",
+              "securityType2": "Common Stock",
+              "shareClassFIGI": "BBG020ZK3QW8",
+              "ticker": "JATT"
+            }
+          ],
+          "outcome": "MAPPED",
+          "query": {
+            "exchCode": "US",
+            "idType": "TICKER",
+            "idValue": "JATT"
+          }
+        }
+      ],
+      "reason": "UNRESOLVED_EVIDENCE_DISAGREEMENT",
+      "recommendation": "KEEP_BLOCKED",
+      "reviewed_interval": null,
+      "sec": [
+        {
+          "accession": "0001410578-22-001433",
+          "cik_context": "0001855644",
+          "document_ciks": [
+            "0001855644"
+          ],
+          "entity_names": [
+            "JATT Acquisition Corp"
+          ],
+          "facts": {
+            "dei:DocumentPeriodEndDate": [
+              "March 31, 2022"
+            ],
+            "dei:DocumentType": [
+              "10-Q"
+            ],
+            "dei:EntityCentralIndexKey": [
+              "0001855644"
+            ],
+            "dei:EntityRegistrantName": [
+              "JATT Acquisition Corp"
+            ],
+            "dei:TradingSymbol": [
+              "JATT",
+              "JATT U",
+              "JATT WS"
+            ]
+          },
+          "filing_date": "2022-05-13",
+          "form": "10-Q",
+          "http_status": 200,
+          "interval_proof": false,
+          "issuer_binding_confirmed": true,
+          "period": "2022-03-31",
+          "response_sha256": "bd1358ddb9c36a2c6b952d6a2d596f410f0de7535bedf674ff05f95c340c3e40",
+          "source": "SEC_EDGAR",
+          "source_reference": "https://www.sec.gov/Archives/edgar/data/1855644/000141057822001433/jatt-20220331x10q.htm",
+          "trading_symbols": [
+            "JATT",
+            "JATT U",
+            "JATT WS"
+          ]
+        },
+        {
+          "accession": "0001213900-26-062858",
+          "cik_context": "0002112446",
+          "document_ciks": [
+            "0002112446"
+          ],
+          "entity_names": [
+            "JATT II ACQUISITION CORP"
+          ],
+          "facts": {
+            "dei:DocumentPeriodEndDate": [
+              "March 31, 2026"
+            ],
+            "dei:DocumentType": [
+              "10-Q"
+            ],
+            "dei:EntityCentralIndexKey": [
+              "0002112446"
+            ],
+            "dei:EntityRegistrantName": [
+              "JATT II ACQUISITION CORP"
+            ],
+            "dei:TradingSymbol": [
+              "JATT"
+            ]
+          },
+          "filing_date": "2026-05-29",
+          "form": "10-Q",
+          "http_status": 200,
+          "interval_proof": false,
+          "issuer_binding_confirmed": true,
+          "period": "2026-03-31",
+          "response_sha256": "8b5b5aad1ea1ae5f7b843b7a11e51c8ff43938ce5b22393476d67665cb181b89",
+          "source": "SEC_EDGAR",
+          "source_reference": "https://www.sec.gov/Archives/edgar/data/2112446/000121390026062858/ea0288102-10q_jatt2.htm",
+          "trading_symbols": [
+            "JATT"
+          ]
+        }
+      ],
+      "sec_submissions": [
+        {
+          "cik": "0001855644",
+          "entity_name": "Zura Bio Ltd",
+          "from_local_cache": true,
+          "observed_at": "2026-08-11T08:46:18.770203+00:00",
+          "semantics": "CURRENT_STATE_ONLY",
+          "source": "SEC_SUBMISSIONS",
+          "source_reference": "https://data.sec.gov/submissions/CIK0001855644.json",
+          "tickers": [
+            "ZURA"
+          ]
+        },
+        {
+          "cik": "0002112446",
+          "entity_name": "JATT II Acquisition Corp.",
+          "from_local_cache": true,
+          "observed_at": "2026-08-11T07:33:30.359494+00:00",
+          "semantics": "CURRENT_STATE_ONLY",
+          "source": "SEC_SUBMISSIONS",
+          "source_reference": "https://data.sec.gov/submissions/CIK0002112446.json",
+          "tickers": [
+            "JATT"
+          ]
+        }
+      ],
+      "source_coverage": "BOUNDED_NONEXHAUSTIVE;NO_INFERRED_INTERVALS",
+      "sources_checked": [
+        "NASDAQ_TRADER",
+        "OPENFIGI",
+        "SEC_EDGAR",
+        "MASSIVE_ARTIFACT",
+        "ALPACA_SQLITE"
+      ],
+      "stable_ids": [],
+      "symbol": "JATT",
+      "ticker_transitions": [
+        {
+          "complete_interval": false,
+          "date_semantics": "EXCHANGE_TRANSFER_AS_OF",
+          "effective_date": "2023-03-21",
+          "event_type": "EXCHANGE_TRANSFER",
+          "issue_type": "Ordinary",
+          "new_cusip": "G9TY5A101",
+          "new_symbol": "ZURA",
+          "old_cusip": "G50752107",
+          "old_symbol": "JATT",
+          "old_valid_through": "2023-03-20",
+          "raw_fields": {
+            "NASDAQ Ticker/CUSIP as of Tuesday, March 21, 2023": "Ordinary ZURA: G9TY5A101 Warrants ZURAW: G9TY5A119",
+            "NYSE Ticker/CUSIP through Monday, March 20, 2023": "Ordinary JATT: G50752107 Units JATT U: G50752115 Warrants JATT WS: G50752123"
+          },
+          "source": "NASDAQ_TRADER",
+          "source_reference": "https://www.nasdaqtrader.com/TraderNews.aspx?id=dtn2023-7"
+        },
+        {
+          "effective_date": null,
+          "new_cusip": "G9TY5A101",
+          "new_symbol": "ZURA",
+          "old_cusip": "G9TY5A101",
+          "old_symbol": "JATT",
+          "process_date": "2023-03-21",
+          "provider_action_id": "43df2d22-e18c-48d9-aeff-ccb797d742e1"
+        }
+      ]
+    },
+    {
+      "alpaca": [
+        {
+          "effective_date": null,
+          "new_cusip": "021009105",
+          "new_symbol": "ALPSQ",
+          "old_cusip": "021009105",
+          "old_symbol": "ALPS",
+          "process_date": "2023-07-21",
+          "provider_action_id": "a091598c-74e6-4db9-af64-f1b9bc0b4bc1"
+        }
+      ],
+      "candidate_epoch": null,
+      "cik": "0002025774",
+      "classification": "INSUFFICIENT",
+      "conflicts": [],
+      "current": {
+        "active": true,
+        "cik": "0002025774",
+        "list_date": "2025-10-31",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNAS",
+        "ticker": "ALPS",
+        "type": "CS"
+      },
+      "effective_dates": [],
+      "evidence_found": {
+        "alpaca": 1,
+        "massive_observations": 3,
+        "nasdaq": 0,
+        "openfigi_mapping_jobs": 2
+      },
+      "free_sec_different_issuers_proven": false,
+      "identity_status": "IDENTITY_EPOCH_UNKNOWN",
+      "massive": [
+        {
+          "as_of": "2026-10-14",
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "ALPS",
+          "observed_at": "2026-10-15T19:35:24.218869+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/ALPS",
+          "query": "date=2026-10-14",
+          "records_received": 1,
+          "request_id": "f7986e1fb5cff1d810eeb550a855b614",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "41af5bae5936fffee325d822c1184b5b715005fe05d9f2c0dd1645d5af84807f",
+          "result_fields": [
+            "active",
+            "branding",
+            "cik",
+            "currency_name",
+            "description",
+            "homepage_url",
+            "list_date",
+            "locale",
+            "market",
+            "market_cap",
+            "name",
+            "primary_exchange",
+            "round_lot",
+            "ticker",
+            "ticker_root",
+            "total_employees",
+            "type",
+            "weighted_shares_outstanding"
+          ],
+          "results": {
+            "active": true,
+            "cik": "0002025774",
+            "list_date": "2025-10-31",
+            "locale": "us",
+            "market": "stocks",
+            "primary_exchange": "XNAS",
+            "ticker": "ALPS",
+            "type": "CS"
+          },
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": null,
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "ALPS",
+          "observed_at": "2026-10-15T19:36:25.234935+00:00",
+          "operation": "events",
+          "path": "/vX/reference/tickers/ALPS/events",
+          "query": "types=ticker_change",
+          "records_received": 1,
+          "request_id": "7d3f17085518757a0385e2b09964286f",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "ffb5cc99ee691bb0ef282307c5570e68f40f98325dbf1f124cb71772b16f5d82",
+          "result_fields": [
+            "cik",
+            "events",
+            "name"
+          ],
+          "results": {
+            "events": [
+              {
+                "date": "2025-10-31",
+                "ticker_change": {
+                  "ticker": "ALPS"
+                },
+                "type": "ticker_change"
+              }
+            ],
+            "name": "ALPS Group Inc Ordinary Share"
+          },
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": "2022-06-15",
+          "classification": "ENDPOINT_OR_RECORD_UNAVAILABLE",
+          "error": "MASSIVE_REFERENCE_NOT_FOUND",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 404,
+              "provider_status": "NOT_FOUND"
+            }
+          ],
+          "http_status": 404,
+          "identifier": "ALPS",
+          "observed_at": "2026-10-15T19:39:26.647842+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/ALPS",
+          "query": "date=2022-06-15",
+          "records_received": 0,
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "c01820d11dafa7e6413f08bada0b69dbbaa9eaaef98e20e3e781bcae969695a9",
+          "unconfirmed_transport_attempts": 0
+        }
+      ],
+      "massive_semantics": "CORROBORATING_ONLY;LOCAL_ARTIFACT_REUSED",
+      "nasdaq": [],
+      "openfigi": [
+        {
+          "interval_proof": false,
+          "mappings": [
+            {
+              "compositeFIGI": "BBG012V1Q8J1",
+              "exchCode": "US",
+              "figi": "BBG012V1Q8J1",
+              "marketSector": "Equity",
+              "name": "ALPINE SUMMIT ENERGY PARTNER",
+              "securityType": "Common Stock",
+              "securityType2": "Common Stock",
+              "shareClassFIGI": "BBG001T8ZD74",
+              "ticker": "ALPSQ"
+            }
+          ],
+          "outcome": "MAPPED",
+          "query": {
+            "exchCode": "US",
+            "idType": "ID_CUSIP",
+            "idValue": "021009105",
+            "includeUnlistedEquities": true
+          }
+        },
+        {
+          "interval_proof": false,
+          "mappings": [
+            {
+              "compositeFIGI": "BBG0151PS6S6",
+              "exchCode": "US",
+              "figi": "BBG0151PS6S6",
+              "marketSector": "Equity",
+              "name": "ALPS GROUP INC",
+              "securityType": "Common Stock",
+              "securityType2": "Common Stock",
+              "shareClassFIGI": "BBG0151PS6V2",
+              "ticker": "ALPS"
+            }
+          ],
+          "outcome": "MAPPED",
+          "query": {
+            "exchCode": "US",
+            "idType": "TICKER",
+            "idValue": "ALPS"
+          }
+        }
+      ],
+      "reason": "CURRENT_CIK_AND_BOUND_SECURITY_ID_REQUIRED",
+      "recommendation": "KEEP_BLOCKED",
+      "reviewed_interval": null,
+      "sec": [
+        {
+          "accession": "0001493152-26-036364",
+          "cik_context": "0002025774",
+          "document_ciks": [
+            "0002025774"
+          ],
+          "entity_names": [
+            "ALPS GROUP INC"
+          ],
+          "facts": {
+            "dei:DocumentPeriodEndDate": [
+              "March 31"
+            ],
+            "dei:DocumentType": [
+              "20-F"
+            ],
+            "dei:EntityCentralIndexKey": [
+              "0002025774"
+            ],
+            "dei:EntityRegistrantName": [
+              "ALPS GROUP INC"
+            ],
+            "dei:TradingSymbol": [
+              "ALPS",
+              "ALPWF"
+            ]
+          },
+          "filing_date": "2026-08-06",
+          "form": "20-F",
+          "http_status": 200,
+          "interval_proof": false,
+          "issuer_binding_confirmed": true,
+          "period": "2026-03-31",
+          "response_sha256": "9ad0f32b530882b578da06f63c176deb5d4b16f945f525988d7d39a0faec648a",
+          "source": "SEC_EDGAR",
+          "source_reference": "https://www.sec.gov/Archives/edgar/data/2025774/000149315226036364/form20-f.htm",
+          "trading_symbols": [
+            "ALPS",
+            "ALPWF"
+          ]
+        }
+      ],
+      "sec_submissions": [
+        {
+          "cik": "0002025774",
+          "entity_name": "Alps Group Inc",
+          "from_local_cache": true,
+          "observed_at": "2026-08-10T19:30:35.882309+00:00",
+          "semantics": "CURRENT_STATE_ONLY",
+          "source": "SEC_SUBMISSIONS",
+          "source_reference": "https://data.sec.gov/submissions/CIK0002025774.json",
+          "tickers": [
+            "ALPS",
+            "ALPWF"
+          ]
+        }
+      ],
+      "source_coverage": "BOUNDED_NONEXHAUSTIVE;NO_INFERRED_INTERVALS",
+      "sources_checked": [
+        "NASDAQ_TRADER",
+        "OPENFIGI",
+        "SEC_EDGAR",
+        "MASSIVE_ARTIFACT",
+        "ALPACA_SQLITE"
+      ],
+      "stable_ids": [],
+      "symbol": "ALPS",
+      "ticker_transitions": [
+        {
+          "effective_date": null,
+          "new_cusip": "021009105",
+          "new_symbol": "ALPSQ",
+          "old_cusip": "021009105",
+          "old_symbol": "ALPS",
+          "process_date": "2023-07-21",
+          "provider_action_id": "a091598c-74e6-4db9-af64-f1b9bc0b4bc1"
+        }
+      ]
+    },
+    {
+      "alpaca": [
+        {
+          "effective_date": null,
+          "new_cusip": "18271L107",
+          "new_symbol": "CRXT",
+          "old_cusip": "18271L107",
+          "old_symbol": "BLUW",
+          "process_date": "2021-09-21",
+          "provider_action_id": "88107c3f-3a53-42f4-8601-81f739e79a7a"
+        }
+      ],
+      "candidate_epoch": null,
+      "cik": "0002050501",
+      "classification": "CONFLICT",
+      "conflicts": [
+        {
+          "alpaca_action_id": "88107c3f-3a53-42f4-8601-81f739e79a7a",
+          "alpaca_cusip": "18271L107",
+          "nasdaq_cusip": "09607T104",
+          "nasdaq_reference": "https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2021-196",
+          "reason": "CUSIP_BEFORE_DISAGREEMENT",
+          "scope": "HISTORICAL_TRANSITION_UNRECONCILED_EVENT_ALIGNMENT"
+        }
+      ],
+      "current": {
+        "active": true,
+        "cik": "0002050501",
+        "list_date": "2025-07-31",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNAS",
+        "ticker": "BLUW",
+        "type": "CS"
+      },
+      "effective_dates": [
+        "2021-09-10"
+      ],
+      "evidence_found": {
+        "alpaca": 1,
+        "massive_observations": 3,
+        "nasdaq": 1,
+        "openfigi_mapping_jobs": 3
+      },
+      "free_sec_different_issuers_proven": false,
+      "identity_status": "IDENTITY_EPOCH_UNKNOWN",
+      "massive": [
+        {
+          "as_of": "2026-10-14",
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "BLUW",
+          "observed_at": "2026-10-15T19:35:24.359616+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/BLUW",
+          "query": "date=2026-10-14",
+          "records_received": 1,
+          "request_id": "f19415f9fe5a0623b01526f9e124161b",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "bc3bc48350abefa598ab21391ca94819fba91429e3f2eb29a17e81d0f9a65a55",
+          "result_fields": [
+            "active",
+            "address",
+            "cik",
+            "currency_name",
+            "description",
+            "list_date",
+            "locale",
+            "market",
+            "market_cap",
+            "name",
+            "phone_number",
+            "primary_exchange",
+            "round_lot",
+            "sic_code",
+            "sic_description",
+            "ticker",
+            "ticker_root",
+            "total_employees",
+            "type",
+            "weighted_shares_outstanding"
+          ],
+          "results": {
+            "active": true,
+            "cik": "0002050501",
+            "list_date": "2025-07-31",
+            "locale": "us",
+            "market": "stocks",
+            "primary_exchange": "XNAS",
+            "ticker": "BLUW",
+            "type": "CS"
+          },
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": null,
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "BLUW",
+          "observed_at": "2026-10-15T19:36:25.403038+00:00",
+          "operation": "events",
+          "path": "/vX/reference/tickers/BLUW/events",
+          "query": "types=ticker_change",
+          "records_received": 1,
+          "request_id": "782d1348481a6829a5f750b19e71f05c",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "c24af787e8b29dea9f1caeecfe8e87974abcb3df1293a2906363e6932f3826fb",
+          "result_fields": [
+            "cik",
+            "events",
+            "name"
+          ],
+          "results": {
+            "events": [
+              {
+                "date": "2025-07-31",
+                "ticker_change": {
+                  "ticker": "BLUW"
+                },
+                "type": "ticker_change"
+              }
+            ],
+            "name": "Blue Water Acquisition Corp. III Class A Ordinary Shares"
+          },
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": "2021-06-15",
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "BLUW",
+          "observed_at": "2026-10-15T19:39:26.927259+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/BLUW",
+          "query": "date=2021-06-15",
+          "records_received": 1,
+          "request_id": "a22b49f96cedbc471f2db3f3637fed66",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "93d2d3fa86202d3e912bfd7eb11f4de5531386233b81dda8d82713deee1ee1bc",
+          "result_fields": [
+            "active",
+            "address",
+            "cik",
+            "currency_name",
+            "locale",
+            "market",
+            "name",
+            "phone_number",
+            "primary_exchange",
+            "round_lot",
+            "share_class_shares_outstanding",
+            "sic_code",
+            "sic_description",
+            "ticker",
+            "ticker_root",
+            "type"
+          ],
+          "results": {
+            "active": true,
+            "cik": "0001817944",
+            "locale": "us",
+            "market": "stocks",
+            "primary_exchange": "XNAS",
+            "ticker": "BLUW",
+            "type": "CS"
+          },
+          "unconfirmed_transport_attempts": 0
+        }
+      ],
+      "massive_semantics": "CORROBORATING_ONLY;LOCAL_ARTIFACT_REUSED",
+      "nasdaq": [
+        {
+          "complete_interval": false,
+          "date_semantics": "MARKETPLACE_EFFECTIVE_DATE",
+          "effective_date": "2021-09-10",
+          "event_type": "NAME_SYMBOL_CUSIP_CHANGE",
+          "new_cusip": "18271L107",
+          "new_symbol": "CRXT",
+          "old_cusip": "09607T104",
+          "old_symbol": "BLUW",
+          "raw_fields": {
+            "Current CUSIP": "09607T104",
+            "Current Company Name & Issue Type": "Blue Water Acquisition Corp. Class A Common Stock",
+            "Current Symbol": "BLUW",
+            "Marketplace Effective Date": "Friday, September 10, 2021",
+            "New CUSIP": "18271L107",
+            "New Company Name & Issue Type": "Clarus Therapeutics Holdings, Inc. Common Stock",
+            "New Symbol": "CRXT"
+          },
+          "source": "NASDAQ_TRADER",
+          "source_reference": "https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2021-196"
+        }
+      ],
+      "openfigi": [
+        {
+          "interval_proof": false,
+          "mappings": [],
+          "outcome": "NO_IDENTIFIER_FOUND",
+          "query": {
+            "exchCode": "US",
+            "idType": "ID_CUSIP",
+            "idValue": "09607T104",
+            "includeUnlistedEquities": true
+          }
+        },
+        {
+          "interval_proof": false,
+          "mappings": [
+            {
+              "compositeFIGI": "BBG00Z6DQJL4",
+              "exchCode": "US",
+              "figi": "BBG00Z6DQJL4",
+              "marketSector": "Equity",
+              "name": "CLARUS THERAPEUTICS HOLDINGS",
+              "securityType": "Common Stock",
+              "securityType2": "Common Stock",
+              "shareClassFIGI": "BBG00Z6DQKF8",
+              "ticker": "CRXTQ"
+            }
+          ],
+          "outcome": "MAPPED",
+          "query": {
+            "exchCode": "US",
+            "idType": "ID_CUSIP",
+            "idValue": "18271L107",
+            "includeUnlistedEquities": true
+          }
+        },
+        {
+          "interval_proof": false,
+          "mappings": [
+            {
+              "compositeFIGI": "BBG01THFR0W8",
+              "exchCode": "US",
+              "figi": "BBG01THFR0W8",
+              "marketSector": "Equity",
+              "name": "BLUE WATER ACQUISITION C-A",
+              "securityType": "Common Stock",
+              "securityType2": "Common Stock",
+              "shareClassFIGI": "BBG01THFR1T0",
+              "ticker": "BLUW"
+            }
+          ],
+          "outcome": "MAPPED",
+          "query": {
+            "exchCode": "US",
+            "idType": "TICKER",
+            "idValue": "BLUW"
+          }
+        }
+      ],
+      "reason": "UNRESOLVED_EVIDENCE_DISAGREEMENT",
+      "recommendation": "KEEP_BLOCKED",
+      "reviewed_interval": null,
+      "sec": [
+        {
+          "accession": "0001104659-26-062520",
+          "cik_context": "0002050501",
+          "document_ciks": [
+            "0002050501"
+          ],
+          "entity_names": [
+            "Blue Water Acquisition Corp. III"
+          ],
+          "facts": {
+            "dei:DocumentPeriodEndDate": [
+              "March 31, 2026"
+            ],
+            "dei:DocumentType": [
+              "10-Q"
+            ],
+            "dei:EntityCentralIndexKey": [
+              "0002050501"
+            ],
+            "dei:EntityRegistrantName": [
+              "Blue Water Acquisition Corp. III"
+            ],
+            "dei:TradingSymbol": [
+              "BLUW",
+              "BLUWU",
+              "BLUWW"
+            ]
+          },
+          "filing_date": "2026-05-15",
+          "form": "10-Q",
+          "http_status": 200,
+          "interval_proof": false,
+          "issuer_binding_confirmed": true,
+          "period": "2026-03-31",
+          "response_sha256": "54d70227911915af4b548a5f43c763376c8da239616c8ca11c8316426ab1b876",
+          "source": "SEC_EDGAR",
+          "source_reference": "https://www.sec.gov/Archives/edgar/data/2050501/000110465926062520/bluw-20260331x10q.htm",
+          "trading_symbols": [
+            "BLUW",
+            "BLUWU",
+            "BLUWW"
+          ]
+        },
+        {
+          "accession": "0001213900-21-029139",
+          "cik_context": "0001817944",
+          "document_ciks": [],
+          "entity_names": [],
+          "facts": {},
+          "filing_date": "2021-05-26",
+          "form": "10-Q",
+          "http_status": 200,
+          "interval_proof": false,
+          "issuer_binding_confirmed": false,
+          "period": "2021-03-31",
+          "response_sha256": "ad07169f9646e145bd510ae0bdc26d5ec283a04617be6260194a21baa3ee24d6",
+          "source": "SEC_EDGAR",
+          "source_reference": "https://www.sec.gov/Archives/edgar/data/1817944/000121390021029139/f10q0321_bluewateracq.htm",
+          "trading_symbols": []
+        }
+      ],
+      "sec_submissions": [
+        {
+          "cik": "0002050501",
+          "entity_name": "Blue Water Acquisition Corp. III",
+          "from_local_cache": true,
+          "observed_at": "2026-08-10T19:47:05.421582+00:00",
+          "semantics": "CURRENT_STATE_ONLY",
+          "source": "SEC_SUBMISSIONS",
+          "source_reference": "https://data.sec.gov/submissions/CIK0002050501.json",
+          "tickers": [
+            "BLUW",
+            "BLUWU",
+            "BLUWW"
+          ]
+        },
+        {
+          "cik": "0001817944",
+          "entity_name": "Clarus Therapeutics Holdings, Inc.",
+          "from_local_cache": false,
+          "observed_at": "2026-10-15T20:18:23.904101+00:00",
+          "semantics": "CURRENT_STATE_ONLY",
+          "source": "SEC_SUBMISSIONS",
+          "source_reference": "https://data.sec.gov/submissions/CIK0001817944.json",
+          "tickers": []
+        }
+      ],
+      "source_coverage": "BOUNDED_NONEXHAUSTIVE;NO_INFERRED_INTERVALS",
+      "sources_checked": [
+        "NASDAQ_TRADER",
+        "OPENFIGI",
+        "SEC_EDGAR",
+        "MASSIVE_ARTIFACT",
+        "ALPACA_SQLITE"
+      ],
+      "stable_ids": [],
+      "symbol": "BLUW",
+      "ticker_transitions": [
+        {
+          "complete_interval": false,
+          "date_semantics": "MARKETPLACE_EFFECTIVE_DATE",
+          "effective_date": "2021-09-10",
+          "event_type": "NAME_SYMBOL_CUSIP_CHANGE",
+          "new_cusip": "18271L107",
+          "new_symbol": "CRXT",
+          "old_cusip": "09607T104",
+          "old_symbol": "BLUW",
+          "raw_fields": {
+            "Current CUSIP": "09607T104",
+            "Current Company Name & Issue Type": "Blue Water Acquisition Corp. Class A Common Stock",
+            "Current Symbol": "BLUW",
+            "Marketplace Effective Date": "Friday, September 10, 2021",
+            "New CUSIP": "18271L107",
+            "New Company Name & Issue Type": "Clarus Therapeutics Holdings, Inc. Common Stock",
+            "New Symbol": "CRXT"
+          },
+          "source": "NASDAQ_TRADER",
+          "source_reference": "https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2021-196"
+        },
+        {
+          "effective_date": null,
+          "new_cusip": "18271L107",
+          "new_symbol": "CRXT",
+          "old_cusip": "18271L107",
+          "old_symbol": "BLUW",
+          "process_date": "2021-09-21",
+          "provider_action_id": "88107c3f-3a53-42f4-8601-81f739e79a7a"
+        }
+      ]
+    },
+    {
+      "alpaca": [
+        {
+          "effective_date": null,
+          "new_cusip": "337655104",
+          "new_symbol": "NOTE",
+          "old_cusip": "337655104",
+          "old_symbol": "DSAC",
+          "process_date": "2022-08-01",
+          "provider_action_id": "d10b9584-27db-4978-8b67-23fd0a8083a6"
+        }
+      ],
+      "candidate_epoch": null,
+      "cik": "0002082149",
+      "classification": "INSUFFICIENT",
+      "conflicts": [],
+      "current": {
+        "active": true,
+        "cik": "0002082149",
+        "list_date": "2026-01-29",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNAS",
+        "ticker": "DSAC",
+        "type": "CS"
+      },
+      "effective_dates": [],
+      "evidence_found": {
+        "alpaca": 1,
+        "massive_observations": 3,
+        "nasdaq": 0,
+        "openfigi_mapping_jobs": 2
+      },
+      "free_sec_different_issuers_proven": true,
+      "identity_status": "IDENTITY_EPOCH_UNKNOWN",
+      "massive": [
+        {
+          "as_of": "2026-10-14",
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "DSAC",
+          "observed_at": "2026-10-15T19:35:24.537726+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/DSAC",
+          "query": "date=2026-10-14",
+          "records_received": 1,
+          "request_id": "d522f77cff594d4de520b46192ba145c",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "92129e631312523f2d4c5cf2c011fa023d0b927d18909a347bc8644d78aed2f0",
+          "result_fields": [
+            "active",
+            "address",
+            "branding",
+            "cik",
+            "currency_name",
+            "description",
+            "homepage_url",
+            "list_date",
+            "locale",
+            "market",
+            "market_cap",
+            "name",
+            "phone_number",
+            "primary_exchange",
+            "round_lot",
+            "sic_code",
+            "sic_description",
+            "ticker",
+            "ticker_root",
+            "type",
+            "weighted_shares_outstanding"
+          ],
+          "results": {
+            "active": true,
+            "cik": "0002082149",
+            "list_date": "2026-01-29",
+            "locale": "us",
+            "market": "stocks",
+            "primary_exchange": "XNAS",
+            "ticker": "DSAC",
+            "type": "CS"
+          },
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": null,
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "DSAC",
+          "observed_at": "2026-10-15T19:37:25.222567+00:00",
+          "operation": "events",
+          "path": "/vX/reference/tickers/DSAC/events",
+          "query": "types=ticker_change",
+          "records_received": 1,
+          "request_id": "317689d113c51c068826ff46bb368ed0",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "4ab8e3799d84adeb6b08aaa45157674fffb639d59ba7ea1b4cabb76154eaf543",
+          "result_fields": [
+            "cik",
+            "events",
+            "name"
+          ],
+          "results": {
+            "events": [
+              {
+                "date": "2026-01-29",
+                "ticker_change": {
+                  "ticker": "DSAC"
+                },
+                "type": "ticker_change"
+              }
+            ],
+            "name": "Daedalus Special Acquisition Corp. Class A Ordinary Shares"
+          },
+          "unconfirmed_transport_attempts": 0
+        },
+        {
+          "as_of": "2022-06-15",
+          "classification": "PROVIDER_RESULT_RETURNED",
+          "http_attempts": 1,
+          "http_responses": [
+            {
+              "http_status": 200,
+              "provider_status": "OK"
+            }
+          ],
+          "http_status": 200,
+          "identifier": "DSAC",
+          "observed_at": "2026-10-15T19:39:27.168255+00:00",
+          "operation": "details",
+          "path": "/v3/reference/tickers/DSAC",
+          "query": "date=2022-06-15",
+          "records_received": 1,
+          "request_id": "7e3e5c8e8bce232fd13ffd59f3bdb754",
+          "request_transmitted": true,
+          "requests_attempted": 1,
+          "requests_transmitted": 1,
+          "response_sha256": "e921094690c7779cadb8d413e9fdd9d8e696bc4fe90088e47e620d26ad866511",
+          "result_fields": [
+            "active",
+            "address",
+            "cik",
+            "currency_name",
+            "description",
+            "homepage_url",
+            "list_date",
+            "locale",
+            "market",
+            "market_cap",
+            "name",
+            "phone_number",
+            "primary_exchange",
+            "round_lot",
+            "share_class_shares_outstanding",
+            "sic_code",
+            "sic_description",
+            "ticker",
+            "ticker_root",
+            "total_employees",
+            "type",
+            "weighted_shares_outstanding"
+          ],
+          "results": {
+            "active": true,
+            "cik": "0001823466",
+            "list_date": "2020-11-30",
+            "locale": "us",
+            "market": "stocks",
+            "primary_exchange": "XNAS",
+            "ticker": "DSAC",
+            "type": "CS"
+          },
+          "unconfirmed_transport_attempts": 0
+        }
+      ],
+      "massive_semantics": "CORROBORATING_ONLY;LOCAL_ARTIFACT_REUSED",
+      "nasdaq": [],
+      "openfigi": [
+        {
+          "interval_proof": false,
+          "mappings": [],
+          "outcome": "NO_IDENTIFIER_FOUND",
+          "query": {
+            "exchCode": "US",
+            "idType": "ID_CUSIP",
+            "idValue": "337655104",
+            "includeUnlistedEquities": true
+          }
+        },
+        {
+          "interval_proof": false,
+          "mappings": [
+            {
+              "compositeFIGI": "BBG01X61Y143",
+              "exchCode": "US",
+              "figi": "BBG01X61Y143",
+              "marketSector": "Equity",
+              "name": "DAEDALUS SPECIAL ACQUIS-CL A",
+              "securityType": "Common Stock",
+              "securityType2": "Common Stock",
+              "shareClassFIGI": "BBG01X61Y223",
+              "ticker": "DSAC"
+            }
+          ],
+          "outcome": "MAPPED",
+          "query": {
+            "exchCode": "US",
+            "idType": "TICKER",
+            "idValue": "DSAC"
+          }
+        }
+      ],
+      "reason": "CURRENT_CIK_AND_BOUND_SECURITY_ID_REQUIRED",
+      "recommendation": "KEEP_BLOCKED",
+      "reviewed_interval": null,
+      "sec": [
+        {
+          "accession": "0001213900-26-055212",
+          "cik_context": "0002082149",
+          "document_ciks": [
+            "0002082149"
+          ],
+          "entity_names": [
+            "DAEDALUS SPECIAL ACQUISITION CORP."
+          ],
+          "facts": {
+            "dei:DocumentPeriodEndDate": [
+              "March 31, 2026"
+            ],
+            "dei:DocumentType": [
+              "10-Q"
+            ],
+            "dei:EntityCentralIndexKey": [
+              "0002082149"
+            ],
+            "dei:EntityRegistrantName": [
+              "DAEDALUS SPECIAL ACQUISITION CORP."
+            ],
+            "dei:TradingSymbol": [
+              "DSAC",
+              "DSACU",
+              "DSACW"
+            ]
+          },
+          "filing_date": "2026-05-12",
+          "form": "10-Q",
+          "http_status": 200,
+          "interval_proof": false,
+          "issuer_binding_confirmed": true,
+          "period": "2026-03-31",
+          "response_sha256": "240ce83250309f8c6bfb9a0b51364fc101ff212e30a240edc2de867f56e95727",
+          "source": "SEC_EDGAR",
+          "source_reference": "https://www.sec.gov/Archives/edgar/data/2082149/000121390026055212/ea0289600-10q_daedalus.htm",
+          "trading_symbols": [
+            "DSAC",
+            "DSACU",
+            "DSACW"
+          ]
+        },
+        {
+          "accession": "0001104659-22-061396",
+          "cik_context": "0001823466",
+          "document_ciks": [
+            "0001823466"
+          ],
+          "entity_names": [
+            "DUDDELL STREET ACQUISITION CORP."
+          ],
+          "facts": {
+            "dei:DocumentPeriodEndDate": [
+              "March 31, 2022"
+            ],
+            "dei:DocumentType": [
+              "10-Q"
+            ],
+            "dei:EntityCentralIndexKey": [
+              "0001823466"
+            ],
+            "dei:EntityRegistrantName": [
+              "DUDDELL STREET ACQUISITION CORP."
+            ],
+            "dei:TradingSymbol": [
+              "DSAC",
+              "DSACU",
+              "DSACW"
+            ]
+          },
+          "filing_date": "2022-05-16",
+          "form": "10-Q",
+          "http_status": 200,
+          "interval_proof": false,
+          "issuer_binding_confirmed": true,
+          "period": "2022-03-31",
+          "response_sha256": "01b5206b155ae4b690ce178285ce62453cf0c9ae9aa6c57ad1d5dfe68c495390",
+          "source": "SEC_EDGAR",
+          "source_reference": "https://www.sec.gov/Archives/edgar/data/1823466/000110465922061396/dsac-20220331x10q.htm",
+          "trading_symbols": [
+            "DSAC",
+            "DSACU",
+            "DSACW"
+          ]
+        }
+      ],
+      "sec_submissions": [
+        {
+          "cik": "0002082149",
+          "entity_name": "Daedalus Special Acquisition Corp.",
+          "from_local_cache": true,
+          "observed_at": "2026-08-10T20:12:09.605154+00:00",
+          "semantics": "CURRENT_STATE_ONLY",
+          "source": "SEC_SUBMISSIONS",
+          "source_reference": "https://data.sec.gov/submissions/CIK0002082149.json",
+          "tickers": [
+            "DSAC",
+            "DSACU",
+            "DSACW"
+          ]
+        },
+        {
+          "cik": "0001823466",
+          "entity_name": "FiscalNote Holdings, Inc.",
+          "from_local_cache": false,
+          "observed_at": "2026-10-15T20:18:26.428932+00:00",
+          "semantics": "CURRENT_STATE_ONLY",
+          "source": "SEC_SUBMISSIONS",
+          "source_reference": "https://data.sec.gov/submissions/CIK0001823466.json",
+          "tickers": [
+            "NOTE",
+            "NOTEW"
+          ]
+        }
+      ],
+      "source_coverage": "BOUNDED_NONEXHAUSTIVE;NO_INFERRED_INTERVALS",
+      "sources_checked": [
+        "NASDAQ_TRADER",
+        "OPENFIGI",
+        "SEC_EDGAR",
+        "MASSIVE_ARTIFACT",
+        "ALPACA_SQLITE"
+      ],
+      "stable_ids": [],
+      "symbol": "DSAC",
+      "ticker_transitions": [
+        {
+          "effective_date": null,
+          "new_cusip": "337655104",
+          "new_symbol": "NOTE",
+          "old_cusip": "337655104",
+          "old_symbol": "DSAC",
+          "process_date": "2022-08-01",
+          "provider_action_id": "d10b9584-27db-4978-8b67-23fd0a8083a6"
+        }
+      ]
+    }
+  ]
+}
