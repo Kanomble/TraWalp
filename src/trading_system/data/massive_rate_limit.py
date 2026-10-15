@@ -163,6 +163,67 @@ class _RollingWindowLimiter:
         finally:
             Path(temporary).unlink(missing_ok=True)
 
+    def recover_clock_anomaly(self):
+        """Manual recovery only: expire all potential sends under the normal OS lock.
+
+        Never repair corrupt/missing initialized state or clocks with future
+        stored observations. No state changes until BOTH new clocks have elapsed
+        a full stable window. An interrupted wait preserves the original bytes.
+        """
+        path = self._state_path if self._state_path is not None else _state_path()
+        try:
+            with self._lock, self._lock_factory(path.with_suffix(".lock"), self._sleeper) as handle:
+                state = self._load(path, handle)
+                start = self._now()
+                if any(
+                    pair[i] > start[i]
+                    for pair in [*state["timestamps"], state["last_clock"]]
+                    for i in (0, 1)
+                ):
+                    raise MassiveReferenceError("MASSIVE_RATE_LIMIT_STATE_INVALID")
+                report = {
+                    "previous_slots": len(state["timestamps"]),
+                    "previous_in_flight": state["in_flight"],
+                    "waited_seconds": 0.0,
+                    "state_reset": False,
+                }
+                try:
+                    self._now(state["last_clock"])
+                except MassiveReferenceError as exc:
+                    if str(exc) != "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY":
+                        raise
+                else:
+                    return {
+                        **report,
+                        "status": "RECOVERY_NOT_REQUIRED",
+                        "reason": "CLOCKS_CONSISTENT",
+                    }
+
+                previous = start
+                while True:
+                    now = self._now(previous)
+                    previous = now
+                    elapsed = [now[i] - start[i] for i in (0, 1)]
+                    # Also reject cumulative drift across the complete recovery window.
+                    if abs(elapsed[0] - elapsed[1]) > 0.5:
+                        raise MassiveReferenceError("MASSIVE_RATE_LIMIT_CLOCK_ANOMALY")
+                    remaining = self._expiry_seconds - min(elapsed)
+                    if remaining <= 0:
+                        break
+                    self._sleeper(min(30.0, remaining))
+                # Holding the lock proves there were no new sends during this
+                # entire window, including any old owner's potential in-flight send.
+                self._save(path, {"timestamps": [], "last_clock": now, "in_flight": False}, handle)
+                return {
+                    **report,
+                    "status": "RECOVERED",
+                    "reason": "CLOCK_ANOMALY",
+                    "waited_seconds": min(elapsed),
+                    "state_reset": True,
+                }
+        except OSError:
+            raise MassiveReferenceError("MASSIVE_RATE_LIMIT_STATE_UNAVAILABLE") from None
+
     def transmit(self, operation, *, limit=5, not_before=0):
         _validate_limit(limit)
         path = self._state_path if self._state_path is not None else _state_path()

@@ -1,13 +1,66 @@
 {
+  "classification_basis": [
+    "HISTORICAL_DIFFERENT_CIK_AND_FIGI_OBSERVED_FOR_CAI_FLY",
+    "STABLE_SECURITY_IDENTIFIERS_MISSING_FOR_JATT_ALPS_BLUW_DSAC",
+    "SINGLE_EVENT_PER_SUCCESSFUL_TIMELINE_NO_COMPLETE_INTERVAL_PROOF",
+    "ZURA_DATE_CORROBORATES_ALPACA_PROCESS_DAY_NOT_SECURITY_CONTINUITY",
+    "NOTE_RETURNED_EVENT_DATE_DIFFERS_FROM_STORED_ALPACA_EVENT_DAY",
+    "NO_EPOCH_PROMOTION"
+  ],
   "diagnostics": {
     "configured_request_limit_per_minute": 5,
-    "research_http_attempts": 0,
+    "research_http_attempts": 28,
     "research_retries": 0,
     "scope": "READ_ONLY_IDENTITY_RESEARCH;ENTITLEMENTS_NOT_ASSUMED"
   },
-  "entitlement_status": "UNKNOWN_NO_HTTP_REQUEST_TRANSMITTED",
+  "endpoint_summary": {
+    "details": {
+      "authentication_failures": 0,
+      "blocked_requests": 0,
+      "classifications": {
+        "ENDPOINT_OR_RECORD_UNAVAILABLE": 4,
+        "PROVIDER_RESULT_RETURNED": 14
+      },
+      "entitlement_failures": 0,
+      "http_attempts": 18,
+      "http_statuses": {
+        "200": 14,
+        "404": 4
+      },
+      "planned_requests": 18,
+      "provider_responses": 18,
+      "rate_limit_failures": 0,
+      "records_received": 14,
+      "requests_attempted": 18,
+      "requests_transmitted": 18,
+      "unconfirmed_transport_attempts": 0
+    },
+    "events": {
+      "authentication_failures": 0,
+      "blocked_requests": 0,
+      "classifications": {
+        "ENDPOINT_OR_RECORD_UNAVAILABLE": 2,
+        "PROVIDER_RESULT_RETURNED": 8
+      },
+      "entitlement_failures": 0,
+      "http_attempts": 10,
+      "http_statuses": {
+        "200": 8,
+        "404": 2
+      },
+      "planned_requests": 10,
+      "provider_responses": 10,
+      "rate_limit_failures": 0,
+      "records_received": 8,
+      "requests_attempted": 10,
+      "requests_transmitted": 10,
+      "unconfirmed_transport_attempts": 0
+    }
+  },
+  "entitlement_status": "ACCESS_CONFIRMED_FOR_TESTED_REQUESTS;PLAN_NAME_NOT_QUERIED",
   "epoch_rows_after": 0,
   "epoch_rows_before": 0,
+  "evidence_classification": "C",
   "local_current_reference": [
     {
       "active": 1,
@@ -82,271 +135,1558 @@
       "symbol": "JATT"
     }
   ],
-  "local_guard_diagnostic": {
-    "clock_delta_difference_seconds": 10.530948499275837,
-    "guard_state_modified": false,
-    "in_flight": false,
-    "monotonic_clock_backwards": false,
-    "monotonic_delta_seconds": 113266.4229063,
-    "stored_reservations": 5,
-    "wall_clock_backwards": false,
-    "wall_delta_seconds": 113276.95385479927
-  },
   "observations": [
     {
       "as_of": "2026-10-14",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "CAI",
+      "observed_at": "2026-10-15T19:35:23.286559+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/CAI",
+      "query": "date=2026-10-14",
+      "records_received": 1,
+      "request_id": "b3adf58da91b4d003ecae24ad421bf58",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "d99666a39e34b2c2ae1a140b5786e6dfc580a87b2f88fb0492ddcf228c4ec79b",
+      "result_fields": [
+        "active",
+        "address",
+        "branding",
+        "cik",
+        "composite_figi",
+        "currency_name",
+        "description",
+        "homepage_url",
+        "list_date",
+        "locale",
+        "market",
+        "market_cap",
+        "name",
+        "phone_number",
+        "primary_exchange",
+        "round_lot",
+        "share_class_figi",
+        "sic_code",
+        "sic_description",
+        "ticker",
+        "ticker_root",
+        "total_employees",
+        "type",
+        "weighted_shares_outstanding"
+      ],
+      "results": {
+        "active": true,
+        "cik": "0002019410",
+        "composite_figi": "BBG00255V2N4",
+        "list_date": "2025-06-18",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNAS",
+        "share_class_figi": "BBG00255V2P2",
+        "ticker": "CAI",
+        "type": "CS"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": "2026-10-14",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "FLY",
+      "observed_at": "2026-10-15T19:35:23.925843+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/FLY",
+      "query": "date=2026-10-14",
+      "records_received": 1,
+      "request_id": "8a6695db8fe561aef8660800d9faeba0",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "2d441c5c2bc09e4ceccc4dc13af4cf480af4273e25b07cf27820910a47b3361b",
+      "result_fields": [
+        "active",
+        "address",
+        "branding",
+        "cik",
+        "composite_figi",
+        "currency_name",
+        "description",
+        "homepage_url",
+        "list_date",
+        "locale",
+        "market",
+        "market_cap",
+        "name",
+        "phone_number",
+        "primary_exchange",
+        "round_lot",
+        "share_class_figi",
+        "sic_code",
+        "sic_description",
+        "ticker",
+        "ticker_root",
+        "total_employees",
+        "type",
+        "weighted_shares_outstanding"
+      ],
+      "results": {
+        "active": true,
+        "cik": "0001860160",
+        "composite_figi": "BBG00NGNL3X5",
+        "list_date": "2025-08-07",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNAS",
+        "share_class_figi": "BBG00NGNL3Y4",
+        "ticker": "FLY",
+        "type": "CS"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": "2026-10-14",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "JATT",
+      "observed_at": "2026-10-15T19:35:24.078643+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/JATT",
+      "query": "date=2026-10-14",
+      "records_received": 1,
+      "request_id": "6d5441406e60c978947c75a8a67ccda8",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "7be8d4dec25a47fe503fc95f6c5435be94e3f0f68873ca53eab1b15bfaa46da5",
+      "result_fields": [
+        "active",
+        "address",
+        "cik",
+        "currency_name",
+        "description",
+        "list_date",
+        "locale",
+        "market",
+        "market_cap",
+        "name",
+        "phone_number",
+        "primary_exchange",
+        "round_lot",
+        "sic_code",
+        "sic_description",
+        "ticker",
+        "ticker_root",
+        "type",
+        "weighted_shares_outstanding"
+      ],
+      "results": {
+        "active": true,
+        "cik": "0002112446",
+        "list_date": "2026-04-17",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNAS",
+        "ticker": "JATT",
+        "type": "CS"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": "2026-10-14",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "ALPS",
+      "observed_at": "2026-10-15T19:35:24.218869+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/ALPS",
+      "query": "date=2026-10-14",
+      "records_received": 1,
+      "request_id": "f7986e1fb5cff1d810eeb550a855b614",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "41af5bae5936fffee325d822c1184b5b715005fe05d9f2c0dd1645d5af84807f",
+      "result_fields": [
+        "active",
+        "branding",
+        "cik",
+        "currency_name",
+        "description",
+        "homepage_url",
+        "list_date",
+        "locale",
+        "market",
+        "market_cap",
+        "name",
+        "primary_exchange",
+        "round_lot",
+        "ticker",
+        "ticker_root",
+        "total_employees",
+        "type",
+        "weighted_shares_outstanding"
+      ],
+      "results": {
+        "active": true,
+        "cik": "0002025774",
+        "list_date": "2025-10-31",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNAS",
+        "ticker": "ALPS",
+        "type": "CS"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": "2026-10-14",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "BLUW",
+      "observed_at": "2026-10-15T19:35:24.359616+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/BLUW",
+      "query": "date=2026-10-14",
+      "records_received": 1,
+      "request_id": "f19415f9fe5a0623b01526f9e124161b",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "bc3bc48350abefa598ab21391ca94819fba91429e3f2eb29a17e81d0f9a65a55",
+      "result_fields": [
+        "active",
+        "address",
+        "cik",
+        "currency_name",
+        "description",
+        "list_date",
+        "locale",
+        "market",
+        "market_cap",
+        "name",
+        "phone_number",
+        "primary_exchange",
+        "round_lot",
+        "sic_code",
+        "sic_description",
+        "ticker",
+        "ticker_root",
+        "total_employees",
+        "type",
+        "weighted_shares_outstanding"
+      ],
+      "results": {
+        "active": true,
+        "cik": "0002050501",
+        "list_date": "2025-07-31",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNAS",
+        "ticker": "BLUW",
+        "type": "CS"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": "2026-10-14",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "DSAC",
+      "observed_at": "2026-10-15T19:35:24.537726+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/DSAC",
+      "query": "date=2026-10-14",
+      "records_received": 1,
+      "request_id": "d522f77cff594d4de520b46192ba145c",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "92129e631312523f2d4c5cf2c011fa023d0b927d18909a347bc8644d78aed2f0",
+      "result_fields": [
+        "active",
+        "address",
+        "branding",
+        "cik",
+        "currency_name",
+        "description",
+        "homepage_url",
+        "list_date",
+        "locale",
+        "market",
+        "market_cap",
+        "name",
+        "phone_number",
+        "primary_exchange",
+        "round_lot",
+        "sic_code",
+        "sic_description",
+        "ticker",
+        "ticker_root",
+        "type",
+        "weighted_shares_outstanding"
+      ],
+      "results": {
+        "active": true,
+        "cik": "0002082149",
+        "list_date": "2026-01-29",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNAS",
+        "ticker": "DSAC",
+        "type": "CS"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": null,
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "CAI",
+      "observed_at": "2026-10-15T19:36:24.591931+00:00",
       "operation": "events",
-      "request_transmitted": false
+      "path": "/vX/reference/tickers/CAI/events",
+      "query": "types=ticker_change",
+      "records_received": 1,
+      "request_id": "ae41a1f31d16d3df29e6aba0c07dd826",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "112c45db2b744ec58bcc06b9b697ca8bafd04069bc1f8b5b74afbaebc8d3a527",
+      "result_fields": [
+        "cik",
+        "composite_figi",
+        "events",
+        "name"
+      ],
+      "results": {
+        "events": [
+          {
+            "date": "2025-06-18",
+            "ticker_change": {
+              "ticker": "CAI"
+            },
+            "type": "ticker_change"
+          }
+        ],
+        "name": "Caris Life Sciences, Inc. Common Stock"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": null,
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "FLY",
+      "observed_at": "2026-10-15T19:36:24.871768+00:00",
       "operation": "events",
-      "request_transmitted": false
+      "path": "/vX/reference/tickers/FLY/events",
+      "query": "types=ticker_change",
+      "records_received": 1,
+      "request_id": "7b8db0c2db7ff94280389a94332a9e84",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "e9b62b2cbe6d48897dddf91acc45dff151f2a0e231642c9038405b218278cda6",
+      "result_fields": [
+        "cik",
+        "composite_figi",
+        "events",
+        "name"
+      ],
+      "results": {
+        "events": [
+          {
+            "date": "2025-08-07",
+            "ticker_change": {
+              "ticker": "FLY"
+            },
+            "type": "ticker_change"
+          }
+        ],
+        "name": "Firefly Aerospace Inc. Common Stock"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": null,
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "JATT",
+      "observed_at": "2026-10-15T19:36:25.033352+00:00",
       "operation": "events",
-      "request_transmitted": false
+      "path": "/vX/reference/tickers/JATT/events",
+      "query": "types=ticker_change",
+      "records_received": 1,
+      "request_id": "3467ccc69bf1609a6eb5ae5314c0a764",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "e8b64cf283e32657c25d3ad9a16292187887bbca413efd08dba3e6289b47a4ed",
+      "result_fields": [
+        "cik",
+        "events",
+        "name"
+      ],
+      "results": {
+        "events": [
+          {
+            "date": "2026-04-17",
+            "ticker_change": {
+              "ticker": "JATT"
+            },
+            "type": "ticker_change"
+          }
+        ],
+        "name": "JATT II Acquisition Corp Ordinary Shares"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": null,
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "ALPS",
+      "observed_at": "2026-10-15T19:36:25.234935+00:00",
       "operation": "events",
-      "request_transmitted": false
+      "path": "/vX/reference/tickers/ALPS/events",
+      "query": "types=ticker_change",
+      "records_received": 1,
+      "request_id": "7d3f17085518757a0385e2b09964286f",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "ffb5cc99ee691bb0ef282307c5570e68f40f98325dbf1f124cb71772b16f5d82",
+      "result_fields": [
+        "cik",
+        "events",
+        "name"
+      ],
+      "results": {
+        "events": [
+          {
+            "date": "2025-10-31",
+            "ticker_change": {
+              "ticker": "ALPS"
+            },
+            "type": "ticker_change"
+          }
+        ],
+        "name": "ALPS Group Inc Ordinary Share"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": null,
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "BLUW",
+      "observed_at": "2026-10-15T19:36:25.403038+00:00",
       "operation": "events",
-      "request_transmitted": false
+      "path": "/vX/reference/tickers/BLUW/events",
+      "query": "types=ticker_change",
+      "records_received": 1,
+      "request_id": "782d1348481a6829a5f750b19e71f05c",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "c24af787e8b29dea9f1caeecfe8e87974abcb3df1293a2906363e6932f3826fb",
+      "result_fields": [
+        "cik",
+        "events",
+        "name"
+      ],
+      "results": {
+        "events": [
+          {
+            "date": "2025-07-31",
+            "ticker_change": {
+              "ticker": "BLUW"
+            },
+            "type": "ticker_change"
+          }
+        ],
+        "name": "Blue Water Acquisition Corp. III Class A Ordinary Shares"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": null,
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "DSAC",
+      "observed_at": "2026-10-15T19:37:25.222567+00:00",
       "operation": "events",
-      "request_transmitted": false
+      "path": "/vX/reference/tickers/DSAC/events",
+      "query": "types=ticker_change",
+      "records_received": 1,
+      "request_id": "317689d113c51c068826ff46bb368ed0",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "4ab8e3799d84adeb6b08aaa45157674fffb639d59ba7ea1b4cabb76154eaf543",
+      "result_fields": [
+        "cik",
+        "events",
+        "name"
+      ],
+      "results": {
+        "events": [
+          {
+            "date": "2026-01-29",
+            "ticker_change": {
+              "ticker": "DSAC"
+            },
+            "type": "ticker_change"
+          }
+        ],
+        "name": "Daedalus Special Acquisition Corp. Class A Ordinary Shares"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": "2021-06-15",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "CAI",
+      "observed_at": "2026-10-15T19:37:25.485223+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/CAI",
+      "query": "date=2021-06-15",
+      "records_received": 1,
+      "request_id": "4d9238580fe6e141ebe1cb2d35618065",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "e535922e1000fa7897c737be2bd225627812d6ce3d5a93a57b79549ad1f638ef",
+      "result_fields": [
+        "active",
+        "cik",
+        "composite_figi",
+        "currency_name",
+        "locale",
+        "market",
+        "name",
+        "phone_number",
+        "primary_exchange",
+        "round_lot",
+        "share_class_figi",
+        "share_class_shares_outstanding",
+        "sic_code",
+        "sic_description",
+        "ticker",
+        "ticker_root",
+        "type"
+      ],
+      "results": {
+        "active": true,
+        "cik": "0001388430",
+        "composite_figi": "BBG00JYJ6VB2",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNYS",
+        "share_class_figi": "BBG001SQBPD7",
+        "ticker": "CAI",
+        "type": "CS"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": "2024-01-02",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "ENDPOINT_OR_RECORD_UNAVAILABLE",
+      "error": "MASSIVE_REFERENCE_NOT_FOUND",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 404,
+          "provider_status": "NOT_FOUND"
+        }
+      ],
+      "http_status": 404,
       "identifier": "CAI",
+      "observed_at": "2026-10-15T19:37:25.725600+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/CAI",
+      "query": "date=2024-01-02",
+      "records_received": 0,
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "24aa560d792b8472318e37856c8e82c9b7043d9749fac1f77825bdafd7265193",
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": "2025-08-12",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "CAI",
+      "observed_at": "2026-10-15T19:37:25.919081+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/CAI",
+      "query": "date=2025-08-12",
+      "records_received": 1,
+      "request_id": "8b4ec58bafc0b53ffb317bb9a3d7cf4b",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "740adf739bab664c5645624e1cb39f321143111fc4e7c00b3e2e32a605606291",
+      "result_fields": [
+        "active",
+        "address",
+        "cik",
+        "composite_figi",
+        "currency_name",
+        "description",
+        "homepage_url",
+        "list_date",
+        "locale",
+        "market",
+        "market_cap",
+        "name",
+        "phone_number",
+        "primary_exchange",
+        "round_lot",
+        "share_class_figi",
+        "share_class_shares_outstanding",
+        "sic_code",
+        "sic_description",
+        "ticker",
+        "ticker_root",
+        "type",
+        "weighted_shares_outstanding"
+      ],
+      "results": {
+        "active": true,
+        "cik": "0002019410",
+        "composite_figi": "BBG00255V2N4",
+        "list_date": "2025-06-18",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNAS",
+        "share_class_figi": "BBG00255V2P2",
+        "ticker": "CAI",
+        "type": "CS"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": "2021-06-15",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "FLY",
+      "observed_at": "2026-10-15T19:37:26.153923+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/FLY",
+      "query": "date=2021-06-15",
+      "records_received": 1,
+      "request_id": "de700f4f457c77488e2e98cff59783e7",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "4e5e9f3d12bcffa7c9627fb9979d6d0085c3481651460c36ec6596c3fd5431a4",
+      "result_fields": [
+        "active",
+        "cik",
+        "composite_figi",
+        "currency_name",
+        "locale",
+        "market",
+        "name",
+        "primary_exchange",
+        "round_lot",
+        "share_class_figi",
+        "share_class_shares_outstanding",
+        "ticker",
+        "ticker_root",
+        "type"
+      ],
+      "results": {
+        "active": true,
+        "cik": "0001407298",
+        "composite_figi": "BBG00JYGRW87",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNYS",
+        "share_class_figi": "BBG001SPTMR2",
+        "ticker": "FLY",
+        "type": "ADRC"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": "2024-01-02",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "ENDPOINT_OR_RECORD_UNAVAILABLE",
+      "error": "MASSIVE_REFERENCE_NOT_FOUND",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 404,
+          "provider_status": "NOT_FOUND"
+        }
+      ],
+      "http_status": 404,
       "identifier": "FLY",
+      "observed_at": "2026-10-15T19:38:25.975812+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/FLY",
+      "query": "date=2024-01-02",
+      "records_received": 0,
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "34ef11e01e3c52f4cce6dc6bee710f77d3e5b6c4e46b9485b39d161ee72bfae1",
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": "2025-08-12",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "FLY",
+      "observed_at": "2026-10-15T19:38:26.218978+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/FLY",
+      "query": "date=2025-08-12",
+      "records_received": 1,
+      "request_id": "27c65dc5ab7a090e24df2fa236bcb01c",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "3e2344f5eeeb8902e77827edd9d34afa6097223c9b5c8b2ddb0d1b6854b04e97",
+      "result_fields": [
+        "active",
+        "cik",
+        "composite_figi",
+        "currency_name",
+        "description",
+        "homepage_url",
+        "list_date",
+        "locale",
+        "market",
+        "market_cap",
+        "name",
+        "primary_exchange",
+        "round_lot",
+        "share_class_figi",
+        "share_class_shares_outstanding",
+        "ticker",
+        "ticker_root",
+        "type",
+        "weighted_shares_outstanding"
+      ],
+      "results": {
+        "active": true,
+        "cik": "0001860160",
+        "composite_figi": "BBG00NGNL3X5",
+        "list_date": "2025-08-07",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNAS",
+        "share_class_figi": "BBG00NGNL3Y4",
+        "ticker": "FLY",
+        "type": "CS"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": "2022-06-15",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "JATT",
+      "observed_at": "2026-10-15T19:38:26.443484+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/JATT",
+      "query": "date=2022-06-15",
+      "records_received": 1,
+      "request_id": "8a135aa68508721856e4b9ed7b220bda",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "a5f2075b16bad86251405ee439da068b7a2a124e8b299cf073eb14649320be4f",
+      "result_fields": [
+        "active",
+        "address",
+        "cik",
+        "currency_name",
+        "description",
+        "homepage_url",
+        "list_date",
+        "locale",
+        "market",
+        "market_cap",
+        "name",
+        "phone_number",
+        "primary_exchange",
+        "round_lot",
+        "share_class_shares_outstanding",
+        "sic_code",
+        "sic_description",
+        "ticker",
+        "ticker_root",
+        "total_employees",
+        "type",
+        "weighted_shares_outstanding"
+      ],
+      "results": {
+        "active": true,
+        "cik": "0001855644",
+        "list_date": "2021-09-03",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNYS",
+        "ticker": "JATT",
+        "type": "CS"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": "2023-03-20",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "JATT",
+      "observed_at": "2026-10-15T19:38:26.665852+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/JATT",
+      "query": "date=2023-03-20",
+      "records_received": 1,
+      "request_id": "331207d43a80c2101fc704d24388528a",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "2b1297f5d5fc6e2131866596458c3f17ed068aaf3c503a5131fba1b5c065ac2e",
+      "result_fields": [
+        "active",
+        "address",
+        "cik",
+        "currency_name",
+        "description",
+        "homepage_url",
+        "list_date",
+        "locale",
+        "market",
+        "market_cap",
+        "name",
+        "phone_number",
+        "primary_exchange",
+        "round_lot",
+        "share_class_shares_outstanding",
+        "sic_code",
+        "sic_description",
+        "ticker",
+        "ticker_root",
+        "total_employees",
+        "type",
+        "weighted_shares_outstanding"
+      ],
+      "results": {
+        "active": true,
+        "cik": "0001855644",
+        "list_date": "2021-09-03",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNYS",
+        "ticker": "JATT",
+        "type": "CS"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": "2024-01-02",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "ENDPOINT_OR_RECORD_UNAVAILABLE",
+      "error": "MASSIVE_REFERENCE_NOT_FOUND",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 404,
+          "provider_status": "NOT_FOUND"
+        }
+      ],
+      "http_status": 404,
       "identifier": "JATT",
+      "observed_at": "2026-10-15T19:38:26.813764+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/JATT",
+      "query": "date=2024-01-02",
+      "records_received": 0,
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "d5f8e0e5795aececf41b8d6ad33055166cc2dc026cb2b1a1924be0f7676761d8",
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": "2022-06-15",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "ENDPOINT_OR_RECORD_UNAVAILABLE",
+      "error": "MASSIVE_REFERENCE_NOT_FOUND",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 404,
+          "provider_status": "NOT_FOUND"
+        }
+      ],
+      "http_status": 404,
       "identifier": "ALPS",
+      "observed_at": "2026-10-15T19:39:26.647842+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/ALPS",
+      "query": "date=2022-06-15",
+      "records_received": 0,
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "c01820d11dafa7e6413f08bada0b69dbbaa9eaaef98e20e3e781bcae969695a9",
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": "2021-06-15",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "BLUW",
+      "observed_at": "2026-10-15T19:39:26.927259+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/BLUW",
+      "query": "date=2021-06-15",
+      "records_received": 1,
+      "request_id": "a22b49f96cedbc471f2db3f3637fed66",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "93d2d3fa86202d3e912bfd7eb11f4de5531386233b81dda8d82713deee1ee1bc",
+      "result_fields": [
+        "active",
+        "address",
+        "cik",
+        "currency_name",
+        "locale",
+        "market",
+        "name",
+        "phone_number",
+        "primary_exchange",
+        "round_lot",
+        "share_class_shares_outstanding",
+        "sic_code",
+        "sic_description",
+        "ticker",
+        "ticker_root",
+        "type"
+      ],
+      "results": {
+        "active": true,
+        "cik": "0001817944",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNAS",
+        "ticker": "BLUW",
+        "type": "CS"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": "2022-06-15",
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "DSAC",
+      "observed_at": "2026-10-15T19:39:27.168255+00:00",
       "operation": "details",
-      "request_transmitted": false
+      "path": "/v3/reference/tickers/DSAC",
+      "query": "date=2022-06-15",
+      "records_received": 1,
+      "request_id": "7e3e5c8e8bce232fd13ffd59f3bdb754",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "e921094690c7779cadb8d413e9fdd9d8e696bc4fe90088e47e620d26ad866511",
+      "result_fields": [
+        "active",
+        "address",
+        "cik",
+        "currency_name",
+        "description",
+        "homepage_url",
+        "list_date",
+        "locale",
+        "market",
+        "market_cap",
+        "name",
+        "phone_number",
+        "primary_exchange",
+        "round_lot",
+        "share_class_shares_outstanding",
+        "sic_code",
+        "sic_description",
+        "ticker",
+        "ticker_root",
+        "total_employees",
+        "type",
+        "weighted_shares_outstanding"
+      ],
+      "results": {
+        "active": true,
+        "cik": "0001823466",
+        "list_date": "2020-11-30",
+        "locale": "us",
+        "market": "stocks",
+        "primary_exchange": "XNAS",
+        "ticker": "DSAC",
+        "type": "CS"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": null,
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "ZURA",
+      "observed_at": "2026-10-15T19:39:27.399774+00:00",
       "operation": "events",
-      "request_transmitted": false
+      "path": "/vX/reference/tickers/ZURA/events",
+      "query": "types=ticker_change",
+      "records_received": 1,
+      "request_id": "0dbc3ff5bb81c03c0c9ea4b23161bd59",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "0534fed544a12b754a0fa810e9e81888b0a8cc569af9dc71da7fd39875e38e44",
+      "result_fields": [
+        "cik",
+        "events",
+        "name"
+      ],
+      "results": {
+        "events": [
+          {
+            "date": "2023-03-21",
+            "ticker_change": {
+              "ticker": "ZURA"
+            },
+            "type": "ticker_change"
+          }
+        ],
+        "name": "Zura Bio Limited Class A Ordinary Shares"
+      },
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": null,
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "ENDPOINT_OR_RECORD_UNAVAILABLE",
+      "error": "MASSIVE_REFERENCE_NOT_FOUND",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 404,
+          "provider_status": "NOT_FOUND"
+        }
+      ],
+      "http_status": 404,
       "identifier": "ALPSQ",
+      "observed_at": "2026-10-15T19:39:27.549112+00:00",
       "operation": "events",
-      "request_transmitted": false
+      "path": "/vX/reference/tickers/ALPSQ/events",
+      "query": "types=ticker_change",
+      "records_received": 0,
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "06eb024c139c0b35dbda4877cb3b3d1f12016858bc518428c6efe9109dc34b2b",
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": null,
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "ENDPOINT_OR_RECORD_UNAVAILABLE",
+      "error": "MASSIVE_REFERENCE_NOT_FOUND",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 404,
+          "provider_status": "NOT_FOUND"
+        }
+      ],
+      "http_status": 404,
       "identifier": "CRXT",
+      "observed_at": "2026-10-15T19:40:27.325017+00:00",
       "operation": "events",
-      "request_transmitted": false
+      "path": "/vX/reference/tickers/CRXT/events",
+      "query": "types=ticker_change",
+      "records_received": 0,
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "77f3fbddfd6f13635e39f899cb3b22f4cc990e1a36a13477a45fabbf4717818f",
+      "unconfirmed_transport_attempts": 0
     },
     {
       "as_of": null,
-      "disposition": "LOCAL_GUARD_REJECTED",
-      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
-      "http_status": null,
+      "classification": "PROVIDER_RESULT_RETURNED",
+      "http_attempts": 1,
+      "http_responses": [
+        {
+          "http_status": 200,
+          "provider_status": "OK"
+        }
+      ],
+      "http_status": 200,
       "identifier": "NOTE",
+      "observed_at": "2026-10-15T19:40:27.564175+00:00",
       "operation": "events",
-      "request_transmitted": false
+      "path": "/vX/reference/tickers/NOTE/events",
+      "query": "types=ticker_change",
+      "records_received": 1,
+      "request_id": "a5b22687282e6fcfe9fe611af5db1425",
+      "request_transmitted": true,
+      "requests_attempted": 1,
+      "requests_transmitted": 1,
+      "response_sha256": "d95dce070e1f1351378a09569020cf641785220c06ac28bf71de60fbc95e9ae0",
+      "result_fields": [
+        "composite_figi",
+        "events",
+        "name"
+      ],
+      "results": {
+        "events": [
+          {
+            "date": "2025-09-02",
+            "ticker_change": {
+              "ticker": "NOTE"
+            },
+            "type": "ticker_change"
+          }
+        ],
+        "name": "FISCALNOTE HLDG INC A"
+      },
+      "unconfirmed_transport_attempts": 0
     }
   ],
-  "observed_at": "2026-10-15T19:08:24.792595+00:00",
+  "observed_at": "2026-10-15T19:35:23.253552+00:00",
+  "pre_recovery_probe": {
+    "diagnostics": {
+      "configured_request_limit_per_minute": 5,
+      "research_http_attempts": 0,
+      "research_retries": 0,
+      "scope": "READ_ONLY_IDENTITY_RESEARCH;ENTITLEMENTS_NOT_ASSUMED"
+    },
+    "entitlement_status": "UNKNOWN_NO_HTTP_REQUEST_TRANSMITTED",
+    "local_guard_diagnostic": {
+      "clock_delta_difference_seconds": 10.530948499275837,
+      "guard_state_modified": false,
+      "in_flight": false,
+      "monotonic_clock_backwards": false,
+      "monotonic_delta_seconds": 113266.4229063,
+      "stored_reservations": 5,
+      "wall_clock_backwards": false,
+      "wall_delta_seconds": 113276.95385479927
+    },
+    "observations": [
+      {
+        "as_of": "2026-10-14",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "CAI",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": "2026-10-14",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "FLY",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": "2026-10-14",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "JATT",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": "2026-10-14",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "ALPS",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": "2026-10-14",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "BLUW",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": "2026-10-14",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "DSAC",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": null,
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "CAI",
+        "operation": "events",
+        "request_transmitted": false
+      },
+      {
+        "as_of": null,
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "FLY",
+        "operation": "events",
+        "request_transmitted": false
+      },
+      {
+        "as_of": null,
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "JATT",
+        "operation": "events",
+        "request_transmitted": false
+      },
+      {
+        "as_of": null,
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "ALPS",
+        "operation": "events",
+        "request_transmitted": false
+      },
+      {
+        "as_of": null,
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "BLUW",
+        "operation": "events",
+        "request_transmitted": false
+      },
+      {
+        "as_of": null,
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "DSAC",
+        "operation": "events",
+        "request_transmitted": false
+      },
+      {
+        "as_of": "2021-06-15",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "CAI",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": "2024-01-02",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "CAI",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": "2025-08-12",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "CAI",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": "2021-06-15",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "FLY",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": "2024-01-02",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "FLY",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": "2025-08-12",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "FLY",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": "2022-06-15",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "JATT",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": "2023-03-20",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "JATT",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": "2024-01-02",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "JATT",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": "2022-06-15",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "ALPS",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": "2021-06-15",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "BLUW",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": "2022-06-15",
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "DSAC",
+        "operation": "details",
+        "request_transmitted": false
+      },
+      {
+        "as_of": null,
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "ZURA",
+        "operation": "events",
+        "request_transmitted": false
+      },
+      {
+        "as_of": null,
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "ALPSQ",
+        "operation": "events",
+        "request_transmitted": false
+      },
+      {
+        "as_of": null,
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "CRXT",
+        "operation": "events",
+        "request_transmitted": false
+      },
+      {
+        "as_of": null,
+        "disposition": "LOCAL_GUARD_REJECTED",
+        "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+        "http_status": null,
+        "identifier": "NOTE",
+        "operation": "events",
+        "request_transmitted": false
+      }
+    ]
+  },
+  "recovery": {
+    "previous_in_flight": false,
+    "previous_slots": 5,
+    "reason": "CLOCK_ANOMALY",
+    "state_reset": true,
+    "status": "RECOVERED",
+    "waited_seconds": 60.50059461593628
+  },
   "scope": "READ_ONLY_RESEARCH_NO_EPOCH_PROMOTION",
   "stored_alpaca_actions": [
     {
@@ -389,5 +1729,18 @@
       "provider": "ALPACA",
       "provider_action_id": "d10b9584-27db-4978-8b67-23fd0a8083a6"
     }
-  ]
+  ],
+  "totals": {
+    "authentication_failures": 0,
+    "blocked_requests": 0,
+    "entitlement_failures": 0,
+    "http_attempts": 28,
+    "planned_requests": 28,
+    "provider_responses": 28,
+    "rate_limit_failures": 0,
+    "records_received": 22,
+    "requests_attempted": 28,
+    "requests_transmitted": 28,
+    "unconfirmed_transport_attempts": 0
+  }
 }

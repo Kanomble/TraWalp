@@ -286,6 +286,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--verbose", action="store_true")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser(
+        "recover-massive-rate-limit",
+        help="Manual clock recovery under the shared lock after a full expiry window; no API calls",
+    )
+    commands.add_parser(
         "sync-security-reference", help="Explicit Massive Stocks Basic Free reference-only sync"
     )
     commands.add_parser(
@@ -682,6 +686,24 @@ def main(argv: list[str] | None = None) -> int:
     ):
         parser.error("--champion cannot be combined with --variant or --strategy")
     configure_logging(args.verbose)
+    if args.command == "recover-massive-rate-limit":
+        from trading_system.data.massive_reference import _REQUEST_LIMITER, MassiveReferenceError
+
+        try:
+            result = _REQUEST_LIMITER.recover_clock_anomaly()
+        except KeyboardInterrupt:
+            print(json.dumps({"status": "RECOVERY_INTERRUPTED", "reason": "INTERRUPTED"}))
+            return 130
+        except MassiveReferenceError as exc:
+            status = (
+                "RECOVERY_REFUSED_INVALID_STATE"
+                if str(exc).startswith("MASSIVE_RATE_LIMIT_STATE_")
+                else "RECOVERY_REFUSED_CLOCK_ANOMALY"
+            )
+            print(json.dumps({"status": status, "reason": str(exc), "state_reset": False}))
+            return 1
+        print(json.dumps(result, sort_keys=True))
+        return 0
     try:
         settings = load_settings(args.config)
         if getattr(args, "champion", False):
