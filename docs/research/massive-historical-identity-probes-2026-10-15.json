@@ -1,0 +1,393 @@
+{
+  "diagnostics": {
+    "configured_request_limit_per_minute": 5,
+    "research_http_attempts": 0,
+    "research_retries": 0,
+    "scope": "READ_ONLY_IDENTITY_RESEARCH;ENTITLEMENTS_NOT_ASSUMED"
+  },
+  "entitlement_status": "UNKNOWN_NO_HTTP_REQUEST_TRANSMITTED",
+  "epoch_rows_after": 0,
+  "epoch_rows_before": 0,
+  "local_current_reference": [
+    {
+      "active": 1,
+      "composite_figi": null,
+      "local_cik": "0002025774",
+      "massive_cik": "0002025774",
+      "observed_at": "2026-10-14T11:39:42.702427+00:00",
+      "primary_exchange": "XNAS",
+      "provider_security_type": "CS",
+      "provider_updated_at": "2026-10-14T06:12:47.193681171Z",
+      "share_class_figi": null,
+      "symbol": "ALPS"
+    },
+    {
+      "active": 1,
+      "composite_figi": null,
+      "local_cik": "0002050501",
+      "massive_cik": "0002050501",
+      "observed_at": "2026-10-14T11:39:42.702427+00:00",
+      "primary_exchange": "XNAS",
+      "provider_security_type": "CS",
+      "provider_updated_at": "2026-10-14T06:12:47.193829955Z",
+      "share_class_figi": null,
+      "symbol": "BLUW"
+    },
+    {
+      "active": 1,
+      "composite_figi": "BBG00255V2N4",
+      "local_cik": "0002019410",
+      "massive_cik": "0002019410",
+      "observed_at": "2026-10-14T11:39:42.702427+00:00",
+      "primary_exchange": "XNAS",
+      "provider_security_type": "CS",
+      "provider_updated_at": "2026-10-14T06:12:47.193893837Z",
+      "share_class_figi": "BBG00255V2P2",
+      "symbol": "CAI"
+    },
+    {
+      "active": 1,
+      "composite_figi": null,
+      "local_cik": "0002082149",
+      "massive_cik": "0002082149",
+      "observed_at": "2026-10-14T11:39:42.702427+00:00",
+      "primary_exchange": "XNAS",
+      "provider_security_type": "CS",
+      "provider_updated_at": "2026-10-14T06:12:47.194091063Z",
+      "share_class_figi": null,
+      "symbol": "DSAC"
+    },
+    {
+      "active": 1,
+      "composite_figi": "BBG00NGNL3X5",
+      "local_cik": "0001860160",
+      "massive_cik": "0001860160",
+      "observed_at": "2026-10-14T11:39:42.702427+00:00",
+      "primary_exchange": "XNAS",
+      "provider_security_type": "CS",
+      "provider_updated_at": "2026-10-14T06:12:47.194237983Z",
+      "share_class_figi": "BBG00NGNL3Y4",
+      "symbol": "FLY"
+    },
+    {
+      "active": 1,
+      "composite_figi": null,
+      "local_cik": "0002112446",
+      "massive_cik": "0002112446",
+      "observed_at": "2026-10-14T11:39:42.702427+00:00",
+      "primary_exchange": "XNAS",
+      "provider_security_type": "CS",
+      "provider_updated_at": "2026-10-14T06:12:47.194490515Z",
+      "share_class_figi": null,
+      "symbol": "JATT"
+    }
+  ],
+  "local_guard_diagnostic": {
+    "clock_delta_difference_seconds": 10.530948499275837,
+    "guard_state_modified": false,
+    "in_flight": false,
+    "monotonic_clock_backwards": false,
+    "monotonic_delta_seconds": 113266.4229063,
+    "stored_reservations": 5,
+    "wall_clock_backwards": false,
+    "wall_delta_seconds": 113276.95385479927
+  },
+  "observations": [
+    {
+      "as_of": "2026-10-14",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "CAI",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": "2026-10-14",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "FLY",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": "2026-10-14",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "JATT",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": "2026-10-14",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "ALPS",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": "2026-10-14",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "BLUW",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": "2026-10-14",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "DSAC",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": null,
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "CAI",
+      "operation": "events",
+      "request_transmitted": false
+    },
+    {
+      "as_of": null,
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "FLY",
+      "operation": "events",
+      "request_transmitted": false
+    },
+    {
+      "as_of": null,
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "JATT",
+      "operation": "events",
+      "request_transmitted": false
+    },
+    {
+      "as_of": null,
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "ALPS",
+      "operation": "events",
+      "request_transmitted": false
+    },
+    {
+      "as_of": null,
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "BLUW",
+      "operation": "events",
+      "request_transmitted": false
+    },
+    {
+      "as_of": null,
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "DSAC",
+      "operation": "events",
+      "request_transmitted": false
+    },
+    {
+      "as_of": "2021-06-15",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "CAI",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": "2024-01-02",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "CAI",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": "2025-08-12",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "CAI",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": "2021-06-15",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "FLY",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": "2024-01-02",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "FLY",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": "2025-08-12",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "FLY",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": "2022-06-15",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "JATT",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": "2023-03-20",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "JATT",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": "2024-01-02",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "JATT",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": "2022-06-15",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "ALPS",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": "2021-06-15",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "BLUW",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": "2022-06-15",
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "DSAC",
+      "operation": "details",
+      "request_transmitted": false
+    },
+    {
+      "as_of": null,
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "ZURA",
+      "operation": "events",
+      "request_transmitted": false
+    },
+    {
+      "as_of": null,
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "ALPSQ",
+      "operation": "events",
+      "request_transmitted": false
+    },
+    {
+      "as_of": null,
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "CRXT",
+      "operation": "events",
+      "request_transmitted": false
+    },
+    {
+      "as_of": null,
+      "disposition": "LOCAL_GUARD_REJECTED",
+      "error": "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+      "http_status": null,
+      "identifier": "NOTE",
+      "operation": "events",
+      "request_transmitted": false
+    }
+  ],
+  "observed_at": "2026-10-15T19:08:24.792595+00:00",
+  "scope": "READ_ONLY_RESEARCH_NO_EPOCH_PROMOTION",
+  "stored_alpaca_actions": [
+    {
+      "effective_date": null,
+      "new_cusip": "G9TY5A101",
+      "new_symbol": "ZURA",
+      "old_cusip": "G9TY5A101",
+      "old_symbol": "JATT",
+      "process_date": "2023-03-21",
+      "provider": "ALPACA",
+      "provider_action_id": "43df2d22-e18c-48d9-aeff-ccb797d742e1"
+    },
+    {
+      "effective_date": null,
+      "new_cusip": "021009105",
+      "new_symbol": "ALPSQ",
+      "old_cusip": "021009105",
+      "old_symbol": "ALPS",
+      "process_date": "2023-07-21",
+      "provider": "ALPACA",
+      "provider_action_id": "a091598c-74e6-4db9-af64-f1b9bc0b4bc1"
+    },
+    {
+      "effective_date": null,
+      "new_cusip": "18271L107",
+      "new_symbol": "CRXT",
+      "old_cusip": "18271L107",
+      "old_symbol": "BLUW",
+      "process_date": "2021-09-21",
+      "provider": "ALPACA",
+      "provider_action_id": "88107c3f-3a53-42f4-8601-81f739e79a7a"
+    },
+    {
+      "effective_date": null,
+      "new_cusip": "337655104",
+      "new_symbol": "NOTE",
+      "old_cusip": "337655104",
+      "old_symbol": "DSAC",
+      "process_date": "2022-08-01",
+      "provider": "ALPACA",
+      "provider_action_id": "d10b9584-27db-4978-8b67-23fd0a8083a6"
+    }
+  ]
+}
