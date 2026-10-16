@@ -10,6 +10,12 @@ from pathlib import Path
 from trading_system.backtest import research_definitions as definitions
 from trading_system.backtest.liquid_universe import _canonical, fingerprint
 from trading_system.backtest.pairs_stat_arb_v1 import calibration
+from trading_system.backtest.pairs_stat_arb_v1_daily_qualification import (
+    MAX_QUARANTINE_FRACTION,
+)
+from trading_system.backtest.pairs_stat_arb_v1_daily_qualification import (
+    POLICY as DAILY_POLICY,
+)
 from trading_system.backtest.pairs_stat_arb_v1_identity import (
     DISCONTINUITY_DAYS,
     POLICY,
@@ -69,7 +75,10 @@ def manifest_contract(config, start, end):
         raise ValueError("PAIRS_STAT_ARB_REQUIRES_ADJUSTED_DAILY")
     return {
         "manifest_type": "pairs_stat_arb_v1_manifest",
-        "manifest_version": 7,
+        "manifest_version": 8,
+        "daily_qualification_policy": DAILY_POLICY,
+        "daily_quarantine_review_fraction": MAX_QUARANTINE_FRACTION,
+        "daily_qualification_provider": "ALPACA",
         "coverage_semantics": (
             "SELECTED_ADV_PAIR_CALIBRATION_ELIGIBLE_OUTCOMES;PREFIX_HISTORY_NONBLOCKING;"
             "INTERNAL_SELECTION_GAPS_BLOCKING"
@@ -79,7 +88,7 @@ def manifest_contract(config, start, end):
         "identity_epoch_semantics": EPOCH_SEMANTICS,
         "identity_qualification_policy": POLICY,
         "identity_history_discontinuity_warning_days": DISCONTINUITY_DAYS,
-        "research_universe": "IDENTITY_QUALIFIED_RESEARCH_UNIVERSE",
+        "research_universe": "IDENTITY_AND_DAILY_DATA_QUALIFIED_RESEARCH_UNIVERSE",
         "instrument_type_semantics": INSTRUMENT_TYPE_SEMANTICS,
         "company_only_requirement": COMPANY_ONLY_REQUIREMENT,
         "company_universe_scope": PAIRS_COMPANY_UNIVERSE_SCOPE,

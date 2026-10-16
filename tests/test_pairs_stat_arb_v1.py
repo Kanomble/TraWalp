@@ -485,6 +485,7 @@ def test_repeated_active_signals_ignored_then_reentry(monkeypatch):
                 "selection_membership_resolved": True,
                 "identity_epochs_complete": True,
                 "identity_qualification_complete": True,
+                "daily_data_qualification_complete": True,
             },
         },
     )
@@ -555,6 +556,7 @@ def test_no_signal_evaluation_produces_no_trade(config):
                 "selection_membership_resolved": True,
                 "identity_epochs_complete": True,
                 "identity_qualification_complete": True,
+                "daily_data_qualification_complete": True,
             },
         },
     )

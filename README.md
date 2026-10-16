@@ -21,7 +21,7 @@ Only the explicit user-run command may access Massive:
 
 It uses `MASSIVE_API_KEY` from the project's normal `.env`/environment mechanism.
 Normal F workflows need no Massive key or reference data. Pairs preflight and
-validation remain local and make no Massive, Alpaca or SEC calls. Manifest V7
+validation remain local and make no Massive, Alpaca or SEC calls. Manifest V8
 binds non-OTC company scope, common-stock classification, SEC issuer/SIC/CIK checks,
 explicit identity quarantine evidence and reference
 fingerprints. `CURRENT_UNIVERSE_ONLY`, `NOT_SURVIVORSHIP_CLEAN` and
@@ -37,6 +37,15 @@ Pairs Daily gaps also carry per-session availability classifications and a
 targeted repair plan. Checked provider ranges do not imply complete native bars;
 only verified local gaps may be synchronized. See the
 [Daily blocker audit](docs/pairs-stat-arb-v1-daily-blocker-audit.md).
+Pairs additionally uses a **data-availability-qualified research universe**.
+After an explicit targeted provider audit, repair decision and local recheck,
+unavailable required Daily history causes separate run-global
+`DAILY_DATA_QUARANTINED` exclusion before SIC2/ADV20/Top-N. This concerns the
+configured source (currently `ALPACA_IEX`), never security identity or listing
+dates. Technical failures remain blockers. Manifest V8 binds the persistent
+Daily qualification evidence and feed; exclusions above 10% of the identity-qualified
+universe require review. `DATA_AVAILABILITY_SELECTION_BIAS`, `CURRENT_UNIVERSE_ONLY`,
+`NOT_FULLY_PIT` and `NOT_SURVIVORSHIP_CLEAN` remain explicit limitations.
 Mapping `MASSIVE_STOCK_TYPES_V2` adds ETS/ETV/structured-product classifications
 and the authoritative `RIGHT / Rights` description. Pairs reference qualification
 and membership fingerprints apply only after the local non-OTC company/valid

@@ -141,6 +141,8 @@ class AlpacaDataClient:
                 feed=self.feed,
             )
             response = self.historical.get_stock_bars(request)
+            if not isinstance(response.data, dict) or set(response.data) - set(provider_batch):
+                raise ValueError("ALPACA_UNEXPECTED_BAR_RESPONSE")
             normalized_vwap_count = 0
             normalized_vwap_symbols: set[str] = set()
             invalid_count = 0

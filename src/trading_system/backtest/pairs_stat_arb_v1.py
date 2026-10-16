@@ -243,6 +243,8 @@ def simulate_prepared_pairs(prepared):
         raise ValueError("AUTHORITATIVE_COMPANY_SECURITY_TYPE_UNAVAILABLE")
     if not qualification.get("selection_membership_resolved"):
         raise ValueError("PAIRS_STAT_ARB_SELECTION_MEMBERSHIP_UNRESOLVED")
+    if not qualification.get("daily_data_qualification_complete"):
+        raise ValueError("DAILY_QUALIFICATION_FAILED")
     if not qualification.get("identity_epochs_complete"):
         raise ValueError("IDENTITY_EPOCH_UNKNOWN")
     if prepared.metadata.get("identity_epoch_outcome_requirements"):

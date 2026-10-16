@@ -13,6 +13,10 @@ from trading_system.backtest import research_definitions as definitions
 from trading_system.backtest.liquid_universe import ResearchReadOnlyDatabase, _canonical
 from trading_system.backtest.pairs_stat_arb_v1 import PairBar, calibration
 from trading_system.backtest.pairs_stat_arb_v1_daily_audit import classify_requirement
+from trading_system.backtest.pairs_stat_arb_v1_daily_qualification import (
+    qualify_daily,
+    report_daily,
+)
 from trading_system.backtest.pairs_stat_arb_v1_identity import (
     CURRENT,
     FAILED,
@@ -413,6 +417,10 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
         ),
         "unresolved_blocking": sum(row["validation_blocking"] for row in identity_diagnostics),
     }
+    universe, daily_diagnostics, daily_summary, daily_complete, daily_fingerprint = qualify_daily(
+        database, universe, config, start, end
+    )
+    contract["run_daily_qualification_fingerprint"] = daily_fingerprint
     symbols = [row["symbol"] for row in universe]
     identities = {row["symbol"]: row for row in universe}
     if candidate_manifest is not None:
@@ -427,7 +435,9 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
         raise ValueError(security.UNAVAILABLE)
     if not preflight and not identity_complete:
         raise ValueError(FAILED)
-    qualification_complete = security_complete and identity_complete
+    if not preflight and not daily_complete:
+        raise ValueError("DAILY_QUALIFICATION_FAILED")
+    qualification_complete = security_complete and identity_complete and daily_complete
     # Resolve the entire static identity boundary before touching historical prices.
     bars = (
         load_daily(database, symbols, sessions[0], days[-1], identity_by_symbol=identities)
@@ -455,6 +465,9 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
             identity_qualification_complete=identity_complete,
             identity_qualification=identity_summary,
             identity_qualification_diagnostics=identity_diagnostics,
+            daily_data_qualification_complete=daily_complete,
+            daily_data_qualification=daily_summary,
+            daily_data_qualification_diagnostics=daily_diagnostics,
         )
         payload = seal_manifest(contract, universe, selected, candidates, counts, digest)
     else:
@@ -473,8 +486,10 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
             identity_qualification_complete=identity_complete,
             identity_qualification=identity_summary,
             identity_qualification_diagnostics=identity_diagnostics,
+            daily_data_qualification_complete=daily_complete,
+            daily_data_qualification=daily_summary,
+            daily_data_qualification_diagnostics=daily_diagnostics,
         )
-        verify_membership(payload, universe, digest, bars, sessions, counts)
     if not preflight and not payload["discovery_counts"]["selection_membership_resolved"]:
         raise ValueError("PAIRS_STAT_ARB_SELECTION_MEMBERSHIP_UNRESOLVED")
     required, insufficient_calibration, epoch_requirements = daily_requirements(
@@ -588,6 +603,23 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
         for (symbol, day), status in sorted(epoch_requirements.items())
     )
     requirements = list(coverage)
+    daily_report, daily_report_summary = report_daily(
+        daily_diagnostics,
+        required,
+        [row for row in coverage if row["status"] == "LOCAL_MISSING"],
+    )
+    counts.update(
+        daily_data_gate_complete=daily_complete,
+        daily_data_qualification_complete=(
+            daily_complete and not daily_report_summary["unresolved_blocking"]
+        ),
+        daily_data_qualification=daily_report_summary,
+        daily_data_qualification_diagnostics=daily_report,
+    )
+    if candidate_manifest is not None:
+        verify_membership(payload, universe, digest, bars, sessions, counts)
+    else:
+        payload = seal_manifest(contract, universe, selected, candidates, counts, digest)
     coverage.extend(
         compact_coverage(
             [
@@ -624,6 +656,8 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
         requirements,
         {
             "preparation_sql_queries": database.sql_queries,
+            "daily_data_qualification": daily_report_summary,
+            "daily_data_qualification_diagnostics": daily_report,
             "simulation_sql_queries": 0,
             "candidate_source": "MANIFEST" if candidate_manifest is not None else "DISCOVERED",
             "outcome_data_end": str(max(observed)) if observed else None,

@@ -1,7 +1,10 @@
 # Pairs V1 Daily availability audit
 
+For run-global, source-specific exclusion after this audit, see
+[Daily data qualification](pairs-stat-arb-v1-daily-qualification.md).
+
 This audit concerns Daily input availability, not identity qualification or
-strategy economics. Manifest V7, the identity-qualified research universe,
+strategy economics. Manifest V8, the identity-qualified research universe,
 run-global quarantine and CURRENT_UNIVERSE_ONLY remain in effect.
 
 Every missing `(symbol, session)` has exactly one classification, its original
@@ -20,7 +23,9 @@ must match symbol, session, feed and adjustment and confirm a usable native bar;
 alternatively independent evidence must establish an expected provider bar inside
 verified membership. A checked range or a verified membership interval alone does
 not guarantee that IEX emitted a bar. Empty responses, 404s and failed requests
-remain unknown, not confirmed per-session absence. First/last local bars and SEC
+remain unknown in this session-level classifier, not confirmed per-session absence.
+A completed qualification audit can separately resolve source unavailability as
+the run-level exclusion described below. First/last local bars and SEC
 registration forms are diagnostic context, never listing/delisting boundaries.
 Verified outside-epoch sessions are nonmembers and never sync targets. Explained
 provider absence does not authorize interpolation or changing the frozen Top-N.

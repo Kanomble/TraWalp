@@ -14,6 +14,8 @@ from trading_system.backtest.pairs_stat_arb_v1_data import prepare_pairs_data
 from trading_system.backtest.report import _atomic_csv, _atomic_text
 
 WARNINGS = [
+    "DATA_AVAILABILITY_SELECTION_BIAS; NOT_FULLY_PIT. The research universe is "
+    "identity-qualified and Daily-data-qualified for the configured provider/feed.",
     "CURRENT_UNIVERSE_ONLY; NOT_SURVIVORSHIP_CLEAN; "
     "CURRENT_REFERENCE_SECURITY_TYPE_NOT_PIT; CURRENT_LOCAL_SIC_NOT_PIT. "
     "SIC classification is current/local and not guaranteed PIT-safe.",
@@ -365,15 +367,22 @@ def summary_metadata(prepared, *, preflight):
             and manifest["discovery_counts"]["selection_membership_resolved"]
             and manifest["discovery_counts"]["company_security_types_complete"]
             and manifest["discovery_counts"]["identity_qualification_complete"]
+            and manifest["discovery_counts"]["daily_data_qualification_complete"]
+            and not prepared.metadata["daily_data_qualification"]["unresolved_blocking"]
         ),
         "manifest_version": manifest["manifest_version"],
         "research_universe": manifest["research_universe"],
         "identity_qualification_policy": manifest["identity_qualification_policy"],
+        "daily_qualification_policy": manifest["daily_qualification_policy"],
+        "run_daily_qualification_fingerprint": manifest["run_daily_qualification_fingerprint"],
+        "daily_qualification_source": f"ALPACA_{manifest['market_data_feed']}",
         "run_identity_qualification_fingerprint": manifest[
             "run_identity_qualification_fingerprint"
         ],
         "limitations": [
             "CURRENT_UNIVERSE_ONLY",
+            "DATA_AVAILABILITY_SELECTION_BIAS",
+            "NOT_FULLY_PIT",
             "NOT_SURVIVORSHIP_CLEAN",
             "CURRENT_REFERENCE_SECURITY_TYPE_NOT_PIT",
             "CURRENT_LOCAL_SIC_NOT_PIT",
@@ -439,7 +448,16 @@ def run_pairs_stat_arb_v1(
             daily_requirements={
                 "research_family": definition.research_family,
                 "research_id": definition.research_id,
-                "requirements_version": 4,
+                "requirements_version": 5,
+                "daily_data_qualification": summary["daily_data_qualification"],
+                "daily_data_qualification_diagnostics": summary[
+                    "daily_data_qualification_diagnostics"
+                ],
+                "daily_qualification_policy": summary["daily_qualification_policy"],
+                "daily_qualification_source": summary["daily_qualification_source"],
+                "run_daily_qualification_fingerprint": summary[
+                    "run_daily_qualification_fingerprint"
+                ],
                 "manifest_fingerprint": prepared.manifest["fingerprint"],
                 "market_data_feed": prepared.manifest["market_data_feed"],
                 "market_data_adjustment": prepared.manifest["market_data_adjustment"],

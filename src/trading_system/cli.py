@@ -811,6 +811,16 @@ def main(argv: list[str] | None = None) -> int:
                 f"\n  Verified outside run: {identity['verified_outside_run']}"
                 f"\n  Unresolved blocking: {identity['unresolved_blocking']}"
             )
+            daily = summary["daily_data_qualification"]
+            print(
+                f"Daily data qualification ({summary['daily_qualification_source']}):"
+                f"\n  Eligible: {daily['eligible']}"
+                f"\n  Quarantined: {daily['quarantined']}"
+                f"\n  Unresolved blocking: {daily['unresolved_blocking']}"
+                f"\n  Policy result: {daily['policy_result']}"
+                f"\n  Quarantined share: {daily['quarantined_fraction']:.2%}"
+                f"\n  Review threshold: {daily['review_threshold_fraction']:.0%}"
+            )
             print("\n".join(summary["warnings"]))
             print("\n".join(f"{name}: {path}" for name, path in paths.items()))
             return 0

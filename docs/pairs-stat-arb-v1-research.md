@@ -62,7 +62,7 @@ cannot reconcile produce `IDENTITY_EVIDENCE_CONFLICT` and run-global quarantine;
 no provider is chosen by plausibility. Invalid evidence or a failed qualification
 read/execution remains blocking (`IDENTITY_QUALIFICATION_FAILED`, ready=false).
 
-Manifest V7 binds the policy, warning threshold, per-symbol status/reason and
+Manifest V8 retains the identity policy, warning threshold, per-symbol status/reason and
 evidence fingerprints, including excluded symbols. Preflight exports eligible,
 quarantined, verified-outside-run and unresolved-blocking counts and per-symbol
 `identity_status`, `reason`, `evidence_source`, `run_excluded`. Only persistent
@@ -70,10 +70,24 @@ local identity, lifecycle, SEC cache and timestamp data are used; research repor
 files and provider raw bodies are not runtime inputs/report contents. No provider
 requests, epoch creation, bar deletion or issuer migration occur.
 
-This policy addresses unsafe unresolved ticker/security histories. It does not
-make Pairs fully PIT-clean or survivorship-bias-free: `CURRENT_UNIVERSE_ONLY`,
-current security type and current SIC limitations remain. All strategy economics
-below are unchanged.
+This identity policy addresses unsafe unresolved ticker/security histories. It
+does not make Pairs fully PIT-clean or survivorship-bias-free:
+`CURRENT_UNIVERSE_ONLY`, current security type and current SIC limitations remain.
+
+### Daily-data-qualified research universe
+
+The identity-qualified universe additionally passes an independent run-global
+Daily coverage gate before SIC2/ADV20/Top-N. A completed targeted provider audit,
+repair decision and local recheck may resolve unavailable required source history
+as `DAILY_DATA_QUARANTINED`; technical/unknown states still block. Manifest V8
+binds this policy, evidence, required ranges and provider/feed. Exclusions above
+10% of identity-qualified symbols produce `REVIEW_REQUIRED`, never automatic
+acceptance. This introduces `DATA_AVAILABILITY_SELECTION_BIAS` for the configured
+source (`ALPACA_IEX`). `CURRENT_UNIVERSE_ONLY`, `NOT_FULLY_PIT` and
+`NOT_SURVIVORSHIP_CLEAN` remain. See [Daily qualification](pairs-stat-arb-v1-daily-qualification.md)
+for the exact audit/repair contract and feed-dependent interpretation.
+
+All strategy economics below are unchanged.
 
 At signal close T, the preceding official session's close must meet
 `config.universe.min_price`; ADV20 is the arithmetic mean of adjusted close times
