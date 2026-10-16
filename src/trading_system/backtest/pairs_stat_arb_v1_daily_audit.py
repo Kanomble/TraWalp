@@ -210,7 +210,7 @@ def audit_daily_requirements(database, manifest, requirements, config, *, observ
     from trading_system.backtest.pairs_stat_arb_v1_data import load_daily
 
     if (
-        manifest["manifest_version"] not in {7, 8}
+        manifest["manifest_version"] not in {7, 8, 9}
         or manifest["fingerprint"] != fingerprint(manifest)
         or requirements["manifest_fingerprint"] != manifest["fingerprint"]
     ):

@@ -245,6 +245,10 @@ def simulate_prepared_pairs(prepared):
         raise ValueError("PAIRS_STAT_ARB_SELECTION_MEMBERSHIP_UNRESOLVED")
     if not qualification.get("daily_data_qualification_complete"):
         raise ValueError("DAILY_QUALIFICATION_FAILED")
+    if prepared.manifest.get("manifest_version", 0) >= 9 and not prepared.manifest.get(
+        "daily_qualification_iteration", {}
+    ).get("fixpoint_reached"):
+        raise ValueError("DAILY_QUALIFICATION_FIXPOINT_NOT_REACHED")
     if not qualification.get("identity_epochs_complete"):
         raise ValueError("IDENTITY_EPOCH_UNKNOWN")
     if prepared.metadata.get("identity_epoch_outcome_requirements"):

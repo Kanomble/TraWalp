@@ -20,8 +20,10 @@ Only the explicit user-run command may access Massive:
 ```
 
 It uses `MASSIVE_API_KEY` from the project's normal `.env`/environment mechanism.
-Normal F workflows need no Massive key or reference data. Pairs preflight and
-validation remain local and make no Massive, Alpaca or SEC calls. Manifest V8
+Normal F workflows need no Massive key or reference data. Pairs discovery and
+validation remain local. Pairs preflight now orchestrates bounded targeted Alpaca
+Daily audits/repairs for new requirements; `--local-only` disables provider access.
+Neither path calls Massive or SEC. Manifest V9
 binds non-OTC company scope, common-stock classification, SEC issuer/SIC/CIK checks,
 explicit identity quarantine evidence and reference
 fingerprints. `CURRENT_UNIVERSE_ONLY`, `NOT_SURVIVORSHIP_CLEAN` and
@@ -42,10 +44,14 @@ After an explicit targeted provider audit, repair decision and local recheck,
 unavailable required Daily history causes separate run-global
 `DAILY_DATA_QUARANTINED` exclusion before SIC2/ADV20/Top-N. This concerns the
 configured source (currently `ALPACA_IEX`), never security identity or listing
-dates. Technical failures remain blockers. Manifest V8 binds the persistent
+dates. Technical failures remain blockers. Manifest V9 binds the persistent
 Daily qualification evidence and feed; exclusions above 10% of the identity-qualified
 universe require review. `DATA_AVAILABILITY_SELECTION_BIAS`, `CURRENT_UNIVERSE_ONLY`,
 `NOT_FULLY_PIT` and `NOT_SURVIVORSHIP_CLEAN` remain explicit limitations.
+The [Daily qualification fixpoint](docs/pairs-stat-arb-v1-daily-fixpoint.md)
+fully rediscovers selection after audit/repair changes, with at most eight rounds,
+no-progress/cycle guards, and per-round fingerprints. Correlation calibration
+runs only after qualification converges. No backtest starts from preflight.
 Mapping `MASSIVE_STOCK_TYPES_V2` adds ETS/ETV/structured-product classifications
 and the authoritative `RIGHT / Rights` description. Pairs reference qualification
 and membership fingerprints apply only after the local non-OTC company/valid

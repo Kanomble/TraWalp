@@ -212,7 +212,7 @@ def test_normal_manifest_validation_exports_without_discovery(tmp_path, config, 
 @pytest.mark.parametrize("version", [1, 2, 3, 4, 5, 6])
 def test_pre_patch_manifest_versions_are_obsolete_even_if_rehashed(tmp_path, config, version):
     contract = manifest_contract(config, START, END)
-    assert contract["manifest_version"] == 8
+    assert contract["manifest_version"] == 9
     old = {**contract, "manifest_version": version}
     with pytest.raises(ValueError, match=f"{MISMATCH}: manifest_version"):
         load_manifest(save(tmp_path / "obsolete.json", old), contract)

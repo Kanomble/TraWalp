@@ -62,7 +62,7 @@ cannot reconcile produce `IDENTITY_EVIDENCE_CONFLICT` and run-global quarantine;
 no provider is chosen by plausibility. Invalid evidence or a failed qualification
 read/execution remains blocking (`IDENTITY_QUALIFICATION_FAILED`, ready=false).
 
-Manifest V8 retains the identity policy, warning threshold, per-symbol status/reason and
+Manifest V9 retains the identity policy, warning threshold, per-symbol status/reason and
 evidence fingerprints, including excluded symbols. Preflight exports eligible,
 quarantined, verified-outside-run and unresolved-blocking counts and per-symbol
 `identity_status`, `reason`, `evidence_source`, `run_excluded`. Only persistent
@@ -79,13 +79,18 @@ does not make Pairs fully PIT-clean or survivorship-bias-free:
 The identity-qualified universe additionally passes an independent run-global
 Daily coverage gate before SIC2/ADV20/Top-N. A completed targeted provider audit,
 repair decision and local recheck may resolve unavailable required source history
-as `DAILY_DATA_QUARANTINED`; technical/unknown states still block. Manifest V8
+as `DAILY_DATA_QUARANTINED`; technical/unknown states still block. Manifest V9
 binds this policy, evidence, required ranges and provider/feed. Exclusions above
 10% of identity-qualified symbols produce `REVIEW_REQUIRED`, never automatic
 acceptance. This introduces `DATA_AVAILABILITY_SELECTION_BIAS` for the configured
 source (`ALPACA_IEX`). `CURRENT_UNIVERSE_ONLY`, `NOT_FULLY_PIT` and
 `NOT_SURVIVORSHIP_CLEAN` remain. See [Daily qualification](pairs-stat-arb-v1-daily-qualification.md)
 for the exact audit/repair contract and feed-dependent interpretation.
+Preflight iterates full input discovery and the existing targeted audit until a
+bounded [Daily qualification fixpoint](pairs-stat-arb-v1-daily-fixpoint.md).
+Numerical correlation calibration follows convergence; signal/outcome evaluation
+is never part of the fixpoint. Eight rounds, no-progress/cycle detection and the
+existing 10% breadth guard bound the process.
 
 All strategy economics below are unchanged.
 
@@ -175,8 +180,10 @@ economics even after a checksum is recomputed. Source corrections affecting
 selection require a new reviewed preflight; tail remediation can reuse membership.
 
 Validation with a manifest never rediscovers membership. Rediscovery requires
-`--rediscover-candidates`. Both commands use read-only SQLite, batch-load Daily
-bars, and make no provider, SEC, synchronization or network calls. Simulation
+`--rediscover-candidates`. Discovery/validation use read-only SQLite and batch-load
+Daily bars. Preflight additionally orchestrates bounded targeted Alpaca audits
+and verified repairs; `--local-only` disables those provider operations. No SEC
+or Massive calls are made. Simulation
 accepts only prepared in-memory data and performs zero SQLite queries.
 Local Daily rows have no per-row feed/adjustment provenance: matching configured
 settings are bound and any conflicting local coverage metadata is rejected;

@@ -4,7 +4,7 @@ For run-global, source-specific exclusion after this audit, see
 [Daily data qualification](pairs-stat-arb-v1-daily-qualification.md).
 
 This audit concerns Daily input availability, not identity qualification or
-strategy economics. Manifest V8, the identity-qualified research universe,
+strategy economics. Manifest V9, the identity-qualified research universe,
 run-global quarantine and CURRENT_UNIVERSE_ONLY remain in effect.
 
 Every missing `(symbol, session)` has exactly one classification, its original
@@ -30,9 +30,11 @@ registration forms are diagnostic context, never listing/delisting boundaries.
 Verified outside-epoch sessions are nonmembers and never sync targets. Explained
 provider absence does not authorize interpolation or changing the frozen Top-N.
 
-Normal preflight is still entirely local. It adds per-gap classification/reason
-to Coverage/Requirements and a `daily_blocker_audit` summary with concentration.
-It neither reads diagnostic report files nor performs provider calls or syncs.
+Local discovery adds per-gap classification/reason to Coverage/Requirements and
+a `daily_blocker_audit` summary with concentration. Normal preflight now runs the
+same targeted provider audit/repair for new requirements until the bounded
+[qualification fixpoint](pairs-stat-arb-v1-daily-fixpoint.md). `--local-only`
+disables provider access. Neither mode reads diagnostic report files implicitly.
 The separate read-only artifact auditor can consume explicitly supplied bounded
 provider observations and produce a reviewable plan before any repair:
 

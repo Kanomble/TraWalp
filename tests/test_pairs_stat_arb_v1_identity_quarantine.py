@@ -326,7 +326,7 @@ def test_identity_evidence_changes_reject_manifest_before_prices(
     db = observed_shape(tmp_path)
     prepared = prepare_pairs_data(db, config, START, END, preflight=True)
     path = save_manifest(tmp_path, prepared)
-    assert prepared.manifest["manifest_version"] == 8
+    assert prepared.manifest["manifest_version"] == 9
     assert prepared.manifest["company_universe_scope"] == PAIRS_COMPANY_UNIVERSE_SCOPE
     assert prepared.manifest["identity_conflict_policy"] == IDENTITY_CONFLICT_POLICY
     assert (

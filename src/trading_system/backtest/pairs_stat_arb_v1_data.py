@@ -219,7 +219,9 @@ def source_digest(universe, bars, sessions, history_anchors=None):
     return digest.hexdigest()
 
 
-def discover_pairs(universe, bars, sessions, days, config, history_anchors=None):
+def discover_pairs(
+    universe, bars, sessions, days, config, history_anchors=None, *, qualification_only=False
+):
     definition = definitions.PAIRS_STAT_ARB_V1
     selected, candidates = {}, []
     indexes = {day: index for index, day in enumerate(sessions)}
@@ -243,7 +245,13 @@ def discover_pairs(universe, bars, sessions, days, config, history_anchors=None)
                         "sic2": sic2,
                         "adv20_a": by_symbol[a]["adv20"],
                         "adv20_b": by_symbol[b]["adv20"],
-                        **calibration(bars, sessions, index, a, b, identity_by_symbol=identities),
+                        **(
+                            {"calibration_status": "QUALIFICATION_PENDING"}
+                            if qualification_only
+                            else calibration(
+                                bars, sessions, index, a, b, identity_by_symbol=identities
+                            )
+                        ),
                     }
                 )
 
@@ -321,7 +329,19 @@ def compact_coverage(rows, sessions):
     return result
 
 
-def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None, preflight=False):
+def prepare_pairs_data(
+    database,
+    config,
+    start,
+    end,
+    *,
+    candidate_manifest=None,
+    preflight=False,
+    qualification_only=False,
+    frozen_discovery=None,
+):
+    if frozen_discovery is not None and (candidate_manifest is not None or qualification_only):
+        raise ValueError("PAIRS_STAT_ARB_INVALID_FROZEN_DISCOVERY_MODE")
     contract = manifest_contract(config, start, end)
     payload = (
         load_manifest(candidate_manifest, contract) if candidate_manifest is not None else None
@@ -451,9 +471,41 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
     )
     digest = source_digest(universe, bars, [s for s in sessions if s <= days[-1]], history_anchors)
     if payload is None:
-        if qualification_complete:
+        if frozen_discovery is not None:
+            # Ranking is already frozen by the final qualification-only discovery.
+            # Recheck every membership-bound input before calculating correlations.
+            if (
+                any(frozen_discovery.get(k) != v for k, v in contract.items())
+                or frozen_discovery["source_fingerprint"] != digest
+                or frozen_discovery["universe"] != universe
+            ):
+                raise ValueError(f"{MISMATCH}: qualified discovery inputs changed")
+            selected = frozen_discovery["selected"]
+            indexes = {str(day): i for i, day in enumerate(sessions)}
+            candidates = [
+                {
+                    **row,
+                    **calibration(
+                        bars,
+                        sessions,
+                        indexes[row["signal_session"]],
+                        row["symbol_a"],
+                        row["symbol_b"],
+                        identity_by_symbol=identities,
+                    ),
+                }
+                for row in frozen_discovery["candidates"]
+            ]
+            counts = dict(frozen_discovery["discovery_counts"])
+        elif qualification_complete:
             selected, candidates, counts = discover_pairs(
-                universe, bars, sessions, days, config, history_anchors
+                universe,
+                bars,
+                sessions,
+                days,
+                config,
+                history_anchors,
+                qualification_only=qualification_only,
             )
         else:
             selected, candidates = {}, []
@@ -645,7 +697,7 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
         row for row in identity_diagnostics if row["run_excluded"] or row["validation_blocking"]
     )
     observed = [day for (symbol, day), bar in bars.items() if bar and (symbol, day) in required]
-    return PreparedPairs(
+    prepared = PreparedPairs(
         start,
         end,
         sessions,
@@ -659,6 +711,7 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
             "daily_data_qualification": daily_report_summary,
             "daily_data_qualification_diagnostics": daily_report,
             "simulation_sql_queries": 0,
+            "calibration_deferred": qualification_only,
             "candidate_source": "MANIFEST" if candidate_manifest is not None else "DISCOVERED",
             "outcome_data_end": str(max(observed)) if observed else None,
             "blocking_required_symbol_sessions": len(required),
@@ -689,3 +742,18 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
             "provider_session_status_support": "UNAVAILABLE_IN_DAILY_RANGE_METADATA",
         },
     )
+    from trading_system.backtest.pairs_stat_arb_v1_daily_fixpoint import (
+        attach,
+        iterate,
+        verify_trace,
+    )
+
+    if qualification_only:
+        return prepared
+    if candidate_manifest is not None:
+        verify_trace(payload, prepared)
+        attach(prepared, payload["daily_qualification_iteration"])
+    else:
+        _, local_result = iterate(lambda: prepared)
+        attach(prepared, local_result)
+    return prepared

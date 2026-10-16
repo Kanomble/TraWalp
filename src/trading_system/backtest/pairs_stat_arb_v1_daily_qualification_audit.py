@@ -11,6 +11,7 @@ from trading_system.backtest.pairs_stat_arb_v1_daily_audit import (
     repair_plan,
 )
 from trading_system.backtest.pairs_stat_arb_v1_daily_qualification import SAFE_ROLES, STORE, scope
+from trading_system.data.qualification import provider_range_verified
 from trading_system.data.security_reference import digest
 
 
@@ -59,13 +60,49 @@ def validate_requirement_roles(manifest, rows):
             raise ValueError("DAILY_QUALIFICATION_REQUIREMENT_ROLE_NOT_PROVEN")
 
 
-def audit_and_repair(database, manifest, requirements, config, provider, synchronize, *, save_plan):
+def provider_failure(exc):
+    """Sanitized outcome taxonomy; exceptions never establish source absence."""
+    code = getattr(exc, "status_code", None)
+    if code is None:
+        code = getattr(getattr(exc, "response", None), "status_code", None)
+    if code in {401, 403} or isinstance(exc, PermissionError):
+        return "AUTH_ERROR"
+    if code == 429:
+        return "RATE_LIMIT_ERROR"
+    if isinstance(exc, (TypeError, AttributeError)):
+        return "PARSER_ERROR"
+    if isinstance(exc, ValueError):
+        return (
+            "INVALID_RESPONSE"
+            if str(exc)
+            in {
+                "PROVIDER_BAR_VALIDATION_FAILED",
+                "PROVIDER_RESPONSE_UNEXPECTED",
+                "ALPACA_UNEXPECTED_BAR_RESPONSE",
+            }
+            else "PARSER_ERROR"
+        )
+    return "TRANSIENT_ERROR"
+
+
+def audit_and_repair(
+    database,
+    manifest,
+    requirements,
+    config,
+    provider,
+    synchronize,
+    *,
+    save_plan,
+    only_requirement_keys=None,
+):
     """Probe only actual blocking requirements; sync only positively verified gaps.
 
     An empty response is resolved only after this complete audit, explicit repair
     decision and local recheck. Any request/parser/ingestion failure remains failed.
     No return, correlation, signal, outcome or performance value is inspected.
     """
+    from trading_system.backtest.pairs_stat_arb_v1_daily_fixpoint import requirement_source
     from trading_system.backtest.pairs_stat_arb_v1_data import load_daily
 
     initial = audit_daily_requirements(database, manifest, requirements, config)
@@ -80,17 +117,73 @@ def audit_and_repair(database, manifest, requirements, config, provider, synchro
         or manifest["min_adv20"] != binding["min_adv20"]
     ):
         raise ValueError("DAILY_QUALIFICATION_RESEARCH_CONTRACT_CHANGED")
+    old = database.sync_values(STORE).get(digest(binding))
+    if old is not None and (
+        not isinstance(old, dict)
+        or old["scope"] != binding
+        or old["fingerprint"] != digest({k: v for k, v in old.items() if k != "fingerprint"})
+    ):
+        raise ValueError("DAILY_QUALIFICATION_EXISTING_EVIDENCE_CORRUPT")
+    evidence = dict(old["symbols"]) if old else {}
     identities = {r["symbol"]: r for r in manifest["universe"]}
     grouped = defaultdict(list)
+    role_filter = defaultdict(set)
+    if only_requirement_keys is not None:
+        for symbol, day, role, source in only_requirement_keys:
+            if source != requirement_source(manifest):
+                raise ValueError("DAILY_QUALIFICATION_REQUIREMENT_SCOPE_CHANGED")
+            role_filter[symbol, day].add(role)
     for row in initial["requirements"]:
         # Outcome-only gaps cannot determine research-universe membership.
         roles = set(row["roles"].split(";")) & SAFE_ROLES
+        if only_requirement_keys is not None:
+            roles &= role_filter[row["symbol"], row["session"]]
         if roles and row["validation_blocking"] and row["status"] == "LOCAL_MISSING":
             grouped[row["symbol"]].append({**row, "roles": ";".join(sorted(roles))})
     validate_requirement_roles(manifest, [r for rows in grouped.values() for r in rows])
     observations = []
     for symbol, rows in sorted(grouped.items()):
-        for block in consecutive_ranges([date.fromisoformat(r["session"]) for r in rows]):
+        proof = evidence.get(symbol, {})
+        cached = (
+            {
+                r["session"]: r
+                for r in proof.get("sessions", [])
+                if r["provider_result"] in {"BAR_RETURNED", "EMPTY_RESPONSE_UNRESOLVED"}
+            }
+            if (
+                proof.get("identity_fingerprint") == digest(identities[symbol])
+                and proof.get("audit_completed")
+                and proof.get("local_recheck_completed")
+                and proof.get("repair_plan_completed")
+            )
+            else {}
+        )
+        unprobed = []
+        for row in rows:
+            known = cached.get(row["session"])
+            if known is not None:
+                observations.append(
+                    {
+                        "symbol": symbol,
+                        "session": row["session"],
+                        "provider_symbol": symbol,
+                        "provider": "ALPACA",
+                        "feed": binding["feed"],
+                        "adjustment": binding["adjustment"],
+                        "status": known["provider_result"],
+                        "observed_at": known["observed_at"],
+                        "reused": True,
+                        "provider_outcome": known.get(
+                            "provider_outcome",
+                            "SUCCESS_NO_REQUIRED_BARS"
+                            if known["provider_result"] == "EMPTY_RESPONSE_UNRESOLVED"
+                            else "SUCCESS_WITH_BARS",
+                        ),
+                    }
+                )
+            else:
+                unprobed.append(date.fromisoformat(row["session"]))
+        for block in consecutive_ranges(unprobed):
             try:
                 bars = provider.daily_bars(
                     [symbol],
@@ -112,8 +205,10 @@ def audit_and_repair(database, manifest, requirements, config, provider, synchro
                 # Fail closed, including HTTP 404/auth/rate limits. No raw bodies.
                 statuses = {str(day): "REQUEST_FAILED" for day in block}
                 error_type = type(exc).__name__
+                failure = provider_failure(exc)
             else:
                 error_type = None
+                failure = None
             observations.extend(
                 {
                     "symbol": symbol,
@@ -124,6 +219,13 @@ def audit_and_repair(database, manifest, requirements, config, provider, synchro
                     "adjustment": config.universe.market_data_adjustment,
                     "status": status,
                     "error_type": error_type,
+                    "provider_outcome": failure
+                    or (
+                        "SUCCESS_WITH_BARS"
+                        if status == "BAR_RETURNED"
+                        else "SUCCESS_NO_REQUIRED_BARS"
+                    ),
+                    "reused": False,
                     "observed_at": datetime.now(UTC).isoformat(),
                 }
                 for day, status in statuses.items()
@@ -131,7 +233,10 @@ def audit_and_repair(database, manifest, requirements, config, provider, synchro
     audited = audit_daily_requirements(
         database, manifest, requirements, config, observations=observations
     )
-    plan = repair_plan([r for r in audited["requirements"] if r["symbol"] in grouped])
+    planned_keys = {(r["symbol"], r["session"]) for rows in grouped.values() for r in rows}
+    plan = repair_plan(
+        [r for r in audited["requirements"] if (r["symbol"], r["session"]) in planned_keys]
+    )
     save_plan(plan)  # Concrete plan exists before the first mutation/sync.
     repairs, repair_failed, attempted = [], set(), set()
     for item in plan:
@@ -149,14 +254,8 @@ def audit_and_repair(database, manifest, requirements, config, provider, synchro
         except Exception as exc:
             repair_failed.add(symbol)
             repairs.append({**item, "error_type": type(exc).__name__})
-    old = database.sync_values(STORE).get(digest(binding))
-    if old and (
-        old["scope"] != binding
-        or old["fingerprint"] != digest({k: v for k, v in old.items() if k != "fingerprint"})
-    ):
-        raise ValueError("DAILY_QUALIFICATION_EXISTING_EVIDENCE_CORRUPT")
-    evidence = dict(old["symbols"]) if old else {}
     results = {(r["symbol"], r["session"]): r for r in observations}
+    coverage = database.sync_values("daily_history_coverage")
     for symbol, rows in grouped.items():
         days = [date.fromisoformat(r["session"]) for r in rows]
         present = load_daily(
@@ -171,14 +270,44 @@ def audit_and_repair(database, manifest, requirements, config, provider, synchro
                 "session": r["session"],
                 "roles": r["roles"],
                 "provider_result": results[symbol, r["session"]]["status"],
+                "provider_outcome": results[symbol, r["session"]]["provider_outcome"],
                 "observed_at": results[symbol, r["session"]]["observed_at"],
                 "local_present_after_recheck": present.get(
                     (symbol, date.fromisoformat(r["session"]))
                 )
                 is not None,
+                "coverage_validated_after_recheck": provider_range_verified(
+                    coverage.get(symbol),
+                    date.fromisoformat(r["session"]),
+                    date.fromisoformat(r["session"]),
+                    feed=binding["feed"],
+                    adjustment=binding["adjustment"],
+                ),
             }
             for r in sorted(rows, key=lambda r: r["session"])
         ]
+        previous = evidence.get(symbol, {})
+        merged = (
+            {r["session"]: r for r in previous.get("sessions", [])}
+            if previous.get("identity_fingerprint") == digest(identities[symbol])
+            else {}
+        )
+        for row in sessions:
+            existing_roles = set(merged.get(row["session"], {}).get("roles", "").split(";")) - {""}
+            merged[row["session"]] = {
+                **row,
+                "roles": ";".join(sorted(existing_roles | set(row["roles"].split(";")))),
+            }
+        sessions = [merged[key] for key in sorted(merged)]
+        if any(
+            r["provider_result"] == "BAR_RETURNED"
+            and (
+                not r["local_present_after_recheck"]
+                or not r.get("coverage_validated_after_recheck", False)
+            )
+            for r in sessions
+        ):
+            repair_failed.add(symbol)
         evidence[symbol] = {
             "identity_fingerprint": digest(identities[symbol]),
             "source_manifest_fingerprint": manifest["fingerprint"],
@@ -186,7 +315,7 @@ def audit_and_repair(database, manifest, requirements, config, provider, synchro
             "audit_completed": True,
             "repair_plan_completed": symbol not in repair_failed,
             "local_recheck_completed": True,
-            "repair_attempted": symbol in attempted,
+            "repair_attempted": symbol in attempted or previous.get("repair_attempted", False),
             "repair_decision": "SYNC_DAILY"
             if symbol in attempted
             else "NO_SYNC_NO_USABLE_PROVIDER_BAR",

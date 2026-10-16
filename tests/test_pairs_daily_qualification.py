@@ -1,7 +1,7 @@
 """Bounded synthetic availability policy regressions; no provider transport/outcomes."""
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -87,6 +87,16 @@ def run_audit(
         if ingest:
             with db.connect() as c:
                 c.execute(f"INSERT INTO bars VALUES ({','.join('?' for _ in saved)})", saved)
+            db.set_sync_value(
+                "daily_history_coverage",
+                symbol,
+                {
+                    "start": str(start),
+                    "end_exclusive": str(end + timedelta(days=1)),
+                    "feed": config.universe.market_data_feed.lower(),
+                    "adjustment": config.universe.market_data_adjustment,
+                },
+            )
         return {"bars_received": 1, "bars_inserted": int(ingest), "errors": 0}
 
     provider = SimpleNamespace(

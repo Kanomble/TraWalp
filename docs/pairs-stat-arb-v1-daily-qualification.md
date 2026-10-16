@@ -34,19 +34,24 @@ The explicit provider-enabled command is:
   --output-stem <new-unused-audit-stem>
 ```
 
-The normal preflight remains local and never reads diagnostic report files.
-The command stores checksummed evidence in SQLite `sync_state`, source
+The normal preflight now orchestrates this same targeted auditor automatically
+for newly discovered requirements, with bounded full rediscovery to a fixpoint.
+`--local-only` reports unresolved history without provider access. Local discovery
+and validation never read diagnostic report files or call providers. The auditor
+stores checksummed evidence in SQLite `sync_state`, source
 `pairs_daily_qualification`, scoped to requested dates, provider/feed/adjustment,
 strategy definition and eligibility settings. Evidence contains per-symbol identity
 fingerprints, required sessions/roles, provider results, audit/repair/recheck flags
 and source-manifest fingerprint; no raw responses, returns, correlation results,
 signals or outcomes. Outcome-only requirements cannot cause exclusion. The next
 preflight rechecks the certified sessions against local usable bars. Restoring all
-these sessions clears the exclusion. New unaudited gaps remain blocking.
+these sessions clears the exclusion. New unaudited gaps enter the generic audit;
+they remain blocking if the audit cannot establish a resolved outcome.
 
-Manifest **V8** is required because universe membership changed; V7 and earlier
-candidate manifests cannot be reused for validation. The explicit audit accepts
-V7/V8 input artifacts to support migration. The new contract binds Daily policy,
+Manifest **V9** binds the fixpoint policy, eight-round limit, round-state
+fingerprints and final qualification. V8 and earlier candidate manifests cannot
+be reused for validation. The explicit audit accepts V7/V8/V9 input artifacts
+to support migration. The contract also binds Daily policy,
 guard, provider/feed and qualification fingerprint, including exclusions/reasons,
 required-range and evidence fingerprints. Different feeds, identity evidence,
 audit evidence or restored local inputs invalidate the relevant qualification.

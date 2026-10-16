@@ -10,6 +10,12 @@ from pathlib import Path
 from trading_system.backtest import research_definitions as definitions
 from trading_system.backtest.liquid_universe import _canonical, fingerprint
 from trading_system.backtest.pairs_stat_arb_v1 import calibration
+from trading_system.backtest.pairs_stat_arb_v1_daily_fixpoint import (
+    MAX_DAILY_QUALIFICATION_ROUNDS,
+)
+from trading_system.backtest.pairs_stat_arb_v1_daily_fixpoint import (
+    POLICY as FIXPOINT_POLICY,
+)
 from trading_system.backtest.pairs_stat_arb_v1_daily_qualification import (
     MAX_QUARANTINE_FRACTION,
 )
@@ -75,7 +81,9 @@ def manifest_contract(config, start, end):
         raise ValueError("PAIRS_STAT_ARB_REQUIRES_ADJUSTED_DAILY")
     return {
         "manifest_type": "pairs_stat_arb_v1_manifest",
-        "manifest_version": 8,
+        "manifest_version": 9,
+        "daily_fixpoint_policy": FIXPOINT_POLICY,
+        "max_daily_qualification_rounds": MAX_DAILY_QUALIFICATION_ROUNDS,
         "daily_qualification_policy": DAILY_POLICY,
         "daily_quarantine_review_fraction": MAX_QUARANTINE_FRACTION,
         "daily_qualification_provider": "ALPACA",

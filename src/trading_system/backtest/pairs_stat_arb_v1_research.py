@@ -10,6 +10,7 @@ from statistics import mean, median
 from trading_system.backtest import research_definitions as definitions
 from trading_system.backtest.pairs_stat_arb_v1 import leg_weight, simulate_prepared_pairs
 from trading_system.backtest.pairs_stat_arb_v1_daily_audit import blocker_summary
+from trading_system.backtest.pairs_stat_arb_v1_daily_fixpoint import prepare_fixpoint
 from trading_system.backtest.pairs_stat_arb_v1_data import prepare_pairs_data
 from trading_system.backtest.report import _atomic_csv, _atomic_text
 
@@ -369,6 +370,9 @@ def summary_metadata(prepared, *, preflight):
             and manifest["discovery_counts"]["identity_qualification_complete"]
             and manifest["discovery_counts"]["daily_data_qualification_complete"]
             and not prepared.metadata["daily_data_qualification"]["unresolved_blocking"]
+            and prepared.metadata["fixpoint_reached"]
+            and not prepared.metadata["daily_qualification_failures"]
+            and not prepared.metadata["new_unreviewed_daily_requirements"]
         ),
         "manifest_version": manifest["manifest_version"],
         "research_universe": manifest["research_universe"],
@@ -424,6 +428,8 @@ def run_pairs_stat_arb_v1(
     preflight=False,
     candidate_manifest=None,
     rediscover_candidates=False,
+    daily_auditor_factory=None,
+    qualification_progress=None,
 ):
     definition = definitions.PAIRS_STAT_ARB_V1
     if preflight:
@@ -436,8 +442,21 @@ def run_pairs_stat_arb_v1(
     directory = Path(directory)
     if any(directory.glob(f"{stem}_*")):
         raise FileExistsError(f"Pairs immutable report stem already exists: {stem}")
-    prepared = prepare_pairs_data(
-        database, config, start, end, candidate_manifest=candidate_manifest, preflight=preflight
+    prepared = (
+        prepare_fixpoint(
+            database,
+            config,
+            start,
+            end,
+            directory,
+            stem,
+            auditor_factory=daily_auditor_factory,
+            progress=qualification_progress,
+        )
+        if preflight
+        else prepare_pairs_data(
+            database, config, start, end, candidate_manifest=candidate_manifest, preflight=False
+        )
     )
     summary = summary_metadata(prepared, preflight=preflight)
     tables = {"coverage": prepared.coverage}
@@ -448,7 +467,13 @@ def run_pairs_stat_arb_v1(
             daily_requirements={
                 "research_family": definition.research_family,
                 "research_id": definition.research_id,
-                "requirements_version": 5,
+                "requirements_version": 6,
+                "daily_qualification_iteration": summary["daily_qualification_iteration"],
+                "daily_qualification_rounds": summary["daily_qualification_rounds"],
+                "fixpoint_reached": summary["fixpoint_reached"],
+                "fixpoint_reason": summary["fixpoint_reason"],
+                "daily_qualification_failures": summary["daily_qualification_failures"],
+                "new_unreviewed_daily_requirements": summary["new_unreviewed_daily_requirements"],
                 "daily_data_qualification": summary["daily_data_qualification"],
                 "daily_data_qualification_diagnostics": summary[
                     "daily_data_qualification_diagnostics"
