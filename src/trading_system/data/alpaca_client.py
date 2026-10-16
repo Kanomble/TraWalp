@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from types import MappingProxyType
 
 from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
@@ -44,7 +45,23 @@ class AlpacaDataClient:
         adjustment: Adjustment = Adjustment.ALL,
         historical_client: StockHistoricalDataClient | None = None,
         trading_client: TradingClient | None = None,
+        symbol_mapping: Mapping[str, str] | None = None,
     ) -> None:
+        # Explicit provider aliases only. Never guess punctuation conversions or
+        # apply SEC ticker aliases to market-data requests. The default is identity.
+        self.symbol_mapping = {
+            key.strip().upper(): value.strip().upper()
+            for key, value in (symbol_mapping or {}).items()
+        }
+        if len(self.symbol_mapping) != len(symbol_mapping or {}):
+            raise ValueError("ALPACA_SYMBOL_MAPPING_CANONICAL_COLLISION")
+        if any(not key or not value for key, value in self.symbol_mapping.items()) or len(
+            set(self.symbol_mapping.values())
+        ) != len(self.symbol_mapping):
+            raise ValueError("ALPACA_SYMBOL_MAPPING_NOT_ONE_TO_ONE")
+        self._canonical_symbols = {value: key for key, value in self.symbol_mapping.items()}
+        self.symbol_mapping = MappingProxyType(self.symbol_mapping)
+        self._canonical_symbols = MappingProxyType(self._canonical_symbols)
         self.historical = historical_client or StockHistoricalDataClient(api_key, secret_key)
         self.feed = feed
         self.adjustment = adjustment
@@ -55,10 +72,10 @@ class AlpacaDataClient:
     def list_tradable_us_equities(self) -> list[TradableAsset]:
         request = GetAssetsRequest(status=AssetStatus.ACTIVE, asset_class=AssetClass.US_EQUITY)
         assets = self.trading.get_all_assets(request)
-        return sorted(
+        result = sorted(
             (
                 TradableAsset(
-                    symbol=asset.symbol,
+                    symbol=self._canonical_symbols.get(asset.symbol, asset.symbol),
                     name=asset.name,
                     exchange=str(
                         asset.exchange.value if hasattr(asset.exchange, "value") else asset.exchange
@@ -73,6 +90,9 @@ class AlpacaDataClient:
             ),
             key=lambda asset: asset.symbol,
         )
+        if len({asset.symbol for asset in result}) != len(result):
+            raise ValueError("ALPACA_SYMBOL_MAPPING_COLLISION")
+        return result
 
     def daily_bars(
         self,
@@ -104,12 +124,16 @@ class AlpacaDataClient:
         """Fetch provider-native bars; alpaca-py handles page tokens and retry codes."""
 
         normalized = sorted({symbol.upper() for symbol in symbols})
+        provider_symbols = [self.symbol_mapping.get(symbol, symbol) for symbol in normalized]
+        if len(set(provider_symbols)) != len(provider_symbols):
+            raise ValueError("ALPACA_SYMBOL_MAPPING_COLLISION")
         normalized_timeframe = BarTimeframe(timeframe)
         output: list[MarketDataBar] = []
         total_invalid = 0
         for batch in _chunks(normalized, batch_size):
+            provider_batch = [self.symbol_mapping.get(symbol, symbol) for symbol in batch]
             request = StockBarsRequest(
-                symbol_or_symbols=batch,
+                symbol_or_symbols=provider_batch,
                 timeframe=_alpaca_timeframe(normalized_timeframe),
                 start=start,
                 end=end,
@@ -121,8 +145,8 @@ class AlpacaDataClient:
             normalized_vwap_symbols: set[str] = set()
             invalid_count = 0
             invalid_samples: list[str] = []
-            for symbol in batch:
-                for bar in response.data.get(symbol, []):
+            for symbol, provider_symbol in zip(batch, provider_batch, strict=True):
+                for bar in response.data.get(provider_symbol, []):
                     try:
                         volume = int(bar.volume)
                         trade_count = int(bar.trade_count) if bar.trade_count is not None else None
@@ -178,13 +202,18 @@ class AlpacaDataClient:
         normalized = sorted({symbol.upper() for symbol in symbols})
         if not normalized:
             return []
+        provider_symbols = [self.symbol_mapping.get(symbol, symbol) for symbol in normalized]
+        if len(set(provider_symbols)) != len(provider_symbols):
+            raise ValueError("ALPACA_SYMBOL_MAPPING_COLLISION")
         response = self.historical.get_stock_snapshot(
-            StockSnapshotRequest(symbol_or_symbols=normalized, feed=self.feed)
+            StockSnapshotRequest(symbol_or_symbols=provider_symbols, feed=self.feed)
         )
         observed_at = datetime.now(UTC)
         output: list[MarketSnapshot] = []
         for symbol, snapshot in response.items():
-            normalized_symbol = str(symbol).upper()
+            normalized_symbol = self._canonical_symbols.get(
+                str(symbol).upper(), str(symbol).upper()
+            )
             try:
                 latest_trade = getattr(snapshot, "latest_trade", None)
                 price = (

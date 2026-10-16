@@ -12,6 +12,7 @@ from trading_system.backtest import pairs_stat_arb_v1_security as security
 from trading_system.backtest import research_definitions as definitions
 from trading_system.backtest.liquid_universe import ResearchReadOnlyDatabase, _canonical
 from trading_system.backtest.pairs_stat_arb_v1 import PairBar, calibration
+from trading_system.backtest.pairs_stat_arb_v1_daily_audit import classify_requirement
 from trading_system.backtest.pairs_stat_arb_v1_identity import (
     CURRENT,
     FAILED,
@@ -557,6 +558,19 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
                 ),
             }
         )
+    # Keep missing requirements explicit and auditable. Successfully checked
+    # ranges do not establish listing boundaries or per-session bar availability.
+    coverage = [
+        classify_requirement(
+            row,
+            identities[row["symbol"]],
+            local_present=False,
+            range_checked=row["provider_range_verified"],
+        )
+        if row["status"] == "LOCAL_MISSING"
+        else row
+        for row in coverage
+    ]
     coverage = compact_coverage(coverage, sessions)
     coverage.extend(
         {

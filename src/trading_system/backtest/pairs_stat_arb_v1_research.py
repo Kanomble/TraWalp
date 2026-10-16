@@ -9,6 +9,7 @@ from statistics import mean, median
 
 from trading_system.backtest import research_definitions as definitions
 from trading_system.backtest.pairs_stat_arb_v1 import leg_weight, simulate_prepared_pairs
+from trading_system.backtest.pairs_stat_arb_v1_daily_audit import blocker_summary
 from trading_system.backtest.pairs_stat_arb_v1_data import prepare_pairs_data
 from trading_system.backtest.report import _atomic_csv, _atomic_text
 
@@ -354,6 +355,9 @@ def summary_metadata(prepared, *, preflight):
         "eligible_correlated_pair_sessions": counts["ELIGIBLE"],
         "calibration_status_counts": dict(counts),
         "local_missing_data": missing,
+        "daily_blocker_audit": blocker_summary(
+            [row for row in prepared.requirements if row["status"] == "LOCAL_MISSING"]
+        ),
         "ready_for_local_validation": (
             bool(candidates)
             and not missing
@@ -446,6 +450,7 @@ def run_pairs_stat_arb_v1(
                 "required_sessions": [
                     row for row in prepared.requirements if row["status"] == "LOCAL_MISSING"
                 ],
+                "daily_blocker_audit": summary["daily_blocker_audit"],
                 "nonblocking_diagnostics": [
                     row for row in prepared.coverage if not row["validation_blocking"]
                 ],

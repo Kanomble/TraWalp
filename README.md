@@ -33,6 +33,10 @@ intervals retain precedence, and unknown system states still block preflight.
 This data-quality policy uses no performance/outcome information and does not
 make Pairs fully PIT-clean or survivorship-bias-free. See the
 [qualification policy](docs/pairs-stat-arb-v1-research.md#identity-qualified-research-universe).
+Pairs Daily gaps also carry per-session availability classifications and a
+targeted repair plan. Checked provider ranges do not imply complete native bars;
+only verified local gaps may be synchronized. See the
+[Daily blocker audit](docs/pairs-stat-arb-v1-daily-blocker-audit.md).
 Mapping `MASSIVE_STOCK_TYPES_V2` adds ETS/ETV/structured-product classifications
 and the authoritative `RIGHT / Rights` description. Pairs reference qualification
 and membership fingerprints apply only after the local non-OTC company/valid
