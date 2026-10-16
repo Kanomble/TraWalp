@@ -144,14 +144,11 @@ def test_selection_history_diagnostic_does_not_use_future_listing_observations(t
         prepared.manifest["universe"], without_future, prepared.sessions, earlier, config
     )
     assert original == changed
-    assert (
-        original[2]["identity_epoch_diagnostics"][0]["status"]
-        == "VERIFIED_OUTSIDE_EPOCH"
-    )
+    assert original[2]["identity_epoch_diagnostics"][0]["status"] == "VERIFIED_OUTSIDE_EPOCH"
     assert summary_metadata(prepared, preflight=True)["ready_for_local_validation"] is True
 
 
-def test_unknown_identity_requires_evidence_without_inventing_bar_fetches(tmp_path, config):
+def test_ordinary_empty_history_stays_prefix_without_epoch_quarantine(tmp_path, config):
     db, *_ = seed(tmp_path)
     baseline = prepare_pairs_data(db, config, START, END, preflight=True)
     for index in range(25):
@@ -171,11 +168,13 @@ def test_unknown_identity_requires_evidence_without_inventing_bar_fetches(tmp_pa
             CompanyIdentity(symbol=symbol, name=symbol, cik=f"{1000 + index:010d}", sic="3571")
         )
     expanded = prepare_pairs_data(db, config, START, END, preflight=True)
-    assert expanded.requirements == []
+    assert expanded.requirements == baseline.requirements
     assert expanded.manifest["source_fingerprint"] != baseline.manifest["source_fingerprint"]
-    assert len(expanded.coverage) == 25  # One blocking identity diagnostic per extra name.
-    assert all(r["status"] == "IDENTITY_EPOCH_UNKNOWN" for r in expanded.coverage)
-    assert not summary_metadata(expanded, preflight=True)["ready_for_local_validation"]
+    diagnostics = [r for r in expanded.coverage if r["symbol"].startswith("EMPTY")]
+    assert len(diagnostics) == 25
+    assert all(r["status"] == "INSUFFICIENT_SELECTION_HISTORY" for r in diagnostics)
+    assert all(not r["validation_blocking"] for r in diagnostics)
+    assert summary_metadata(expanded, preflight=True)["ready_for_local_validation"]
 
 
 def seed_six(tmp_path, *, end=END):
@@ -344,10 +343,7 @@ def test_prefix_and_internal_classification_use_only_observations_through_t(conf
     original = selection_inputs(universe, bars, sessions, earlier, config, {"A": days[2]})
     truncated = {key: b for key, b in bars.items() if key[1] <= earlier[-1]}
     assert original == selection_inputs(universe, truncated, sessions, earlier, config)
-    assert (
-        original[1]["identity_epoch_diagnostics"][0]["status"]
-        == "VERIFIED_OUTSIDE_EPOCH"
-    )
+    assert original[1]["identity_epoch_diagnostics"][0]["status"] == "VERIFIED_OUTSIDE_EPOCH"
     assert not original[1]["internal_selection_gaps"]
     # During warmup, a hole AFTER the first observation is still an internal gap.
     bars.pop(("A", days[3]))
@@ -355,9 +351,7 @@ def test_prefix_and_internal_classification_use_only_observations_through_t(conf
     assert inputs[str(days[4])] == {}
     assert counts["internal_selection_gaps"][0]["session"] == str(days[3])
     truncated = {key: b for key, b in bars.items() if key[1] <= days[4]}
-    assert (inputs, counts) == selection_inputs(
-        universe, truncated, sessions, [days[4]], config
-    )
+    assert (inputs, counts) == selection_inputs(universe, truncated, sessions, [days[4]], config)
 
 
 def test_old_history_anchor_keeps_a_calibration_prefix_gap_blocking(tmp_path, config):

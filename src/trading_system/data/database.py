@@ -268,6 +268,8 @@ class Database:
                 )
                 for row in rows:
                     record = dict(row)
+                    if record["verified"] not in (0, 1):
+                        raise ValueError("IDENTITY_EPOCH_VERIFICATION_FLAG_INVALID")
                     record["verified"] = bool(record["verified"])
                     result[row["symbol"]].append(record)
         return result

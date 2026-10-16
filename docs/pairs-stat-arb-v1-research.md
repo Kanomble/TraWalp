@@ -33,6 +33,48 @@ first two digits. `CURRENT_UNIVERSE_ONLY`, `NOT_SURVIVORSHIP_CLEAN`,
 `CURRENT_LOCAL_SIC_NOT_PIT` apply throughout. SIC classification is current/local
 and not guaranteed PIT-safe. Historical constituents are not reconstructed.
 
+### Identity-qualified research universe
+
+Pairs uses the local tradable universe intersected with eligible security type
+and **identity-qualified securities**. Qualification is a run-level data-quality
+gate before SIC2 grouping, ADV20, Top-5, pair generation and calibration.
+`IDENTITY_QUARANTINED` excludes a security for the entire run: historical bars
+cannot safely be assigned to the intended security. It makes no claim that the
+company or ticker is erroneous and uses no returns, correlation, trade outcomes,
+price/volume continuity or PnL.
+
+The symbol-independent triggers are unresolved persisted epoch evidence,
+persisted lifecycle/name-change evidence without a verified current-security
+interval, or a disconnected local history of at least **365 calendar days**
+combined with a cached current-CIK SEC `8-A12B` registration inside that gap.
+The last combination requires identity verification; neither dates nor bars
+establish same/different security or effective interval boundaries. A gap alone,
+registration alone, missing FIGI, or absent epoch row is not a quarantine trigger.
+Normal current securities without a warning retain
+`CURRENT_SECURITY_NO_IDENTITY_WARNING`; this explicitly does **not** mean
+historically verified. Their prefixes remain nonblocking warmup diagnostics;
+internal missing inputs still block the affected SIC2/session.
+
+A valid verified interval takes precedence over unverified suspicion and remains
+strictly enforced for selection, calibration and outcomes. Outside it the security
+is a nonmember. Competing verified assertions that the existing interval resolver
+cannot reconcile produce `IDENTITY_EVIDENCE_CONFLICT` and run-global quarantine;
+no provider is chosen by plausibility. Invalid evidence or a failed qualification
+read/execution remains blocking (`IDENTITY_QUALIFICATION_FAILED`, ready=false).
+
+Manifest V7 binds the policy, warning threshold, per-symbol status/reason and
+evidence fingerprints, including excluded symbols. Preflight exports eligible,
+quarantined, verified-outside-run and unresolved-blocking counts and per-symbol
+`identity_status`, `reason`, `evidence_source`, `run_excluded`. Only persistent
+local identity, lifecycle, SEC cache and timestamp data are used; research report
+files and provider raw bodies are not runtime inputs/report contents. No provider
+requests, epoch creation, bar deletion or issuer migration occur.
+
+This policy addresses unsafe unresolved ticker/security histories. It does not
+make Pairs fully PIT-clean or survivorship-bias-free: `CURRENT_UNIVERSE_ONLY`,
+current security type and current SIC limitations remain. All strategy economics
+below are unchanged.
+
 At signal close T, the preceding official session's close must meet
 `config.universe.min_price`; ADV20 is the arithmetic mean of adjusted close times
 volume over exactly 20 official sessions ending at T and must meet

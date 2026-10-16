@@ -803,6 +803,14 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"{summary['research_id']}: {summary['status']}; pair-level research")
             print(f"Ready for local validation: {summary['ready_for_local_validation']}")
+            identity = summary["identity_qualification"]
+            print(
+                "Identity qualification:"
+                f"\n  Eligible: {identity['eligible']}"
+                f"\n  Quarantined: {identity['quarantined']}"
+                f"\n  Verified outside run: {identity['verified_outside_run']}"
+                f"\n  Unresolved blocking: {identity['unresolved_blocking']}"
+            )
             print("\n".join(summary["warnings"]))
             print("\n".join(f"{name}: {path}" for name, path in paths.items()))
             return 0

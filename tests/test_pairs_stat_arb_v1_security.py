@@ -251,7 +251,7 @@ def test_manifest_rejects_previous_cik_gate_policy_without_changing_economics(tm
     previous["fingerprint"] = fingerprint(previous)
     path = tmp_path / "previous-policy.json"
     path.write_text(json.dumps(previous))
-    assert contract["manifest_version"] == previous["manifest_version"] == 6
+    assert contract["manifest_version"] == previous["manifest_version"] == 7
     assert contract["strategy_definition"] == previous["strategy_definition"]
     with pytest.raises(ValueError, match=f"{MISMATCH}: cik_conflict_policy"):
         load_manifest(path, contract)
@@ -323,7 +323,7 @@ def test_manifest_without_reference_change_can_be_checked_without_discovery_or_n
     monkeypatch.setattr(engine, "observe", forbidden)
     reused = prepare_pairs_data(db, config, START, END, candidate_manifest=path)
     assert reused.manifest == prepared.manifest and len(calls) == 2
-    assert reused.manifest["manifest_version"] == 6
+    assert reused.manifest["manifest_version"] == 7
 
 
 def test_reference_cli_sync_missing_key_and_audit_dispatch_are_isolated(

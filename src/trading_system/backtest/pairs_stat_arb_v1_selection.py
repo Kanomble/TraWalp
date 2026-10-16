@@ -4,11 +4,13 @@ from collections import defaultdict
 from decimal import Decimal
 
 from trading_system.backtest import research_definitions as definitions
+from trading_system.backtest.pairs_stat_arb_v1_identity import CURRENT, QUARANTINED, USABLE
 from trading_system.data.security_identity import ACTIVE, OUTSIDE, UNKNOWN, identity_epoch
 
 SELECTION_GAP_SEMANTICS = (
-    "VERIFIED_IDENTITY_EPOCH_FIRST;EPOCH_PRICE_GATE;OUTSIDE_EPOCH_NONMEMBER;"
-    "EPOCH_WARMUP_NONBLOCKING;WITHIN_EPOCH_MISSING_AND_UNKNOWN_IDENTITY_BLOCK_SIC2_SESSION"
+    "RUN_IDENTITY_QUALIFICATION_FIRST;QUARANTINE_NONMEMBER;VERIFIED_EPOCH_PRECEDENCE;"
+    "OUTSIDE_EPOCH_NONMEMBER;ORDINARY_CURRENT_REFERENCE_ALLOWED;"
+    "PREFIX_WARMUP_NONBLOCKING;INTERNAL_MISSING_AND_SYSTEM_UNKNOWN_BLOCK_SIC2_SESSION_V2"
 )
 
 
@@ -26,14 +28,23 @@ def selection_inputs(
     definition = definitions.PAIRS_STAT_ARB_V1
     lookback = definition.adv_lookback_sessions
     epochs = {row["symbol"]: identity_epoch(row) for row in universe}
+    identities = {row["symbol"]: row for row in universe}
+
+    def status(symbol, day):
+        row, epoch = identities.get(symbol, {}), epochs.get(symbol)
+        if row.get("identity_status") == QUARANTINED:
+            return QUARANTINED
+        if epoch is not None:
+            return ACTIVE if epoch.contains(day) else OUTSIDE
+        return CURRENT if row.get("identity_status") == CURRENT else UNKNOWN
+
     first_observed = {
         symbol: day
         for symbol, day in (history_anchors or {}).items()
-        if epochs.get(symbol) is not None and epochs[symbol].contains(day)
+        if symbol in identities and status(symbol, day) in USABLE
     }
     for (symbol, day), bar in bars.items():
-        epoch = epochs.get(symbol)
-        if bar is not None and epoch is not None and epoch.contains(day):
+        if bar is not None and status(symbol, day) in USABLE:
             first_observed[symbol] = min(first_observed.get(symbol, day), day)
     indexes = {day: i for i, day in enumerate(sessions)}
     inputs, prefix, gaps, unresolved, epoch_diagnostics = {}, {}, {}, [], {}
@@ -44,8 +55,8 @@ def selection_inputs(
         for identity in universe:
             symbol, sic2 = identity["symbol"], identity["sic2"]
             epoch = epochs[symbol]
-            state = UNKNOWN if epoch is None else ACTIVE if epoch.contains(day) else OUTSIDE
-            if state != ACTIVE:
+            state = status(symbol, day)
+            if state not in USABLE:
                 key = symbol, state
                 row = epoch_diagnostics.setdefault(
                     key,
@@ -75,7 +86,7 @@ def selection_inputs(
                 continue
             previous = (
                 bars.get((symbol, sessions[i - 1]))
-                if i and epoch.contains(sessions[i - 1])
+                if i and status(symbol, sessions[i - 1]) in USABLE
                 else None
             )
             # This earlier frozen gate determines exclusion without requiring ADV.
@@ -86,15 +97,17 @@ def selection_inputs(
             if i:
                 needed.add(sessions[i - 1])
             missing = sorted(
-                s for s in needed if epoch.contains(s) and bars.get((symbol, s)) is None
+                s for s in needed if status(symbol, s) in USABLE and bars.get((symbol, s)) is None
             )
-            outside_window = any(not epoch.contains(s) for s in needed)
+            outside_window = any(status(symbol, s) not in USABLE for s in needed)
             if previous is None or len(window_days) != lookback or missing or outside_window:
                 counts["unavailable_liquidity_symbol_sessions"] += 1
                 first = first_observed.get(symbol)
                 first = first if first is not None and first <= day else None
-                # Existence/mapping is established by lifecycle evidence, not the first bar.
-                internal = missing
+                # Verified existence makes all in-epoch missing inputs blocking.
+                # Ordinary current-reference rows retain prefix diagnostics; a
+                # first bar is an observation anchor, never an identity boundary.
+                internal = missing if epoch else [s for s in missing if first and s >= first]
                 if internal:
                     blocked[sic2].append(symbol)
                     for missing_day in internal:
@@ -110,9 +123,9 @@ def selection_inputs(
                                 "affected_signal_sessions": [],
                                 "roles": "LIQUIDITY_SELECTION_INTERNAL_GAP",
                                 "status": "LOCAL_MISSING",
-                                "identity_epoch_status": ACTIVE,
-                                "epoch_source": epoch.source,
-                                "epoch_verified": True,
+                                "identity_epoch_status": state,
+                                "epoch_source": epoch.source if epoch else None,
+                                "epoch_verified": epoch is not None,
                                 "input_scope": "VALIDATION_BLOCKING_REQUIREMENT",
                                 "validation_blocking": True,
                             },

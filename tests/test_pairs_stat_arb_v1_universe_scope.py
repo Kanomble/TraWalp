@@ -258,7 +258,7 @@ def test_previous_broader_scope_is_rejected_even_with_updated_version_mapping_an
     previous["fingerprint"] = fingerprint(previous)
     path = tmp_path / "old-scope.json"
     path.write_text(json.dumps(previous))
-    assert previous["manifest_version"] == 6
+    assert previous["manifest_version"] == 7
     assert previous["provider_type_mapping_version"] == MAPPING_VERSION
     assert contract["company_universe_scope"] == PAIRS_COMPANY_UNIVERSE_SCOPE
     with pytest.raises(ValueError, match=f"{MISMATCH}: company_universe_scope"):

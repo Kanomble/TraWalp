@@ -10,13 +10,19 @@ from pathlib import Path
 from trading_system.backtest import research_definitions as definitions
 from trading_system.backtest.liquid_universe import _canonical, fingerprint
 from trading_system.backtest.pairs_stat_arb_v1 import calibration
+from trading_system.backtest.pairs_stat_arb_v1_identity import (
+    DISCONTINUITY_DAYS,
+    POLICY,
+    USABLE,
+    window_status,
+)
 from trading_system.backtest.pairs_stat_arb_v1_security import (
     COMPANY_ONLY_REQUIREMENT,
     INSTRUMENT_TYPE_SEMANTICS,
 )
 from trading_system.backtest.pairs_stat_arb_v1_selection import SELECTION_GAP_SEMANTICS
 from trading_system.data.market_sessions import trading_sessions_between
-from trading_system.data.security_identity import ACTIVE, EPOCH_SEMANTICS, same_epoch_window
+from trading_system.data.security_identity import EPOCH_SEMANTICS
 from trading_system.data.security_reference import (
     CIK_CONFLICT_POLICY,
     IDENTITY_CONFLICT_CLASSIFICATION_VERSION,
@@ -63,7 +69,7 @@ def manifest_contract(config, start, end):
         raise ValueError("PAIRS_STAT_ARB_REQUIRES_ADJUSTED_DAILY")
     return {
         "manifest_type": "pairs_stat_arb_v1_manifest",
-        "manifest_version": 6,
+        "manifest_version": 7,
         "coverage_semantics": (
             "SELECTED_ADV_PAIR_CALIBRATION_ELIGIBLE_OUTCOMES;PREFIX_HISTORY_NONBLOCKING;"
             "INTERNAL_SELECTION_GAPS_BLOCKING"
@@ -71,6 +77,9 @@ def manifest_contract(config, start, end):
         "selection_gap_semantics": SELECTION_GAP_SEMANTICS,
         "selection_membership_fail_closed": True,
         "identity_epoch_semantics": EPOCH_SEMANTICS,
+        "identity_qualification_policy": POLICY,
+        "identity_history_discontinuity_warning_days": DISCONTINUITY_DAYS,
+        "research_universe": "IDENTITY_QUALIFIED_RESEARCH_UNIVERSE",
         "instrument_type_semantics": INSTRUMENT_TYPE_SEMANTICS,
         "company_only_requirement": COMPANY_ONLY_REQUIREMENT,
         "company_universe_scope": PAIRS_COMPANY_UNIVERSE_SCOPE,
@@ -169,10 +178,10 @@ def verify_membership(payload, universe, digest, bars, sessions, discovery_count
                     index = indexes[day]
                     symbol = row["symbol"]
                     if (
-                        same_epoch_window(
+                        window_status(
                             identities, [symbol], sessions[index - lookback + 1 : index + 1]
                         )
-                        != ACTIVE
+                        not in USABLE
                     ):
                         raise ValueError("selected identity epoch window")
                     prior = bars.get((symbol, sessions[index - 1]))

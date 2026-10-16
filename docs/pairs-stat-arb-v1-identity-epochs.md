@@ -1,9 +1,21 @@
 # Pairs V1: belegte Security-/Identity-Epochen
 
-Der Pairs-Datenpfad qualifiziert historische Sessions jetzt zuerst gegen eine
-quellenbelegte Epoche der heutigen Common-Share-Security. Der globale erste
-Ticker-Bar ist keine Identity-Evidenz. Unbekannte Zuordnungen blockieren die
-SIC2/Session vor Preis-Gate, ADV20 und Top-N-Ranking.
+Der Pairs-Datenpfad arbeitet auf einem **identity-qualified research universe**.
+Konkrete ungeklärte historische Identity-Risiken werden run-global als
+`IDENTITY_QUARANTINED` vor SIC2/ADV20/Top-N ausgeschlossen und erzeugen keine
+Membership-Gaps. Eine fehlende Epoch-Zeile allein ist kein Risiko-Trigger:
+gewöhnliche Securities ohne Warnsignal bleiben über ihre aktuelle Referenz
+qualifiziert, ohne als historisch verifiziert zu gelten. Systemfehler und korrupte
+Evidenz blockieren weiterhin. Die vollständige [Qualification-Policy](pairs-stat-arb-v1-research.md#identity-qualified-research-universe)
+beschreibt Trigger, Fingerprints und Reporting ab Manifest V7.
+
+Der nachfolgende strenge Verified-Epoch-Vertrag bleibt bestehen. Gültige belegte
+Intervalle gewinnen gegen ungeprüfte Verdachtsmomente; außerhalb sind Securities
+Nonmember. Echte Evidenzkonflikte bleiben ausgeschlossen. Bars oder erste/letzte
+Beobachtungen beweisen niemals Security-Kontinuität oder Intervallgrenzen.
+Die historischen Smoke-Ergebnisse unten dokumentieren den damaligen Stand vor
+der run-globalen Quarantäne. `CURRENT_UNIVERSE_ONLY` und Survivorship-/PIT-Grenzen
+bleiben bestehen; die Quarantäne ist datenqualitäts-, nicht performancebasiert.
 
 ## Evidenzvertrag und Persistenz
 

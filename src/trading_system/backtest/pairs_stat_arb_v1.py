@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from statistics import correlation, mean, stdev
 
 from trading_system.backtest import research_definitions as definitions
-from trading_system.data.security_identity import ACTIVE, same_epoch_window
+from trading_system.backtest.pairs_stat_arb_v1_identity import USABLE, window_status
 
 PAIRS_V1 = definitions.PAIRS_STAT_ARB_V1  # Compatibility identity; runtime reads the definition.
 
@@ -27,12 +27,12 @@ def calibration(bars, sessions, index, symbol_a, symbol_b, *, identity_by_symbol
     # The bare primitive remains available for synthetic mathematics. Every
     # repository-data caller supplies the verified identity map explicitly.
     if identity_by_symbol is not None:
-        state = same_epoch_window(
+        state = window_status(
             identity_by_symbol,
             (symbol_a, symbol_b),
             sessions[max(0, index - length) : index + 1],
         )
-        if state != ACTIVE:
+        if state not in USABLE:
             return {"calibration_status": state}
     if index < length:
         return {"calibration_status": "INCOMPLETE_CALIBRATION"}
@@ -162,8 +162,8 @@ def simulate_trade(candidate, bars, sessions, index, signal_end, *, identity_by_
     entry = sessions[index + 1]
     row["entry_session"] = entry.isoformat()
     if identity_by_symbol is not None:
-        state = same_epoch_window(identity_by_symbol, (a, b), [sessions[index], entry])
-        if state != ACTIVE:
+        state = window_status(identity_by_symbol, (a, b), [sessions[index], entry])
+        if state not in USABLE:
             row.update(status=state, exit_reason=state)
             return row, sessions[index]
     ea, eb = bars.get((a, entry)), bars.get((b, entry))
@@ -182,8 +182,8 @@ def simulate_trade(candidate, bars, sessions, index, signal_end, *, identity_by_
         ba, bb = bars.get((a, session)), bars.get((b, session))
         row["holding_sessions"] = holding
         if identity_by_symbol is not None:
-            state = same_epoch_window(identity_by_symbol, (a, b), [sessions[index], session])
-            if state != ACTIVE:
+            state = window_status(identity_by_symbol, (a, b), [sessions[index], session])
+            if state not in USABLE:
                 row.update(status=state, exit_reason=state)
                 return row, blocked_until
         if ba is None or bb is None:
@@ -237,6 +237,8 @@ def simulate_prepared_pairs(prepared):
     if prepared.manifest["strategy_definition"] != asdict(definitions.PAIRS_STAT_ARB_V1):
         raise ValueError("PAIRS_STAT_ARB_MANIFEST_MISMATCH: execution definition changed")
     qualification = prepared.manifest.get("discovery_counts", {})
+    if not qualification.get("identity_qualification_complete"):
+        raise ValueError("IDENTITY_QUALIFICATION_FAILED")
     if not qualification.get("company_security_types_complete"):
         raise ValueError("AUTHORITATIVE_COMPANY_SECURITY_TYPE_UNAVAILABLE")
     if not qualification.get("selection_membership_resolved"):

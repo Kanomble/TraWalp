@@ -6,11 +6,21 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from itertools import combinations, groupby
+from sqlite3 import Error as SQLiteError
 
 from trading_system.backtest import pairs_stat_arb_v1_security as security
 from trading_system.backtest import research_definitions as definitions
 from trading_system.backtest.liquid_universe import ResearchReadOnlyDatabase, _canonical
 from trading_system.backtest.pairs_stat_arb_v1 import PairBar, calibration
+from trading_system.backtest.pairs_stat_arb_v1_identity import (
+    CURRENT,
+    FAILED,
+    POLICY,
+    QUARANTINED,
+    USABLE,
+    qualify_identities,
+    session_status,
+)
 from trading_system.backtest.pairs_stat_arb_v1_manifest import (
     MISMATCH,
     calendar_window,
@@ -22,7 +32,7 @@ from trading_system.backtest.pairs_stat_arb_v1_manifest import (
 from trading_system.backtest.pairs_stat_arb_v1_selection import selection_inputs
 from trading_system.data.qualification import provider_range_verified
 from trading_system.data.security_identity import (
-    ACTIVE,
+    OUTSIDE,
     UNKNOWN,
     current_identity_epoch,
     identity_epoch,
@@ -103,22 +113,26 @@ def company_universe(
 
 
 def load_history_anchors(database, symbols, end, *, identity_by_symbol=None):
-    """Earliest usable, unambiguous Daily bar within the verified current epoch."""
+    """Observation anchors, restricted to verified intervals whenever available."""
     anchors = {}
     identities = identity_by_symbol or {}
     with database.read_only() as connection:
         for symbol in sorted(set(symbols)):
             epoch = identity_epoch(identities.get(symbol, {}))
-            if epoch is None or epoch.effective_start > end:
+            ordinary = identities.get(symbol, {}).get("identity_status") == CURRENT
+            if (epoch is None and not ordinary) or (epoch and epoch.effective_start > end):
                 continue
-            stop = min(end + timedelta(days=1), epoch.effective_end or end + timedelta(days=1))
+            stop = min(
+                end + timedelta(days=1),
+                (epoch.effective_end if epoch else None) or end + timedelta(days=1),
+            )
             rows = connection.execute(
                 "SELECT timestamp,open,high,low,close,volume FROM bars WHERE symbol=? "
                 "AND timeframe=? AND timestamp>=? AND timestamp<? ORDER BY timestamp",
                 (
                     symbol,
                     definitions.PAIRS_STAT_ARB_V1.timeframe,
-                    str(epoch.effective_start),
+                    str(epoch.effective_start) if epoch else "0001-01-01",
                     str(stop),
                 ),
             )
@@ -155,7 +169,12 @@ def load_daily(database, symbols, start, end, *, identity_by_symbol=None):
     )
     symbols = sorted(set(symbols))
     if epochs is not None:
-        symbols = [symbol for symbol in symbols if epochs.get(symbol) is not None]
+        symbols = [
+            symbol
+            for symbol in symbols
+            if epochs.get(symbol) is not None
+            or identity_by_symbol.get(symbol, {}).get("identity_status") == CURRENT
+        ]
     with database.read_only() as connection:
         for offset in range(0, len(symbols), 300):
             batch = symbols[offset : offset + 300]
@@ -174,7 +193,7 @@ def load_daily(database, symbols, start, end, *, identity_by_symbol=None):
             for symbol, timestamp, op, high, low, close, volume in rows:
                 day = date.fromisoformat(timestamp[:10])
                 if epochs is not None and (
-                    epochs.get(symbol) is None or not epochs[symbol].contains(day)
+                    epochs.get(symbol) is not None and not epochs[symbol].contains(day)
                 ):
                     continue
                 key = symbol, day
@@ -258,13 +277,13 @@ def daily_requirements(
             for day in sessions[i - definition.calibration_sessions : i + 1]:
                 if epoch is not None and not epoch.contains(day):
                     insufficient_calibration.add((symbol, day))
-                elif epoch is None:
+                elif session_status(identity_by_symbol.get(symbol, {}), day) not in USABLE:
                     epoch_requirements[symbol, day] = UNKNOWN
                 else:
                     required[symbol, day].add("PAIR_CALIBRATION_AND_OBSERVATION")
             if candidate["calibration_status"] == "ELIGIBLE":
                 for day in sessions[i + 1 : i + definition.max_hold_sessions + 1]:
-                    if epoch is None or not epoch.contains(day):
+                    if session_status(identity_by_symbol.get(symbol, {}), day) not in USABLE:
                         epoch_requirements[symbol, day] = (
                             UNKNOWN if epoch is None else "IDENTITY_EPOCH_CROSSING"
                         )
@@ -325,11 +344,76 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
     contract["identity_qualification_fingerprint"] = identity_qualification_fingerprint(
         [*universe, *security_diagnostics]
     )
+    contract["identity_epoch_fingerprint"] = reference_digest(
+        {row["symbol"]: row["identity_epoch_evidence"] for row in universe}
+    )
+    try:
+        universe, identity_diagnostics = qualify_identities(database, universe, start, end)
+    except (SQLiteError, OSError, ValueError, KeyError, TypeError, AttributeError):
+        # A failed qualification is a system blocker, never a resolved quarantine.
+        identity_diagnostics = [
+            {
+                "symbol": row["symbol"],
+                "identity_status": FAILED,
+                "status": FAILED,
+                "reason": "IDENTITY_INPUT_READ_OR_CLASSIFICATION_FAILED",
+                "evidence_source": [],
+                "run_excluded": False,
+                "validation_blocking": True,
+                "record_kind": "SYMBOL_IDENTITY",
+                "input_scope": "RUN_IDENTITY_QUALIFICATION",
+                "roles": "HISTORICAL_SECURITY_IDENTITY",
+            }
+            for row in universe
+        ] or [
+            {
+                "symbol": None,
+                "identity_status": FAILED,
+                "status": FAILED,
+                "reason": "IDENTITY_INPUT_READ_OR_CLASSIFICATION_FAILED",
+                "evidence_source": [],
+                "run_excluded": False,
+                "validation_blocking": True,
+                "record_kind": "SYMBOL_IDENTITY",
+                "input_scope": "RUN_IDENTITY_QUALIFICATION",
+                "roles": "HISTORICAL_SECURITY_IDENTITY",
+            }
+        ]
+        universe = []
+    # Existing CIK conflicts remain their established nonblocking exclusion;
+    # expose them in the unified run-level identity report as well.
+    identity_diagnostics.extend(
+        {
+            "symbol": row["symbol"],
+            "identity_status": QUARANTINED,
+            "status": QUARANTINED,
+            "reason": row["identity_conflict_class"],
+            "evidence_source": ["LOCAL_SEC_MASSIVE_CURRENT_IDENTITY"],
+            "evidence_fingerprint": identity_qualification_fingerprint([row]),
+            "run_excluded": True,
+            "validation_blocking": False,
+            "record_kind": "SYMBOL_IDENTITY",
+            "input_scope": "RUN_IDENTITY_QUALIFICATION",
+            "roles": "HISTORICAL_SECURITY_IDENTITY",
+        }
+        for row in security_diagnostics
+        if row.get("quarantine_status")
+    )
+    identity_diagnostics.sort(key=lambda row: row["symbol"] or "")
+    contract["run_identity_qualification_fingerprint"] = reference_digest(
+        {"policy": POLICY, "symbols": identity_diagnostics}
+    )
+    identity_complete = not any(row["validation_blocking"] for row in identity_diagnostics)
+    identity_summary = {
+        "eligible": len(universe),
+        "quarantined": sum(row["identity_status"] == QUARANTINED for row in identity_diagnostics),
+        "verified_outside_run": sum(
+            row["identity_status"] == OUTSIDE for row in identity_diagnostics
+        ),
+        "unresolved_blocking": sum(row["validation_blocking"] for row in identity_diagnostics),
+    }
     symbols = [row["symbol"] for row in universe]
     identities = {row["symbol"]: row for row in universe}
-    contract["identity_epoch_fingerprint"] = reference_digest(
-        {symbol: row["identity_epoch_evidence"] for symbol, row in identities.items()}
-    )
     if candidate_manifest is not None:
         payload = load_manifest(candidate_manifest, contract)
     security_complete = not any(r["validation_blocking"] for r in security_diagnostics)
@@ -340,20 +424,23 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
         raise ValueError(f"{MISMATCH}: security identity qualification changed")
     if not preflight and not security_complete:
         raise ValueError(security.UNAVAILABLE)
+    if not preflight and not identity_complete:
+        raise ValueError(FAILED)
+    qualification_complete = security_complete and identity_complete
     # Resolve the entire static identity boundary before touching historical prices.
     bars = (
         load_daily(database, symbols, sessions[0], days[-1], identity_by_symbol=identities)
-        if security_complete
+        if qualification_complete
         else {}
     )
     history_anchors = (
         load_history_anchors(database, symbols, days[-1], identity_by_symbol=identities)
-        if security_complete
+        if qualification_complete
         else {}
     )
     digest = source_digest(universe, bars, [s for s in sessions if s <= days[-1]], history_anchors)
     if payload is None:
-        if security_complete:
+        if qualification_complete:
             selected, candidates, counts = discover_pairs(
                 universe, bars, sessions, days, config, history_anchors
             )
@@ -364,6 +451,9 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
         counts.update(
             company_security_types_complete=security_complete,
             security_type_diagnostics=security_diagnostics,
+            identity_qualification_complete=identity_complete,
+            identity_qualification=identity_summary,
+            identity_qualification_diagnostics=identity_diagnostics,
         )
         payload = seal_manifest(contract, universe, selected, candidates, counts, digest)
     else:
@@ -379,6 +469,9 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
         counts.update(
             company_security_types_complete=security_complete,
             security_type_diagnostics=security_diagnostics,
+            identity_qualification_complete=identity_complete,
+            identity_qualification=identity_summary,
+            identity_qualification_diagnostics=identity_diagnostics,
         )
         verify_membership(payload, universe, digest, bars, sessions, counts)
     if not preflight and not payload["discovery_counts"]["selection_membership_resolved"]:
@@ -448,7 +541,7 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
                 "provider_session_absence": "NOT_ESTABLISHED",
                 "provider_session_absence_status": "PROVIDER_SESSION_ABSENCE_UNKNOWN",
                 "fetchability": "UNKNOWN" if not present else "NOT_APPLICABLE",
-                "identity_epoch_status": ACTIVE,
+                "identity_epoch_status": session_status(identities[symbol], day),
                 **(
                     {
                         "sic2": selection_gaps[symbol, day]["sic2"],
@@ -502,6 +595,9 @@ def prepare_pairs_data(database, config, start, end, *, candidate_manifest=None,
     coverage.extend(payload["discovery_counts"]["selection_history_diagnostics"])
     coverage.extend(payload["discovery_counts"]["identity_epoch_diagnostics"])
     coverage.extend(security_diagnostics)
+    coverage.extend(
+        row for row in identity_diagnostics if row["run_excluded"] or row["validation_blocking"]
+    )
     observed = [day for (symbol, day), bar in bars.items() if bar and (symbol, day) in required]
     return PreparedPairs(
         start,

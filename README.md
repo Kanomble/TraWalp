@@ -21,11 +21,18 @@ Only the explicit user-run command may access Massive:
 
 It uses `MASSIVE_API_KEY` from the project's normal `.env`/environment mechanism.
 Normal F workflows need no Massive key or reference data. Pairs preflight and
-validation remain local and make no Massive, Alpaca or SEC calls. Manifest V5
+validation remain local and make no Massive, Alpaca or SEC calls. Manifest V7
 binds non-OTC company scope, common-stock classification, SEC issuer/SIC/CIK checks,
 explicit identity quarantine evidence and reference
 fingerprints. `CURRENT_UNIVERSE_ONLY`, `NOT_SURVIVORSHIP_CLEAN` and
 `CURRENT_REFERENCE_SECURITY_TYPE_NOT_PIT` apply together.
+Pairs uses an **identity-qualified research universe**: concrete unresolved
+historical identity risks cause run-global `IDENTITY_QUARANTINED` exclusion before
+SIC2/ADV20/Top-N. Missing epoch rows alone do not cause exclusion, valid verified
+intervals retain precedence, and unknown system states still block preflight.
+This data-quality policy uses no performance/outcome information and does not
+make Pairs fully PIT-clean or survivorship-bias-free. See the
+[qualification policy](docs/pairs-stat-arb-v1-research.md#identity-qualified-research-universe).
 Mapping `MASSIVE_STOCK_TYPES_V2` adds ETS/ETV/structured-product classifications
 and the authoritative `RIGHT / Rights` description. Pairs reference qualification
 and membership fingerprints apply only after the local non-OTC company/valid

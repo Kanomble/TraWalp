@@ -346,7 +346,9 @@ def summary_metadata(prepared, *, preflight):
         "incomplete_calibration_pairs": sum(
             counts[status]
             for status in (
-                "INCOMPLETE_CALIBRATION", "IDENTITY_EPOCH_CROSSING", "IDENTITY_EPOCH_UNKNOWN"
+                "INCOMPLETE_CALIBRATION",
+                "IDENTITY_EPOCH_CROSSING",
+                "IDENTITY_EPOCH_UNKNOWN",
             )
         ),
         "eligible_correlated_pair_sessions": counts["ELIGIBLE"],
@@ -358,8 +360,14 @@ def summary_metadata(prepared, *, preflight):
             and not identity_blocked
             and manifest["discovery_counts"]["selection_membership_resolved"]
             and manifest["discovery_counts"]["company_security_types_complete"]
+            and manifest["discovery_counts"]["identity_qualification_complete"]
         ),
         "manifest_version": manifest["manifest_version"],
+        "research_universe": manifest["research_universe"],
+        "identity_qualification_policy": manifest["identity_qualification_policy"],
+        "run_identity_qualification_fingerprint": manifest[
+            "run_identity_qualification_fingerprint"
+        ],
         "limitations": [
             "CURRENT_UNIVERSE_ONLY",
             "NOT_SURVIVORSHIP_CLEAN",
@@ -451,6 +459,12 @@ def run_pairs_stat_arb_v1(
                     row
                     for row in prepared.coverage
                     if row["input_scope"] == "IDENTITY_EPOCH_REQUIREMENT"
+                ],
+                "identity_qualification": prepared.manifest["discovery_counts"][
+                    "identity_qualification"
+                ],
+                "identity_qualification_diagnostics": prepared.manifest["discovery_counts"][
+                    "identity_qualification_diagnostics"
                 ],
                 "source_fingerprint_inputs": prepared.metadata["source_fingerprint_inputs"],
             },

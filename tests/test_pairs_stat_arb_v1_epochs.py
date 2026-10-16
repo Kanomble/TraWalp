@@ -108,7 +108,7 @@ def test_missing_input_inside_verified_epoch_stays_blocking_and_fetchability_unk
     assert not summary_metadata(prepared, preflight=True)["ready_for_local_validation"]
 
 
-def test_unknown_identity_with_old_and_new_bars_remains_unresolved(tmp_path, config):
+def test_disconnected_bars_alone_do_not_prove_identity_or_trigger_quarantine(tmp_path, config):
     db, sessions, *_ = seed(tmp_path, end=START)
     add_bar(db, "A", date(2021, 1, 4))
     with db.connect() as c:
@@ -117,13 +117,11 @@ def test_unknown_identity_with_old_and_new_bars_remains_unresolved(tmp_path, con
     row = next(r for r in prepared.manifest["universe"] if r["symbol"] == "A")
     assert row["identity_epoch"] is None
     assert epoch_status(row, START) == UNKNOWN
-    assert not any(s == "A" for s, _ in prepared.bars)
-    diagnostic = prepared.manifest["discovery_counts"]["identity_epoch_diagnostics"][0]
-    assert diagnostic["status"] == UNKNOWN and diagnostic["validation_blocking"]
-    assert not prepared.manifest["discovery_counts"]["selection_membership_resolved"]
-    assert not summary_metadata(prepared, preflight=True)["ready_for_local_validation"]
-    with pytest.raises(ValueError, match="SELECTION_MEMBERSHIP_UNRESOLVED"):
-        prepare_pairs_data(db, config, START, START)
+    assert row["identity_status"] == "CURRENT_SECURITY_NO_IDENTITY_WARNING"
+    assert any(s == "A" for s, _ in prepared.bars)
+    assert prepared.manifest["discovery_counts"]["identity_epoch_diagnostics"] == []
+    assert prepared.manifest["discovery_counts"]["selection_membership_resolved"]
+    assert summary_metadata(prepared, preflight=True)["ready_for_local_validation"]
 
 
 @pytest.mark.parametrize("leg", ["A", "B"])
@@ -234,7 +232,7 @@ def test_epoch_evidence_change_invalidates_saved_manifest(tmp_path, config):
         prepare_pairs_data(db, config, START, START, candidate_manifest=manifest)
 
 
-def test_small_report_exports_unknown_identity_requirements(tmp_path, config):
+def test_small_report_distinguishes_ordinary_absent_epochs_from_identity_risks(tmp_path, config):
     db, *_ = seed(tmp_path, end=START)
     with db.connect() as c:
         c.execute("DELETE FROM symbol_identity_epochs")
@@ -242,6 +240,9 @@ def test_small_report_exports_unknown_identity_requirements(tmp_path, config):
         db, config, START, START, tmp_path, stem="unknown", preflight=True
     )
     doc = json.loads(paths["daily_requirements"].read_text())
-    assert len(doc["identity_epoch_requirements"]) == 2
+    assert doc["identity_epoch_requirements"] == []
+    assert doc["identity_qualification"]["eligible"] == 2
+    assert doc["identity_qualification"]["quarantined"] == 0
+    assert doc["identity_qualification"]["unresolved_blocking"] == 0
     assert doc["required_sessions"] == []
-    assert not summary["ready_for_local_validation"]
+    assert summary["ready_for_local_validation"]
