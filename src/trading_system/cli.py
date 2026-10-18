@@ -616,6 +616,15 @@ def _parser() -> argparse.ArgumentParser:
                 action="store_true",
                 help="Explicitly repeat local historical candidate discovery",
             )
+    feasibility = commands.add_parser(
+        "research-pairs-v2-feasibility",
+        help="Local/read-only DEVELOPMENT_SAMPLE relationship study; no trading simulation",
+    )
+    feasibility.add_argument("--start", type=date.fromisoformat, required=True)
+    feasibility.add_argument("--end", type=date.fromisoformat, required=True)
+    feasibility.add_argument("--output-stem", required=True)
+    feasibility.add_argument("--candidate-manifest", type=Path)
+    feasibility.add_argument("--workers", type=int, default=4, choices=range(1, 9))
     universe_audit = commands.add_parser(
         "audit-universe-provenance",
         help="Report local historical-universe evidence without fetching data",
@@ -692,6 +701,45 @@ def main(argv: list[str] | None = None) -> int:
     ):
         parser.error("--champion cannot be combined with --variant or --strategy")
     configure_logging(args.verbose)
+    if args.command == "research-pairs-v2-feasibility":
+        from trading_system.backtest.pairs_v2_feasibility import offline, run, validate_period
+
+        try:
+            validate_period(args.start, args.end)
+            with offline():
+                settings = load_settings(args.config)
+                summary = run(
+                    settings.strategy.storage.database_path,
+                    settings.strategy.storage.reports_path,
+                    args.start,
+                    args.end,
+                    stem=args.output_stem,
+                    manifest_path=args.candidate_manifest,
+                    workers=args.workers,
+                    progress=lambda message: print(message, flush=True),
+                )
+            print(
+                json.dumps(
+                    {
+                        key: summary[key]
+                        for key in (
+                            "sample",
+                            "unique_pairs_tested",
+                            "pair_sessions_tested",
+                            "insufficient_history_count",
+                            "numerical_failure_count",
+                            "runtime_seconds",
+                            "network_used",
+                            "database_writes",
+                        )
+                    },
+                    indent=2,
+                )
+            )
+            return 0
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"Pairs V2 feasibility refused: {exc}", file=sys.stderr)
+            return 2
     if args.command == "recover-massive-rate-limit":
         from trading_system.data.massive_reference import _REQUEST_LIMITER, MassiveReferenceError
 

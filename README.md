@@ -1,5 +1,15 @@
 # TraWalp Trading System
 
+## Local Pairs V2 feasibility research
+
+`research-pairs-v2-feasibility` examines the frozen V1 candidate universe with a
+single 252-session canonical log-price OLS/Engle-Granger contract. It is local,
+read-only DEVELOPMENT_SAMPLE research for 2024-01-02 through 2026-08-12, with
+no correlation gate, provider access, PnL selection or trading simulation.
+It does not define or backtest V2. See the
+[preregistered contract and measured feasibility report](docs/pairs-v2-feasibility.md)
+for the explicit command, persistence/stability diagnostics and limitations.
+
 ## Massive security reference (Stocks Basic Free)
 
 Massive provides current security classification only; Alpaca provides prices and

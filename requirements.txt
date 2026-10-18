@@ -19,3 +19,6 @@ ruff>=0.11,<1
 
 # Build backend
 hatchling
+
+# Optional research statistics (pyproject.toml extra: research)
+statsmodels>=0.14.6,<0.15
