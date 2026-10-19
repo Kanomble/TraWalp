@@ -1,0 +1,23 @@
+area,item,status,severity,evidence,required_action,why_it_matters
+Identity,"Frozen F identity,execution guard,cutoff",already_controlled,ALREADY_DONE,C1;C2,Carry exact identity into prospective freeze,Avoid legacy C/rejected overlays
+Portfolio,"C1 sizing,risk/cash caps,score-symbol priority,re-entry",already_controlled,ALREADY_DONE,C1;C2;R1,Reuse economic contract;map broker rounding,No new portfolio architecture needed
+Economic edge,Positive modeled-baseline portfolio path,already_controlled,ALREADY_DONE,R1;R2;R3;R5,Treat as development only,"Supports preparation,not independent alpha proof"
+Daily data policy,"CC-01 official sessions,missing/stale held/entry bars",still_open,BLOCKER,D1::CC-01;C2;C4,Define fail-closed/reconciliation contract and synthetic fixtures before measurable execution,Otherwise hold/fills depend on local gaps
+Reproducibility and state,Durable prospective freeze and decision/intent/position journal,still_open,BLOCKER,D1::section8;C1;C2,"Persist source/config/input hashes,knowledge cutoff,signal,C1 state,stop/target/hold,replay",Forward uninterpretable with drift/duplicate actions
+Execution contract,"Broker sizing/order semantics,idempotency,fill-position reconciliation",still_open,BLOCKER,D1::section8;C2::_open_position,"Specify venue/account,pre-open sizing,fractions,stop/target/session10close,partial/reject/restart contracts",Before paper orders;signal-only shadow may start without order submission
+Costs,2X/3X/commission and break-even bps,unknown,IMPORTANT,D3;R3-cost;missing cost rows,Recover existing evidence only;otherwise retain UNKNOWN and measure shadow/paper costs,Baseline positive does not prove stress margin
+Forward,Genuine post-freeze evidence,not_available,IMPORTANT,MISSING-F-forward;R5;R2,Prospectively freeze and observe exact dates/sessions/trades/costs,Research holdout/tail are not current forward
+Concentration,"Exact LOSO missing,NVDA39.59%,top5 89.15%",partially_controlled,IMPORTANT,R2;MISSING-F-exact-loso,Recover existing LOSO if available;disclose/monitor without blacklists,Attribution does not reconstruct allocation
+Temporal/regime,"Negative early periods,thin bear sample",partially_controlled,IMPORTANT,R3;R5;R2,Predefine prospective reviews;no regime gate,No universal temporal/regime robustness
+Historical provenance,Missing run code/data revision and bundles,partially_controlled,IMPORTANT,R1;R2;D3,"Archive hashes,recover existing reports,freeze future inputs",PARTIALLY_REPRODUCIBLE
+Fundamental PIT,Same-date SEC knowledge and historic raw context,partially_controlled,IMPORTANT,C3;D1::CC-03;D8,"Log observed-at/knowledge cutoff,flag unknown same-date availability",filed date does not prove pre-signal availability
+Universe,Current membership/SIC/survivorship,still_open,IMPORTANT,C3;D3;D7;R1,Disclose bias;snapshot prospective eligibility/identity,"Limits history,not alone shadow blocker"
+Universe,Perfect authoritative survivorship-clean historical universe,still_open,NICE_TO_HAVE,D3;D7,Separate later data project if warranted,Not prerequisite of controlled paper observation
+Identity,Held security continuity/symbol changes,partially_controlled,IMPORTANT,R1;C3;D7,"Map actual instrument,quarantine unresolved changes prospectively",Pairs gates not automatically applied to F
+Corporate actions,Adjusted signals versus executable prices/cash,partially_controlled,IMPORTANT,R1;D1,Define split/dividend/order-price translation and reconciliation,Adjusted all is not holdings event ledger
+Execution measurement,"Spread,impact,partial fills,timing",not_modeled,IMPORTANT,C2;R1;D1,Measure planned/reference/fill prices and unfilled/partial outcomes,Direct purpose of next experimental stage
+Broker mapping,Alpaca IEX versus actual German/EU broker,unknown,IMPORTANT,README;R1;D1,Verify instruments/eligibility/types/fractions/fees/feed times at chosen venue,Alpaca tradable is not actual broker eligibility
+Capital,"Account size/currency,cash,FX,rounding/fees",partially_controlled,IMPORTANT,R1;C2,"Declare reference account,preserve C1/1% risk economics",Normalized100 is not operational capital
+Short and borrow,Long-only F,not_relevant,ALREADY_DONE,C1;C2,NONE,No short/borrow blocker
+Benchmark,SPY exposure and total-return/trade-beta proxy,partially_controlled,IMPORTANT,R1;R2;C2,Keep methodology explicit;no exposure-scaled alpha claims,Invested session share differs from capital exposure
+Status,Pairs ACTIVE versus final research freeze,still_open,IMPORTANT,R9;R10;R11;C1;D7,FOLLOW_UP align registry/guide separately;no optimization/V2/V3,Stale ACTIVE must not reopen rejected branch

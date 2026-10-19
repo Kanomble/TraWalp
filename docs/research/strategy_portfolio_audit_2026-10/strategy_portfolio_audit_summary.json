@@ -1,0 +1,1622 @@
+{
+  "audit_name": "strategy_portfolio_audit_2026-10",
+  "audit_date": "2026-10-19",
+  "generated_at_utc": "2026-10-19T07:05:32.227170+00:00",
+  "source_commit": "da2370e1be7c262bda5c4342926ace394d94c517",
+  "remote_main_verification": {
+    "method": "Read-only GitHub GET branch main",
+    "url": "https://api.github.com/repos/Kanomble/TraWalp/branches/main",
+    "sha": "da2370e1be7c262bda5c4342926ace394d94c517",
+    "date_utc": "2026-10-19",
+    "rechecked_at_completion": true
+  },
+  "scope": {
+    "new_economic_backtests": 0,
+    "research_runs": 0,
+    "provider_calls": 0,
+    "database_opened": false,
+    "market_or_research_data_changed": false,
+    "historical_reports_rewritten": false,
+    "registry_changed": false,
+    "production_code_changed": false,
+    "preexisting_staged_file_preserved": ".codex/config.toml",
+    "temporary_artifact_builder_retained": false
+  },
+  "evidence_hierarchy": [
+    "GENUINE_FORWARD_AFTER_PROVEN_FREEZE",
+    "FROZEN_INDEPENDENT_VALIDATION_TEMPORAL_INDEPENDENCE_SEPARATE",
+    "ROBUSTNESS_EXACT_LOSO_REGIME_EXECUTED_COST_TESTS",
+    "EXECUTION_FEASIBILITY_CONTROLLED_COMPARISONS",
+    "DEVELOPMENT_BACKTEST",
+    "DESCRIPTIVE_ATTRIBUTION",
+    "EXPLORATORY_OR_CODE_ONLY"
+  ],
+  "comparison_semantics": "NOT_DIRECTLY_COMPARABLE:portfolio CAGR versus signal/pair/session entry-notional expectancy;no numeric total score",
+  "primary_candidate": "F/configured/C1",
+  "champion_decision": "KEEP_F_AS_PRIMARY_CANDIDATE",
+  "paper_trading_decision": "READY_FOR_PAPER_TRADING_PREPARATION",
+  "ranking": [
+    {
+      "rank": 1,
+      "strategy": "F/configured/C1",
+      "reason": "Positive saved baseline,defined C1;completed independent alternatives net negative;excluded/archived/missing variants unranked"
+    }
+  ],
+  "readiness": {
+    "BACKTEST_READY": "HISTORICAL_SEMANTICS_WITH_DISCLOSED_LIMITS",
+    "PAPER_TRADING_READY": false,
+    "SMALL_LIVE_READY": false,
+    "PRODUCTION_READY": false,
+    "READY_FOR_PAPER_TRADING_PREPARATION": true
+  },
+  "frozen_champion_contract": {
+    "validation_target": "champion-f",
+    "forward_validation_target": "champion-f-forward",
+    "label": "F/configured",
+    "variant": "F",
+    "preset": "configured",
+    "development_cutoff": "2026-08-12",
+    "max_positions": 1,
+    "max_position_pct": 1.0,
+    "risk_per_trade": 0.01,
+    "atr_stop_multiple": 2.0,
+    "atr_period": 14,
+    "max_stop_loss_pct": 0.1,
+    "profit_target_pct": 0.12,
+    "hard_max_hold_sessions": 10,
+    "slippage_bps": 5.0,
+    "commission_bps": 0.0
+  },
+  "genuine_forward": {
+    "forward_start": "NOT_AVAILABLE",
+    "forward_end": "NOT_AVAILABLE",
+    "number_of_sessions": "NOT_AVAILABLE",
+    "number_of_trades": "NOT_AVAILABLE",
+    "performance": "NOT_AVAILABLE",
+    "cost_assumptions": "NOT_AVAILABLE",
+    "frozen_before_period": "NOT_AVAILABLE",
+    "qualifying_artifacts_found": 0
+  },
+  "reproducibility": "PARTIALLY_REPRODUCIBLE",
+  "historical_provenance": {
+    "R1_generated_at": "2026-09-16T07:26:55.627118+00:00",
+    "R1_code_revision": "NOT_AVAILABLE",
+    "R1_data_fingerprint": "NOT_AVAILABLE",
+    "R2_strategy_config_fingerprint": "fe30248a96ff8e21b092772d9dabe84a1e648de317eb6799633d116578cf2f51",
+    "R2_runtime_fingerprint": "5eca70eafdabb767e7631e12bb77766765d50bc5266e1d4760312bb123dca218",
+    "R2_database_source_fingerprint": "b6d84bc778c3c3bb34476265844d1319750adbe108b99f2931df740f333ff048",
+    "current_database_fingerprint_recomputed": false,
+    "source_commit_does_not_identify_historical_run_revision": true
+  },
+  "cost_robustness": {
+    "baseline_positive": true,
+    "slippage_bps_per_fill": 5,
+    "commission_bps": 0,
+    "net_return": 0.4081749815210376,
+    "net_expectancy_capital_units_per_trade": 0.4485439357374033,
+    "initial_capital": 100,
+    "net_profit_factor": 1.9620081356636008,
+    "cost_break_even_bps": "NOT_AVAILABLE",
+    "cost_2x": "NOT_AVAILABLE",
+    "cost_3x": "NOT_AVAILABLE",
+    "commission_stress": "NOT_AVAILABLE",
+    "R3_csv_rows": 3,
+    "R3_csv_cases": [
+      "BASELINE"
+    ]
+  },
+  "f_saved_subwindow_stability": {
+    "I0_FULL": {
+      "monthly": [
+        {
+          "period": "2022-03",
+          "sessions": "17",
+          "return": "0.006295149690298096",
+          "positions": "1",
+          "max_drawdown": "-0.009753263288589165"
+        },
+        {
+          "period": "2022-04",
+          "sessions": "20",
+          "return": "-0.012041460818843719",
+          "positions": "2",
+          "max_drawdown": "-0.015634383134158325"
+        },
+        {
+          "period": "2022-05",
+          "sessions": "21",
+          "return": "-0.00016225434769367997",
+          "positions": "2",
+          "max_drawdown": "-0.012078892504554406"
+        },
+        {
+          "period": "2022-06",
+          "sessions": "21",
+          "return": "-0.02753056630324857",
+          "positions": "3",
+          "max_drawdown": "-0.02753056630324857"
+        },
+        {
+          "period": "2022-07",
+          "sessions": "20",
+          "return": "-0.010127514948978456",
+          "positions": "1",
+          "max_drawdown": "-0.010793671342242961"
+        },
+        {
+          "period": "2022-08",
+          "sessions": "23",
+          "return": "0.007554947990121574",
+          "positions": "2",
+          "max_drawdown": "-0.012593425657087987"
+        },
+        {
+          "period": "2022-09",
+          "sessions": "21",
+          "return": "0.0",
+          "positions": "0",
+          "max_drawdown": "0.0"
+        },
+        {
+          "period": "2022-10",
+          "sessions": "21",
+          "return": "-0.0007314312684174595",
+          "positions": "0",
+          "max_drawdown": "-0.002884257802369228"
+        },
+        {
+          "period": "2022-11",
+          "sessions": "21",
+          "return": "-0.005174079319503422",
+          "positions": "2",
+          "max_drawdown": "-0.01625572170945333"
+        },
+        {
+          "period": "2022-12",
+          "sessions": "21",
+          "return": "-0.003635311960291987",
+          "positions": "2",
+          "max_drawdown": "-0.013970382592816133"
+        },
+        {
+          "period": "2023-01",
+          "sessions": "20",
+          "return": "0.004387431917797668",
+          "positions": "3",
+          "max_drawdown": "-0.012809430776774766"
+        },
+        {
+          "period": "2023-02",
+          "sessions": "19",
+          "return": "0.0006558707703885336",
+          "positions": "2",
+          "max_drawdown": "-0.013283079721663538"
+        },
+        {
+          "period": "2023-03",
+          "sessions": "23",
+          "return": "0.033448664542839346",
+          "positions": "2",
+          "max_drawdown": "-0.007349480585741031"
+        },
+        {
+          "period": "2023-04",
+          "sessions": "19",
+          "return": "-0.005495076369746998",
+          "positions": "2",
+          "max_drawdown": "-0.012998501509186577"
+        },
+        {
+          "period": "2023-05",
+          "sessions": "22",
+          "return": "0.05828156977520327",
+          "positions": "4",
+          "max_drawdown": "-0.02051625467055951"
+        },
+        {
+          "period": "2023-06",
+          "sessions": "21",
+          "return": "-0.0011661240187986754",
+          "positions": "2",
+          "max_drawdown": "-0.020694530267643785"
+        },
+        {
+          "period": "2023-07",
+          "sessions": "20",
+          "return": "-0.008178150210431001",
+          "positions": "4",
+          "max_drawdown": "-0.021944202996830642"
+        },
+        {
+          "period": "2023-08",
+          "sessions": "23",
+          "return": "-0.0005369589719620427",
+          "positions": "3",
+          "max_drawdown": "-0.018360330755097465"
+        },
+        {
+          "period": "2023-09",
+          "sessions": "20",
+          "return": "-0.010632155621706385",
+          "positions": "2",
+          "max_drawdown": "-0.018716259625413456"
+        },
+        {
+          "period": "2023-10",
+          "sessions": "22",
+          "return": "0.0024772376051276357",
+          "positions": "3",
+          "max_drawdown": "-0.02207231056855996"
+        },
+        {
+          "period": "2023-11",
+          "sessions": "21",
+          "return": "0.012512450355325777",
+          "positions": "2",
+          "max_drawdown": "-0.004769583755853568"
+        },
+        {
+          "period": "2023-12",
+          "sessions": "20",
+          "return": "0.009931505005174257",
+          "positions": "2",
+          "max_drawdown": "-0.005677432615448286"
+        },
+        {
+          "period": "2024-01",
+          "sessions": "21",
+          "return": "0.04599032157244065",
+          "positions": "3",
+          "max_drawdown": "-0.006816673307907806"
+        },
+        {
+          "period": "2024-02",
+          "sessions": "20",
+          "return": "0.035860344704759184",
+          "positions": "3",
+          "max_drawdown": "-0.012932208160916447"
+        },
+        {
+          "period": "2024-03",
+          "sessions": "20",
+          "return": "0.014479778543016186",
+          "positions": "3",
+          "max_drawdown": "-0.01078376820963578"
+        },
+        {
+          "period": "2024-04",
+          "sessions": "22",
+          "return": "0.02326415015872918",
+          "positions": "3",
+          "max_drawdown": "-0.009820596798026604"
+        },
+        {
+          "period": "2024-05",
+          "sessions": "22",
+          "return": "0.026491979160864654",
+          "positions": "2",
+          "max_drawdown": "-0.0063713569258703195"
+        },
+        {
+          "period": "2024-06",
+          "sessions": "19",
+          "return": "0.028945593527888613",
+          "positions": "2",
+          "max_drawdown": "-0.008746811204501825"
+        },
+        {
+          "period": "2024-07",
+          "sessions": "22",
+          "return": "-0.019108027083077683",
+          "positions": "3",
+          "max_drawdown": "-0.03079591502200696"
+        },
+        {
+          "period": "2024-08",
+          "sessions": "8",
+          "return": "-0.003663300003499681",
+          "positions": "2",
+          "max_drawdown": "-0.013651341869850286"
+        }
+      ],
+      "monthly_sign_counts": {
+        "positive": 15,
+        "negative": 14,
+        "zero": 1,
+        "sessions": 610
+      },
+      "yearly": [
+        {
+          "period": "2022",
+          "sessions": "206",
+          "return": "-0.04508387669114444",
+          "positions": "15",
+          "max_drawdown": "-0.06375065201232144"
+        },
+        {
+          "period": "2023",
+          "sessions": "250",
+          "return": "0.09774476323363768",
+          "positions": "31",
+          "max_drawdown": "-0.03882380204879177"
+        },
+        {
+          "period": "2024",
+          "sessions": "154",
+          "return": "0.16100825455228085",
+          "positions": "21",
+          "max_drawdown": "-0.041288491955861484"
+        }
+      ],
+      "chronological_subperiods": [
+        {
+          "period": "THIRD_1",
+          "start": "2022-03-09",
+          "end": "2022-12-27",
+          "sessions": "203",
+          "return": "-0.047459598378248646",
+          "positions": "15",
+          "max_drawdown": "-0.06375065201232144"
+        },
+        {
+          "period": "THIRD_2",
+          "start": "2022-12-28",
+          "end": "2023-10-19",
+          "sessions": "204",
+          "return": "0.08703457337502685",
+          "positions": "26",
+          "max_drawdown": "-0.03882380204879177"
+        },
+        {
+          "period": "THIRD_3",
+          "start": "2023-10-20",
+          "end": "2024-08-12",
+          "sessions": "203",
+          "return": "0.17537147175620338",
+          "positions": "26",
+          "max_drawdown": "-0.041288491955861484"
+        }
+      ]
+    },
+    "L0_FORWARD": {
+      "monthly": [
+        {
+          "period": "2024-08",
+          "sessions": "14",
+          "return": "0.008288931959624213",
+          "positions": "1",
+          "max_drawdown": "-0.008249199531114915"
+        },
+        {
+          "period": "2024-09",
+          "sessions": "20",
+          "return": "0.003246341889787674",
+          "positions": "2",
+          "max_drawdown": "-0.006624231627944233"
+        },
+        {
+          "period": "2024-10",
+          "sessions": "23",
+          "return": "-0.010367880833751508",
+          "positions": "3",
+          "max_drawdown": "-0.015985065801408127"
+        },
+        {
+          "period": "2024-11",
+          "sessions": "20",
+          "return": "0.005885892868956244",
+          "positions": "2",
+          "max_drawdown": "-0.015256672398223925"
+        },
+        {
+          "period": "2024-12",
+          "sessions": "21",
+          "return": "0.00706874269143265",
+          "positions": "3",
+          "max_drawdown": "-0.013216052413744128"
+        },
+        {
+          "period": "2025-01",
+          "sessions": "20",
+          "return": "-0.0008493143132493053",
+          "positions": "4",
+          "max_drawdown": "-0.0434937857258183"
+        },
+        {
+          "period": "2025-02",
+          "sessions": "19",
+          "return": "-0.013830076384762746",
+          "positions": "2",
+          "max_drawdown": "-0.01750578880719511"
+        },
+        {
+          "period": "2025-03",
+          "sessions": "21",
+          "return": "0.004944250241512682",
+          "positions": "2",
+          "max_drawdown": "-0.010555620989648795"
+        },
+        {
+          "period": "2025-04",
+          "sessions": "21",
+          "return": "-0.0016729996365872912",
+          "positions": "4",
+          "max_drawdown": "-0.025531092142653478"
+        },
+        {
+          "period": "2025-05",
+          "sessions": "21",
+          "return": "0.02068270589241994",
+          "positions": "3",
+          "max_drawdown": "-0.005721204597846086"
+        },
+        {
+          "period": "2025-06",
+          "sessions": "20",
+          "return": "0.02477966086333483",
+          "positions": "2",
+          "max_drawdown": "-0.0063790352442951725"
+        },
+        {
+          "period": "2025-07",
+          "sessions": "22",
+          "return": "0.009411244880818792",
+          "positions": "3",
+          "max_drawdown": "-0.0163463353696226"
+        },
+        {
+          "period": "2025-08",
+          "sessions": "21",
+          "return": "0.022151125315178266",
+          "positions": "2",
+          "max_drawdown": "-0.005168978639575328"
+        },
+        {
+          "period": "2025-09",
+          "sessions": "21",
+          "return": "0.0075906639398217735",
+          "positions": "2",
+          "max_drawdown": "-0.01113840654109255"
+        },
+        {
+          "period": "2025-10",
+          "sessions": "23",
+          "return": "-0.005252248765869272",
+          "positions": "3",
+          "max_drawdown": "-0.012136550763118814"
+        },
+        {
+          "period": "2025-11",
+          "sessions": "19",
+          "return": "0.016541760044865628",
+          "positions": "2",
+          "max_drawdown": "-0.0057974088651269184"
+        },
+        {
+          "period": "2025-12",
+          "sessions": "22",
+          "return": "-0.0043130325175859685",
+          "positions": "3",
+          "max_drawdown": "-0.01913820660697818"
+        },
+        {
+          "period": "2026-01",
+          "sessions": "20",
+          "return": "0.03894990512616303",
+          "positions": "3",
+          "max_drawdown": "-0.004330710045564734"
+        },
+        {
+          "period": "2026-02",
+          "sessions": "19",
+          "return": "0.042826095652102936",
+          "positions": "2",
+          "max_drawdown": "-0.004345362659508134"
+        },
+        {
+          "period": "2026-03",
+          "sessions": "22",
+          "return": "-0.011259619523392272",
+          "positions": "6",
+          "max_drawdown": "-0.02275634256964898"
+        },
+        {
+          "period": "2026-04",
+          "sessions": "21",
+          "return": "0.04244264704237999",
+          "positions": "4",
+          "max_drawdown": "-0.007901864832215222"
+        },
+        {
+          "period": "2026-05",
+          "sessions": "20",
+          "return": "0.0008885866626087147",
+          "positions": "4",
+          "max_drawdown": "-0.020375183052877777"
+        },
+        {
+          "period": "2026-06",
+          "sessions": "21",
+          "return": "-0.006121335295911523",
+          "positions": "3",
+          "max_drawdown": "-0.016979463357719715"
+        },
+        {
+          "period": "2026-07",
+          "sessions": "22",
+          "return": "0.009470682296568",
+          "positions": "3",
+          "max_drawdown": "-0.013908420721038595"
+        },
+        {
+          "period": "2026-08",
+          "sessions": "8",
+          "return": "-0.018171313128579558",
+          "positions": "3",
+          "max_drawdown": "-0.020066960185054827"
+        }
+      ],
+      "monthly_sign_counts": {
+        "positive": 16,
+        "negative": 9,
+        "zero": 0,
+        "sessions": 501
+      },
+      "yearly": [
+        {
+          "period": "2024",
+          "sessions": "98",
+          "return": "0.014084631319146501",
+          "positions": "11",
+          "max_drawdown": "-0.021081335725867123"
+        },
+        {
+          "period": "2025",
+          "sessions": "250",
+          "return": "0.08229881200418632",
+          "positions": "32",
+          "max_drawdown": "-0.07092925216804413"
+        },
+        {
+          "period": "2026",
+          "sessions": "153",
+          "return": "0.10100545825492846",
+          "positions": "28",
+          "max_drawdown": "-0.039913425722316154"
+        }
+      ],
+      "chronological_subperiods": [
+        {
+          "period": "THIRD_1",
+          "start": "2024-08-13",
+          "end": "2025-04-11",
+          "sessions": "167",
+          "return": "-0.004729564603705105",
+          "positions": "22",
+          "max_drawdown": "-0.07092925216804413"
+        },
+        {
+          "period": "THIRD_2",
+          "start": "2025-04-14",
+          "end": "2025-12-10",
+          "sessions": "167",
+          "return": "0.11852459049126818",
+          "positions": "19",
+          "max_drawdown": "-0.017100511923676343"
+        },
+        {
+          "period": "THIRD_3",
+          "start": "2025-12-11",
+          "end": "2026-08-12",
+          "sessions": "167",
+          "return": "0.08548597060958807",
+          "positions": "30",
+          "max_drawdown": "-0.039913425722316154"
+        }
+      ]
+    }
+  },
+  "candidate_evidence_cards": [
+    {
+      "strategy": "F/configured/C1",
+      "family": "F/configured/C1",
+      "current_status": "CHAMPION",
+      "candidate_type": "PRIMARY_STRATEGY_CANDIDATE",
+      "economic_hypothesis": "Quality/Value with persistent strength near 52-week highs; Daily configured C1",
+      "development_sample": {
+        "start": "2024-01-02",
+        "end": "2026-08-12",
+        "sessions": 655,
+        "classification": "DEVELOPMENT",
+        "additional_windows": "2022-03-09/2024-08-12;2024-08-13/2026-08-12 known history"
+      },
+      "independent_validation_available": "NOT_AVAILABLE; R3/R4/R5 known historical controlled comparisons",
+      "forward_holdout": {
+        "forward_start": "NOT_AVAILABLE",
+        "forward_end": "NOT_AVAILABLE",
+        "number_of_sessions": "NOT_AVAILABLE",
+        "number_of_trades": "NOT_AVAILABLE",
+        "performance": "NOT_AVAILABLE",
+        "cost_assumptions": "NOT_AVAILABLE",
+        "frozen_before_period": "NOT_AVAILABLE",
+        "qualifying_artifacts_found": 0
+      },
+      "trade_count": 91,
+      "return_or_expectancy": {
+        "portfolio_total_return": 0.4081749815210376,
+        "cagr": 0.14018320636804416,
+        "expectancy_capital_units_per_trade": 0.4485439357374033,
+        "initial_capital": 100,
+        "average_position_return": 0.024434166890632474
+      },
+      "profit_factor": 1.9620081356636008,
+      "drawdown": -0.07092925216804391,
+      "hit_rate": 0.5714285714285714,
+      "stability": "MODERATE: early negative periods, later positive; complete R1 calendar bundle missing",
+      "cost_sensitivity": "UNKNOWN: positive5bps/0;2X/3X/commission/bps break-even NOT_AVAILABLE",
+      "concentration": {
+        "symbols": 18,
+        "top_1_symbol": "NVDA",
+        "top_1_net_pnl_share": 0.3959383539717428,
+        "top_5_net_pnl_share": 0.8915231914201118,
+        "reentries": 73,
+        "reentries_without_fresh_trigger": 43
+      },
+      "loso_robustness": "UNKNOWN / MISSING_ARTIFACT exact rerun",
+      "regime_robustness": "WEAK:83/91 above SMA200;8 below;post-hoc",
+      "execution_realism": "WEAK:Daily OHLC,fractional full fills,5bps;CC-01/broker contract open",
+      "data_pit_quality": "CURRENT_UNIVERSE_ONLY / NOT_SURVIVORSHIP_CLEAN",
+      "known_methodological_biases": [
+        "current universe/SIC",
+        "same-date filing availability",
+        "historical raw/adjustment versions incomplete",
+        "development reuse",
+        "C1 and repeated-symbol dependence"
+      ],
+      "known_blockers": [
+        "CC-01 official-session/missing/stale Daily policy",
+        "durable prospective freeze and decision/intent/position state",
+        "broker/order contract and reconciliation before orders"
+      ],
+      "portfolio_defined": "YES_RESEARCH_C1_ALLOCATOR",
+      "paper_trading_readiness": "READY_FOR_PREPARATION_ONLY",
+      "decision": "KEEP_F_AS_PRIMARY_CANDIDATE",
+      "rank": 1,
+      "dimensions": {
+        "A_Economic_Edge": "MODERATE",
+        "B_Temporal_Stability": "MODERATE",
+        "C_Cross_sectional_Robustness": "WEAK",
+        "D_Cost_Robustness": "UNKNOWN",
+        "E_Concentration_Risk": "WEAK",
+        "F_Market_Regime_Dependence": "WEAK",
+        "G_Data_Integrity": "MODERATE",
+        "H_PIT_Survivorship_Quality": "WEAK",
+        "I_Execution_Realism": "WEAK",
+        "J_Forward_Evidence": "UNKNOWN",
+        "K_Portfolio_Definition": "STRONG",
+        "L_Operational_Readiness": "WEAK"
+      },
+      "sources": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "D1",
+        "D3",
+        "C1",
+        "C2",
+        "C3"
+      ],
+      "research_ids": [
+        "SCREEN-F"
+      ],
+      "strategy_variant": "QUALITY_VALUE_MOMENTUM (F)",
+      "position_management_preset": "configured"
+    },
+    {
+      "strategy": "ORB-V1-15M-LONG",
+      "family": "research-orb-v1",
+      "current_status": "REJECTED",
+      "candidate_type": "INDEPENDENT_STRATEGY_EXCLUDED",
+      "economic_hypothesis": "Opening-range breakout next-native-bar long;range-low stop;session close",
+      "development_sample": {
+        "start": "2024-01-02",
+        "end": "2026-08-12",
+        "sessions": 655,
+        "classification": "FROZEN_HISTORICAL_VALIDATION_NOT_TEMPORAL_FORWARD"
+      },
+      "independent_validation_available": "YES_COMPLETE_FROZEN_PRE_OUTCOME_HYPOTHESIS; genuine temporal OOS not established",
+      "forward_holdout": {
+        "forward_start": "NOT_AVAILABLE",
+        "forward_end": "NOT_AVAILABLE",
+        "number_of_sessions": "NOT_AVAILABLE",
+        "number_of_trades": "NOT_AVAILABLE",
+        "performance": "NOT_AVAILABLE",
+        "cost_assumptions": "NOT_AVAILABLE",
+        "frozen_before_period": "NOT_AVAILABLE",
+        "qualifying_artifacts_found": 0
+      },
+      "trade_count": 35331,
+      "return_or_expectancy": {
+        "gross_unit_notional_mean": 0.00020452837167104801,
+        "net_unit_notional_mean": -0.000795176304362497,
+        "unit": "signal_entry_notional"
+      },
+      "profit_factor": 0.8322652037751895,
+      "drawdown": "NOT_AVAILABLE",
+      "hit_rate": 0.4196880926098893,
+      "stability": "FAILED:all calendar years and thirds net negative",
+      "cost_sensitivity": "FAILED_AT_BASELINE5bps/0;extra stress NOT_AVAILABLE",
+      "concentration": {
+        "unique_traded_symbols": 295,
+        "top_1_symbol_share_of_total_net_pnl": null,
+        "top_5_symbol_share_of_total_net_pnl": null,
+        "top_10_symbol_share_of_total_net_pnl": null
+      },
+      "loso_robustness": "NOT_AVAILABLE",
+      "regime_robustness": "WEAK_DIAGNOSTIC_ONLY",
+      "execution_realism": "PARTIAL_NATIVE15M,no partial fills/portfolio",
+      "data_pit_quality": "CURRENT_UNIVERSE_ONLY / NOT_SURVIVORSHIP_CLEAN",
+      "known_methodological_biases": [
+        "current universe/classification",
+        "known historical sample"
+      ],
+      "known_blockers": [
+        "non-positive baseline net edge",
+        "portfolio allocator undefined",
+        "genuine forward missing"
+      ],
+      "portfolio_defined": "NO",
+      "paper_trading_readiness": "NOT_READY_REJECTED_OR_FROZEN",
+      "decision": "REJECTED_DO_NOT_PROMOTE",
+      "rank": "NOT_AVAILABLE",
+      "dimensions": {
+        "A_Economic_Edge": "FAILED",
+        "B_Temporal_Stability": "FAILED",
+        "C_Cross_sectional_Robustness": "WEAK",
+        "D_Cost_Robustness": "FAILED",
+        "E_Concentration_Risk": "UNKNOWN",
+        "F_Market_Regime_Dependence": "WEAK",
+        "G_Data_Integrity": "MODERATE",
+        "H_PIT_Survivorship_Quality": "WEAK",
+        "I_Execution_Realism": "WEAK",
+        "J_Forward_Evidence": "UNKNOWN",
+        "K_Portfolio_Definition": "WEAK",
+        "L_Operational_Readiness": "WEAK"
+      },
+      "sources": [
+        "R6",
+        "D6",
+        "C1"
+      ],
+      "research_ids": [
+        "ORB-V1-15M-LONG"
+      ],
+      "strategy_variant": "INDEPENDENT_NO_ENUM",
+      "position_management_preset": "INDEPENDENT_FROZEN_DEFINITION"
+    },
+    {
+      "strategy": "PAIRS-STAT-ARB-V1-DAILY",
+      "family": "research-pairs-stat-arb-v1",
+      "current_status": "ACTIVE_CODE_BUT_RESEARCH_REJECTED_FROZEN",
+      "candidate_type": "INDEPENDENT_STRATEGY_EXCLUDED",
+      "economic_hypothesis": "Correlated same-SIC2 raw price-ratio divergence reverts;dollar-neutral50/50",
+      "development_sample": {
+        "start": "2024-01-02",
+        "end": "2026-08-12",
+        "sessions": 655,
+        "classification": "FROZEN_HISTORICAL_VALIDATION_NOT_TEMPORAL_FORWARD"
+      },
+      "independent_validation_available": "YES_COMPLETE_FROZEN_PRE_OUTCOME_HYPOTHESIS; genuine temporal OOS not established",
+      "forward_holdout": {
+        "forward_start": "NOT_AVAILABLE",
+        "forward_end": "NOT_AVAILABLE",
+        "number_of_sessions": "NOT_AVAILABLE",
+        "number_of_trades": "NOT_AVAILABLE",
+        "performance": "NOT_AVAILABLE",
+        "cost_assumptions": "NOT_AVAILABLE",
+        "frozen_before_period": "NOT_AVAILABLE",
+        "qualifying_artifacts_found": 0
+      },
+      "trade_count": 1991,
+      "return_or_expectancy": {
+        "gross_unit_notional_mean": 0.0009203316338734252,
+        "net_unit_notional_mean": -8.483653103001527e-05,
+        "unit": "pair_gross_notional",
+        "break_even_adverse_bps_per_fill": 4.5779983272788565
+      },
+      "profit_factor": 0.9881040004867904,
+      "drawdown": "NOT_AVAILABLE",
+      "hit_rate": 0.5133098945253641,
+      "stability": "WEAK_FIXED_REFERENCE_REVERSION",
+      "cost_sensitivity": "FAILED_AT_BASELINE5bps/0;extra stress NOT_AVAILABLE",
+      "concentration": {
+        "unique_traded_pairs": 333,
+        "top_1_pair_share_of_signals": 0.017076845806127575,
+        "top_1_pair_share_of_net_pnl": -1.811028410486598,
+        "top_1_pair_share_of_absolute_net_pnl": 0.026328689391660064,
+        "top_5_pair_share_of_signals": 0.07935710698141638,
+        "top_5_pair_share_of_net_pnl": -4.5557620336756255,
+        "top_5_pair_share_of_absolute_net_pnl": 0.08312304907887712,
+        "top_10_pair_share_of_signals": 0.1496735308890005,
+        "top_10_pair_share_of_net_pnl": -7.7646018355257445,
+        "top_10_pair_share_of_absolute_net_pnl": 0.1370425510943731,
+        "unique_traded_symbols": 257
+      },
+      "loso_robustness": "NOT_AVAILABLE",
+      "regime_robustness": "WEAK_DIAGNOSTIC_ONLY",
+      "execution_realism": "PARTIAL:Daily next official open,no borrow/portfolio",
+      "data_pit_quality": "CURRENT_UNIVERSE_ONLY / NOT_SURVIVORSHIP_CLEAN",
+      "known_methodological_biases": [
+        "current universe/classification",
+        "known historical sample"
+      ],
+      "known_blockers": [
+        "non-positive baseline net edge",
+        "portfolio allocator undefined",
+        "genuine forward missing"
+      ],
+      "portfolio_defined": "NO",
+      "paper_trading_readiness": "NOT_READY_REJECTED_OR_FROZEN",
+      "decision": "RESEARCH_REJECTED_FROZEN_DO_NOT_OPTIMIZE",
+      "rank": "NOT_AVAILABLE",
+      "dimensions": {
+        "A_Economic_Edge": "FAILED",
+        "B_Temporal_Stability": "WEAK",
+        "C_Cross_sectional_Robustness": "WEAK",
+        "D_Cost_Robustness": "FAILED",
+        "E_Concentration_Risk": "UNKNOWN",
+        "F_Market_Regime_Dependence": "WEAK",
+        "G_Data_Integrity": "MODERATE",
+        "H_PIT_Survivorship_Quality": "WEAK",
+        "I_Execution_Realism": "WEAK",
+        "J_Forward_Evidence": "UNKNOWN",
+        "K_Portfolio_Definition": "WEAK",
+        "L_Operational_Readiness": "WEAK"
+      },
+      "sources": [
+        "R9",
+        "R10",
+        "R11",
+        "D7"
+      ],
+      "research_ids": [
+        "PAIRS-STAT-ARB-V1-DAILY"
+      ],
+      "strategy_variant": "INDEPENDENT_NO_ENUM",
+      "position_management_preset": "INDEPENDENT_FROZEN_DEFINITION"
+    },
+    {
+      "strategy": "INTRADAY-REVERSAL-V1-15M-LONG",
+      "family": "research-intraday-reversal-v1",
+      "current_status": "REJECTED",
+      "candidate_type": "INDEPENDENT_STRATEGY_EXCLUDED",
+      "economic_hypothesis": "First-hour cross-sectional bottom-decile reversal",
+      "development_sample": {
+        "start": "2024-01-02",
+        "end": "2026-08-12",
+        "sessions": 655,
+        "classification": "FROZEN_HISTORICAL_VALIDATION_NOT_TEMPORAL_FORWARD"
+      },
+      "independent_validation_available": "YES_COMPLETE_FROZEN_PRE_OUTCOME_HYPOTHESIS; genuine temporal OOS not established",
+      "forward_holdout": {
+        "forward_start": "NOT_AVAILABLE",
+        "forward_end": "NOT_AVAILABLE",
+        "number_of_sessions": "NOT_AVAILABLE",
+        "number_of_trades": "NOT_AVAILABLE",
+        "performance": "NOT_AVAILABLE",
+        "cost_assumptions": "NOT_AVAILABLE",
+        "frozen_before_period": "NOT_AVAILABLE",
+        "qualifying_artifacts_found": 0
+      },
+      "trade_count": 5790,
+      "return_or_expectancy": {
+        "gross_unit_notional_mean": 5.1523122220590136e-05,
+        "net_unit_notional_mean": -0.0009480286250278968,
+        "unit": "signal_entry_notional"
+      },
+      "profit_factor": 0.8835710657896122,
+      "drawdown": "NOT_AVAILABLE",
+      "hit_rate": 0.48117443868739207,
+      "stability": "FAILED:all calendar years and thirds net negative",
+      "cost_sensitivity": "FAILED_AT_BASELINE5bps/0;extra stress NOT_AVAILABLE",
+      "concentration": "See saved stability.symbol_concentration",
+      "loso_robustness": "NOT_AVAILABLE",
+      "regime_robustness": "WEAK_DIAGNOSTIC_ONLY",
+      "execution_realism": "PARTIAL_NATIVE15M,no partial fills/portfolio",
+      "data_pit_quality": "CURRENT_UNIVERSE_ONLY / NOT_SURVIVORSHIP_CLEAN",
+      "known_methodological_biases": [
+        "current universe/classification",
+        "known historical sample"
+      ],
+      "known_blockers": [
+        "non-positive baseline net edge",
+        "portfolio allocator undefined",
+        "genuine forward missing"
+      ],
+      "portfolio_defined": "NO",
+      "paper_trading_readiness": "NOT_READY_REJECTED_OR_FROZEN",
+      "decision": "REJECTED_DO_NOT_PROMOTE",
+      "rank": "NOT_AVAILABLE",
+      "dimensions": {
+        "A_Economic_Edge": "FAILED",
+        "B_Temporal_Stability": "FAILED",
+        "C_Cross_sectional_Robustness": "WEAK",
+        "D_Cost_Robustness": "FAILED",
+        "E_Concentration_Risk": "UNKNOWN",
+        "F_Market_Regime_Dependence": "WEAK",
+        "G_Data_Integrity": "MODERATE",
+        "H_PIT_Survivorship_Quality": "WEAK",
+        "I_Execution_Realism": "WEAK",
+        "J_Forward_Evidence": "UNKNOWN",
+        "K_Portfolio_Definition": "WEAK",
+        "L_Operational_Readiness": "WEAK"
+      },
+      "sources": [
+        "R7",
+        "D6",
+        "C1"
+      ],
+      "research_ids": [
+        "INTRADAY-REVERSAL-V1-15M-LONG"
+      ],
+      "strategy_variant": "INDEPENDENT_NO_ENUM",
+      "position_management_preset": "INDEPENDENT_FROZEN_DEFINITION"
+    },
+    {
+      "strategy": "MARKET-INTRADAY-MOMENTUM-V1-15M-SPY",
+      "family": "research-market-intraday-momentum-v1",
+      "current_status": "REJECTED",
+      "candidate_type": "INDEPENDENT_STRATEGY_EXCLUDED",
+      "economic_hypothesis": "SPY morning30m sign predicts final30m continuation",
+      "development_sample": {
+        "start": "2024-01-02",
+        "end": "2026-08-12",
+        "sessions": 655,
+        "classification": "FROZEN_HISTORICAL_VALIDATION_NOT_TEMPORAL_FORWARD"
+      },
+      "independent_validation_available": "YES_COMPLETE_FROZEN_PRE_OUTCOME_HYPOTHESIS; genuine temporal OOS not established",
+      "forward_holdout": {
+        "forward_start": "NOT_AVAILABLE",
+        "forward_end": "NOT_AVAILABLE",
+        "number_of_sessions": "NOT_AVAILABLE",
+        "number_of_trades": "NOT_AVAILABLE",
+        "performance": "NOT_AVAILABLE",
+        "cost_assumptions": "NOT_AVAILABLE",
+        "frozen_before_period": "NOT_AVAILABLE",
+        "qualifying_artifacts_found": 0
+      },
+      "trade_count": 648,
+      "return_or_expectancy": {
+        "gross_unit_notional_mean": -4.204116972618977e-05,
+        "net_unit_notional_mean": -0.0010420467580989584,
+        "unit": "session_entry_notional"
+      },
+      "profit_factor": 0.2646441411149155,
+      "drawdown": "NOT_AVAILABLE",
+      "hit_rate": 0.24845679012345678,
+      "stability": "FAILED:all calendar years and thirds net negative",
+      "cost_sensitivity": "FAILED_AT_BASELINE5bps/0;extra stress NOT_AVAILABLE",
+      "concentration": "SPY_SINGLE_PROXY",
+      "loso_robustness": "NOT_AVAILABLE",
+      "regime_robustness": "WEAK_DIAGNOSTIC_ONLY",
+      "execution_realism": "PARTIAL_NATIVE15M,no partial fills/portfolio",
+      "data_pit_quality": "CURRENT_UNIVERSE_ONLY / NOT_SURVIVORSHIP_CLEAN",
+      "known_methodological_biases": [
+        "current universe/classification",
+        "known historical sample"
+      ],
+      "known_blockers": [
+        "non-positive baseline net edge",
+        "portfolio allocator undefined",
+        "genuine forward missing"
+      ],
+      "portfolio_defined": "NO",
+      "paper_trading_readiness": "NOT_READY_REJECTED_OR_FROZEN",
+      "decision": "REJECTED_DO_NOT_PROMOTE",
+      "rank": "NOT_AVAILABLE",
+      "dimensions": {
+        "A_Economic_Edge": "FAILED",
+        "B_Temporal_Stability": "FAILED",
+        "C_Cross_sectional_Robustness": "UNKNOWN",
+        "D_Cost_Robustness": "FAILED",
+        "E_Concentration_Risk": "UNKNOWN",
+        "F_Market_Regime_Dependence": "WEAK",
+        "G_Data_Integrity": "MODERATE",
+        "H_PIT_Survivorship_Quality": "WEAK",
+        "I_Execution_Realism": "WEAK",
+        "J_Forward_Evidence": "UNKNOWN",
+        "K_Portfolio_Definition": "WEAK",
+        "L_Operational_Readiness": "WEAK"
+      },
+      "sources": [
+        "R8",
+        "D6",
+        "C1"
+      ],
+      "research_ids": [
+        "MARKET-INTRADAY-MOMENTUM-V1-15M-SPY"
+      ],
+      "strategy_variant": "INDEPENDENT_NO_ENUM",
+      "position_management_preset": "INDEPENDENT_FROZEN_DEFINITION"
+    },
+    {
+      "strategy": "A/configured",
+      "family": "configured-controls",
+      "current_status": "ARCHIVED_FAMILY / LEGACY_COMPATIBILITY",
+      "candidate_type": "ARCHIVED_HISTORICAL_CONTROL",
+      "economic_hypothesis": "Quality + Value scoring with the common technical recovery entry gate.",
+      "development_sample": {
+        "start": "2026-01-02",
+        "end": "2026-08-19",
+        "classification": "KNOWN_HISTORICAL_CONTROL"
+      },
+      "independent_validation_available": "NOT_AVAILABLE",
+      "forward_holdout": {
+        "forward_start": "NOT_AVAILABLE",
+        "forward_end": "NOT_AVAILABLE",
+        "number_of_sessions": "NOT_AVAILABLE",
+        "number_of_trades": "NOT_AVAILABLE",
+        "performance": "NOT_AVAILABLE",
+        "cost_assumptions": "NOT_AVAILABLE",
+        "frozen_before_period": "NOT_AVAILABLE",
+        "qualifying_artifacts_found": 0
+      },
+      "trade_count": 3,
+      "return_or_expectancy": {
+        "portfolio_total_return": 0.0023721887522683005
+      },
+      "profit_factor": 1.2050184369214199,
+      "drawdown": -0.01626003183817848,
+      "hit_rate": 0.3333333333333333,
+      "stability": "NOT_AVAILABLE",
+      "cost_sensitivity": "NOT_AVAILABLE",
+      "concentration": "NOT_AVAILABLE",
+      "loso_robustness": "NOT_AVAILABLE",
+      "regime_robustness": "NOT_AVAILABLE",
+      "execution_realism": "DAILY_RESEARCH_MODEL",
+      "data_pit_quality": "CURRENT_UNIVERSE_ONLY / NOT_SURVIVORSHIP_CLEAN",
+      "known_methodological_biases": [
+        "current universe/classification",
+        "known historical sample"
+      ],
+      "known_blockers": [
+        "ARCHIVED_NOT_CURRENT_CANDIDATE"
+      ],
+      "portfolio_defined": "YES_RESEARCH_CONFIGURED_ALLOCATOR",
+      "paper_trading_readiness": "NOT_CURRENT_CANDIDATE",
+      "decision": "ARCHIVED_NOT_CURRENT_CANDIDATE",
+      "rank": "NOT_AVAILABLE",
+      "dimensions": {
+        "A_Economic_Edge": "UNKNOWN",
+        "B_Temporal_Stability": "UNKNOWN",
+        "C_Cross_sectional_Robustness": "UNKNOWN",
+        "D_Cost_Robustness": "UNKNOWN",
+        "E_Concentration_Risk": "UNKNOWN",
+        "F_Market_Regime_Dependence": "UNKNOWN",
+        "G_Data_Integrity": "UNKNOWN",
+        "H_PIT_Survivorship_Quality": "UNKNOWN",
+        "I_Execution_Realism": "UNKNOWN",
+        "J_Forward_Evidence": "UNKNOWN",
+        "K_Portfolio_Definition": "STRONG",
+        "L_Operational_Readiness": "WEAK"
+      },
+      "sources": [
+        "C1",
+        "R12",
+        "D2"
+      ],
+      "research_ids": [
+        "CONTROL-A"
+      ],
+      "strategy_variant": "QUALITY_VALUE",
+      "position_management_preset": "configured"
+    },
+    {
+      "strategy": "B/configured",
+      "family": "configured-controls",
+      "current_status": "ARCHIVED_FAMILY / LEGACY_COMPATIBILITY",
+      "candidate_type": "ARCHIVED_HISTORICAL_CONTROL",
+      "economic_hypothesis": "Quality + Value + Opportunity scoring with the common recovery gate.",
+      "development_sample": {
+        "start": "2026-01-02",
+        "end": "2026-08-19",
+        "classification": "KNOWN_HISTORICAL_CONTROL"
+      },
+      "independent_validation_available": "DOCUMENTATION_ONLY_LEGACY_VALIDATION_D2;raw old_reports missing;not current forward",
+      "forward_holdout": {
+        "forward_start": "NOT_AVAILABLE",
+        "forward_end": "NOT_AVAILABLE",
+        "number_of_sessions": "NOT_AVAILABLE",
+        "number_of_trades": "NOT_AVAILABLE",
+        "performance": "NOT_AVAILABLE",
+        "cost_assumptions": "NOT_AVAILABLE",
+        "frozen_before_period": "NOT_AVAILABLE",
+        "qualifying_artifacts_found": 0
+      },
+      "trade_count": 3,
+      "return_or_expectancy": {
+        "portfolio_total_return": -0.005621808443791898
+      },
+      "profit_factor": 0.5620051520594618,
+      "drawdown": -0.013890494838193157,
+      "hit_rate": 0.3333333333333333,
+      "stability": "NOT_AVAILABLE",
+      "cost_sensitivity": "NOT_AVAILABLE",
+      "concentration": "NOT_AVAILABLE",
+      "loso_robustness": "NOT_AVAILABLE",
+      "regime_robustness": "NOT_AVAILABLE",
+      "execution_realism": "DAILY_RESEARCH_MODEL",
+      "data_pit_quality": "CURRENT_UNIVERSE_ONLY / NOT_SURVIVORSHIP_CLEAN",
+      "known_methodological_biases": [
+        "current universe/classification",
+        "known historical sample"
+      ],
+      "known_blockers": [
+        "ARCHIVED_NOT_CURRENT_CANDIDATE"
+      ],
+      "portfolio_defined": "YES_RESEARCH_CONFIGURED_ALLOCATOR",
+      "paper_trading_readiness": "NOT_CURRENT_CANDIDATE",
+      "decision": "ARCHIVED_NOT_CURRENT_CANDIDATE",
+      "rank": "NOT_AVAILABLE",
+      "dimensions": {
+        "A_Economic_Edge": "UNKNOWN",
+        "B_Temporal_Stability": "UNKNOWN",
+        "C_Cross_sectional_Robustness": "UNKNOWN",
+        "D_Cost_Robustness": "UNKNOWN",
+        "E_Concentration_Risk": "UNKNOWN",
+        "F_Market_Regime_Dependence": "UNKNOWN",
+        "G_Data_Integrity": "UNKNOWN",
+        "H_PIT_Survivorship_Quality": "UNKNOWN",
+        "I_Execution_Realism": "UNKNOWN",
+        "J_Forward_Evidence": "UNKNOWN",
+        "K_Portfolio_Definition": "STRONG",
+        "L_Operational_Readiness": "WEAK"
+      },
+      "sources": [
+        "C1",
+        "R12",
+        "D2"
+      ],
+      "research_ids": [
+        "CONTROL-B"
+      ],
+      "strategy_variant": "QUALITY_VALUE_OPPORTUNITY",
+      "position_management_preset": "configured"
+    },
+    {
+      "strategy": "C/configured",
+      "family": "configured-controls",
+      "current_status": "ARCHIVED_FAMILY / LEGACY_COMPATIBILITY",
+      "candidate_type": "ARCHIVED_HISTORICAL_CONTROL",
+      "economic_hypothesis": "Quality + Value + Opportunity + Timing scoring with the common recovery gate.",
+      "development_sample": {
+        "start": "2026-01-02",
+        "end": "2026-08-19",
+        "classification": "KNOWN_HISTORICAL_CONTROL"
+      },
+      "independent_validation_available": "DOCUMENTATION_ONLY_LEGACY_VALIDATION_D2;raw old_reports missing;not current forward",
+      "forward_holdout": {
+        "forward_start": "NOT_AVAILABLE",
+        "forward_end": "NOT_AVAILABLE",
+        "number_of_sessions": "NOT_AVAILABLE",
+        "number_of_trades": "NOT_AVAILABLE",
+        "performance": "NOT_AVAILABLE",
+        "cost_assumptions": "NOT_AVAILABLE",
+        "frozen_before_period": "NOT_AVAILABLE",
+        "qualifying_artifacts_found": 0
+      },
+      "trade_count": 3,
+      "return_or_expectancy": {
+        "portfolio_total_return": -0.00032563873701607626
+      },
+      "profit_factor": 0.9677510632813765,
+      "drawdown": -0.013890494838193157,
+      "hit_rate": 0.6666666666666666,
+      "stability": "NOT_AVAILABLE",
+      "cost_sensitivity": "NOT_AVAILABLE",
+      "concentration": "NOT_AVAILABLE",
+      "loso_robustness": "NOT_AVAILABLE",
+      "regime_robustness": "NOT_AVAILABLE",
+      "execution_realism": "DAILY_RESEARCH_MODEL",
+      "data_pit_quality": "CURRENT_UNIVERSE_ONLY / NOT_SURVIVORSHIP_CLEAN",
+      "known_methodological_biases": [
+        "current universe/classification",
+        "known historical sample"
+      ],
+      "known_blockers": [
+        "ARCHIVED_NOT_CURRENT_CANDIDATE"
+      ],
+      "portfolio_defined": "YES_RESEARCH_CONFIGURED_ALLOCATOR",
+      "paper_trading_readiness": "NOT_CURRENT_CANDIDATE",
+      "decision": "ARCHIVED_NOT_CURRENT_CANDIDATE",
+      "rank": "NOT_AVAILABLE",
+      "dimensions": {
+        "A_Economic_Edge": "UNKNOWN",
+        "B_Temporal_Stability": "UNKNOWN",
+        "C_Cross_sectional_Robustness": "UNKNOWN",
+        "D_Cost_Robustness": "UNKNOWN",
+        "E_Concentration_Risk": "UNKNOWN",
+        "F_Market_Regime_Dependence": "UNKNOWN",
+        "G_Data_Integrity": "UNKNOWN",
+        "H_PIT_Survivorship_Quality": "UNKNOWN",
+        "I_Execution_Realism": "UNKNOWN",
+        "J_Forward_Evidence": "UNKNOWN",
+        "K_Portfolio_Definition": "STRONG",
+        "L_Operational_Readiness": "WEAK"
+      },
+      "sources": [
+        "C1",
+        "R12",
+        "D2"
+      ],
+      "research_ids": [
+        "CONTROL-C"
+      ],
+      "strategy_variant": "FULL",
+      "position_management_preset": "configured"
+    },
+    {
+      "strategy": "D/configured",
+      "family": "screen-strategy-research",
+      "current_status": "ARCHIVED_FAMILY / ACTIVE_RESEARCH",
+      "candidate_type": "DEFINED_SCREEN_WITH_MISSING_EVIDENCE",
+      "economic_hypothesis": "The full C recovery model with an additional structural loss-path veto.",
+      "development_sample": "NOT_AVAILABLE",
+      "independent_validation_available": "NOT_AVAILABLE",
+      "forward_holdout": {
+        "forward_start": "NOT_AVAILABLE",
+        "forward_end": "NOT_AVAILABLE",
+        "number_of_sessions": "NOT_AVAILABLE",
+        "number_of_trades": "NOT_AVAILABLE",
+        "performance": "NOT_AVAILABLE",
+        "cost_assumptions": "NOT_AVAILABLE",
+        "frozen_before_period": "NOT_AVAILABLE",
+        "qualifying_artifacts_found": 0
+      },
+      "trade_count": "NOT_AVAILABLE",
+      "return_or_expectancy": "NOT_AVAILABLE",
+      "profit_factor": "NOT_AVAILABLE",
+      "drawdown": "NOT_AVAILABLE",
+      "hit_rate": "NOT_AVAILABLE",
+      "stability": "NOT_AVAILABLE",
+      "cost_sensitivity": "NOT_AVAILABLE",
+      "concentration": "NOT_AVAILABLE",
+      "loso_robustness": "NOT_AVAILABLE",
+      "regime_robustness": "NOT_AVAILABLE",
+      "execution_realism": "DAILY_RESEARCH_MODEL",
+      "data_pit_quality": "CURRENT_UNIVERSE_ONLY / NOT_SURVIVORSHIP_CLEAN",
+      "known_methodological_biases": [
+        "current universe/classification",
+        "known historical sample"
+      ],
+      "known_blockers": [
+        "EVIDENCE_MISSING"
+      ],
+      "portfolio_defined": "YES_RESEARCH_CONFIGURED_ALLOCATOR",
+      "paper_trading_readiness": "NOT_CURRENT_CANDIDATE",
+      "decision": "EVIDENCE_MISSING_NO_PROMOTION",
+      "rank": "NOT_AVAILABLE",
+      "dimensions": {
+        "A_Economic_Edge": "UNKNOWN",
+        "B_Temporal_Stability": "UNKNOWN",
+        "C_Cross_sectional_Robustness": "UNKNOWN",
+        "D_Cost_Robustness": "UNKNOWN",
+        "E_Concentration_Risk": "UNKNOWN",
+        "F_Market_Regime_Dependence": "UNKNOWN",
+        "G_Data_Integrity": "UNKNOWN",
+        "H_PIT_Survivorship_Quality": "UNKNOWN",
+        "I_Execution_Realism": "UNKNOWN",
+        "J_Forward_Evidence": "UNKNOWN",
+        "K_Portfolio_Definition": "STRONG",
+        "L_Operational_Readiness": "WEAK"
+      },
+      "sources": [
+        "C1"
+      ],
+      "research_ids": [
+        "SCREEN-D"
+      ],
+      "strategy_variant": "LOSS_AWARE_RECOVERY",
+      "position_management_preset": "configured"
+    },
+    {
+      "strategy": "E/configured",
+      "family": "screen-strategy-research",
+      "current_status": "ARCHIVED_FAMILY / ACTIVE_RESEARCH",
+      "candidate_type": "DEFINED_SCREEN_WITH_MISSING_EVIDENCE",
+      "economic_hypothesis": "Quality + Value stocks in established uptrends after a moderate pullback.",
+      "development_sample": "NOT_AVAILABLE",
+      "independent_validation_available": "NOT_AVAILABLE",
+      "forward_holdout": {
+        "forward_start": "NOT_AVAILABLE",
+        "forward_end": "NOT_AVAILABLE",
+        "number_of_sessions": "NOT_AVAILABLE",
+        "number_of_trades": "NOT_AVAILABLE",
+        "performance": "NOT_AVAILABLE",
+        "cost_assumptions": "NOT_AVAILABLE",
+        "frozen_before_period": "NOT_AVAILABLE",
+        "qualifying_artifacts_found": 0
+      },
+      "trade_count": "NOT_AVAILABLE",
+      "return_or_expectancy": "NOT_AVAILABLE",
+      "profit_factor": "NOT_AVAILABLE",
+      "drawdown": "NOT_AVAILABLE",
+      "hit_rate": "NOT_AVAILABLE",
+      "stability": "NOT_AVAILABLE",
+      "cost_sensitivity": "NOT_AVAILABLE",
+      "concentration": "NOT_AVAILABLE",
+      "loso_robustness": "NOT_AVAILABLE",
+      "regime_robustness": "NOT_AVAILABLE",
+      "execution_realism": "DAILY_RESEARCH_MODEL",
+      "data_pit_quality": "CURRENT_UNIVERSE_ONLY / NOT_SURVIVORSHIP_CLEAN",
+      "known_methodological_biases": [
+        "current universe/classification",
+        "known historical sample"
+      ],
+      "known_blockers": [
+        "EVIDENCE_MISSING"
+      ],
+      "portfolio_defined": "YES_RESEARCH_CONFIGURED_ALLOCATOR",
+      "paper_trading_readiness": "NOT_CURRENT_CANDIDATE",
+      "decision": "EVIDENCE_MISSING_NO_PROMOTION",
+      "rank": "NOT_AVAILABLE",
+      "dimensions": {
+        "A_Economic_Edge": "UNKNOWN",
+        "B_Temporal_Stability": "UNKNOWN",
+        "C_Cross_sectional_Robustness": "UNKNOWN",
+        "D_Cost_Robustness": "UNKNOWN",
+        "E_Concentration_Risk": "UNKNOWN",
+        "F_Market_Regime_Dependence": "UNKNOWN",
+        "G_Data_Integrity": "UNKNOWN",
+        "H_PIT_Survivorship_Quality": "UNKNOWN",
+        "I_Execution_Realism": "UNKNOWN",
+        "J_Forward_Evidence": "UNKNOWN",
+        "K_Portfolio_Definition": "STRONG",
+        "L_Operational_Readiness": "WEAK"
+      },
+      "sources": [
+        "C1"
+      ],
+      "research_ids": [
+        "SCREEN-E"
+      ],
+      "strategy_variant": "TREND_PULLBACK",
+      "position_management_preset": "configured"
+    },
+    {
+      "strategy": "C/intraday-dynamic (F0)",
+      "family": "intraday-control",
+      "current_status": "ARCHIVED",
+      "candidate_type": "ARCHIVED_HISTORICAL_CONTROL_RELEVANT",
+      "economic_hypothesis": "C recovery selection with intraday dynamic stops,partial targets,runners",
+      "development_sample": {
+        "start": "2025-05-01",
+        "end": "2026-04-30",
+        "sessions": 251,
+        "classification": "DOCUMENTED_THEN_OOS_BACKWARD_EXTENSION_NOT_CURRENT_FORWARD"
+      },
+      "independent_validation_available": "DOCUMENTATION_ONLY; linked raw absent;temporal independence not re-certified",
+      "forward_holdout": {
+        "forward_start": "NOT_AVAILABLE",
+        "forward_end": "NOT_AVAILABLE",
+        "number_of_sessions": "NOT_AVAILABLE",
+        "number_of_trades": "NOT_AVAILABLE",
+        "performance": "NOT_AVAILABLE",
+        "cost_assumptions": "NOT_AVAILABLE",
+        "frozen_before_period": "NOT_AVAILABLE",
+        "qualifying_artifacts_found": 0
+      },
+      "trade_count": 81,
+      "return_or_expectancy": {
+        "portfolio_total_return": 0.03093,
+        "source_precision": "rounded documented value"
+      },
+      "profit_factor": 1.478,
+      "drawdown": -0.01802,
+      "hit_rate": 0.3704,
+      "stability": "DOCUMENTED6 positive/5 negative active months",
+      "cost_sensitivity": "DOCUMENTED:+0.503%10bps,-1.582%15bps,+0.346%5+5bps",
+      "concentration": "EAT49.34%,top3 114.74% net PnL",
+      "loso_robustness": "POST_HOC_ONLY_DOCUMENTED:without EAT+1.567%,without top2+0.511%",
+      "regime_robustness": "DOCUMENTED_MODERATE_NOT_CURRENT_INDEPENDENT",
+      "execution_realism": "NATIVE15M_COST_SENSITIVE_NO_OPERATIONAL_SYSTEM",
+      "data_pit_quality": "CURRENT_UNIVERSE_ONLY / NOT_SURVIVORSHIP_CLEAN",
+      "known_methodological_biases": [
+        "current universe/classification",
+        "known historical sample"
+      ],
+      "known_blockers": [
+        "ARCHIVED_NOT_CURRENT_CANDIDATE",
+        "missing raw reproducibility",
+        "tight cost margin"
+      ],
+      "portfolio_defined": "YES_HISTORICAL_SIMULATOR",
+      "paper_trading_readiness": "NOT_CURRENT_CANDIDATE",
+      "decision": "ARCHIVED_NO_REOPENING",
+      "rank": "NOT_AVAILABLE",
+      "dimensions": {
+        "A_Economic_Edge": "MODERATE",
+        "B_Temporal_Stability": "MODERATE",
+        "C_Cross_sectional_Robustness": "WEAK",
+        "D_Cost_Robustness": "WEAK",
+        "E_Concentration_Risk": "WEAK",
+        "F_Market_Regime_Dependence": "WEAK",
+        "G_Data_Integrity": "WEAK",
+        "H_PIT_Survivorship_Quality": "WEAK",
+        "I_Execution_Realism": "WEAK",
+        "J_Forward_Evidence": "UNKNOWN",
+        "K_Portfolio_Definition": "MODERATE",
+        "L_Operational_Readiness": "WEAK"
+      },
+      "sources": [
+        "D2",
+        "R12",
+        "C1"
+      ],
+      "research_ids": [
+        "F0-C"
+      ],
+      "strategy_variant": "C / FULL",
+      "position_management_preset": "intraday-dynamic"
+    }
+  ],
+  "pairs_freeze": {
+    "V1": "RESEARCH_REJECTED_FROZEN",
+    "V2": "PAIRS_V2_FEASIBILITY_WEAK / STOP PAIRS V2",
+    "code_status": "ACTIVE",
+    "status_drift": "CODE_STATUS_STALE_VS_RESEARCH_DECISION",
+    "follow_up": "Align registry and V1 guide separately",
+    "V3_immediate_next_step": false,
+    "states_tested": 190134,
+    "p_le_05_states": 10619,
+    "robust_cohort": {
+      "scope": "FULL_AND_BOTH_HALVES_P_LE_05",
+      "pair_sessions": 326,
+      "observable_current_z": 326,
+      "missing_current_z": 0,
+      "unique_pairs": 73,
+      "states_abs_z_ge_1_5": 65,
+      "share_abs_z_ge_1_5": 0.19938650306748465,
+      "unique_pairs_abs_z_ge_1_5": 29,
+      "states_abs_z_ge_2_0": 25,
+      "share_abs_z_ge_2_0": 0.07668711656441718,
+      "unique_pairs_abs_z_ge_2_0": 15,
+      "states_abs_z_ge_2_5": 13,
+      "share_abs_z_ge_2_5": 0.03987730061349693,
+      "unique_pairs_abs_z_ge_2_5": 8,
+      "states_abs_z_ge_3_0": 6,
+      "share_abs_z_ge_3_0": 0.018404907975460124,
+      "unique_pairs_abs_z_ge_3_0": 6
+    }
+  },
+  "next_engineering_steps": [
+    {
+      "priority": "P0",
+      "item": "F official-session/missing/stale Daily policy and synthetic contracts"
+    },
+    {
+      "priority": "P0",
+      "item": "Prospective F/C1 freeze and durable decision-intent-position shadow journal"
+    },
+    {
+      "priority": "P1",
+      "item": "Broker/account/instrument/order mapping:pre-open sizing,fractions,stop/target,session10close"
+    },
+    {
+      "priority": "P1",
+      "item": "Idempotency,fill-position reconciliation,partial/reject/restart,C1/risk/data controls"
+    },
+    {
+      "priority": "P2",
+      "item": "Predeclared genuine forward observation and model-versus-paper cost measurement;no parameter changes"
+    }
+  ],
+  "source_key": {
+    "R1": "reports/champion_f_recheck_2024-01-02_2026-08-12_v1.json",
+    "R2": "reports/f_champion_edge_decomposition_2024-01-02_2026-08-12_v1_summary.json",
+    "R3": "reports/f_intraday_entry_validation_2022-03-09_2024-08-12_v1_summary.json",
+    "R4": "reports/f_intraday_risk_validation_2022-03-09_2024-08-12_v1_summary.json",
+    "R5": "reports/f_l5_forward_2024-08-13_2026-08-12_v1_summary.json",
+    "R6": "reports/orb_v1_us_equity_validation_2024-01-02_2026-08-12_v1_summary.json",
+    "R7": "reports/intraday_reversal_v1_validation_2024-01-02_2026-08-12_v1_summary.json",
+    "R8": "reports/market_intraday_momentum_v1_validation_2024-01-02_2026-08-12_v1_summary.json",
+    "R9": "reports/pairs_stat_arb_v1_2024-01-02_2026-08-12_v1_summary.json",
+    "R10": "reports/pairs_stat_arb_v1_2024-01-02_2026-08-12_v1_diagnostic_diagnostic_summary.json",
+    "R11": "reports/pairs_v2_feasibility_2024-01-02_2026-08-12_v1_summary.json",
+    "R12": "reports/all_comparison_2026-01-01_2026-08-20.json",
+    "D1": "reports/champion_consolidation_audit.md",
+    "D2": "docs/extended-strategy-validation.md",
+    "D3": "docs/f-configured-robustness-validation.md",
+    "C1": [
+      "src/trading_system/backtest/research_registry.py",
+      "src/trading_system/backtest/research_definitions.py",
+      "src/trading_system/backtest/screen_strategies.py",
+      "src/trading_system/models/backtest.py"
+    ],
+    "C2": [
+      "src/trading_system/champion.py",
+      "src/trading_system/backtest/engine.py",
+      "src/trading_system/backtest/position_manager.py",
+      "src/trading_system/backtest/metrics.py",
+      "config/strategy.yaml"
+    ],
+    "C3": [
+      "src/trading_system/data/database.py",
+      "src/trading_system/backtest/universe_provenance.py",
+      "src/trading_system/backtest/validation.py",
+      "src/trading_system/strategy/screener.py"
+    ],
+    "D4": [
+      "docs/f-configured-capacity-research.md",
+      "docs/f-regime-capacity-research.md",
+      "docs/f-lifecycle-v2-research.md"
+    ],
+    "D5": [
+      "docs/strategy-research-lifecycle.md",
+      "docs/research-code-audit.md",
+      "README.md"
+    ],
+    "D6": [
+      "docs/orb-v1-research.md",
+      "docs/intraday-reversal-v1-research.md",
+      "docs/market-intraday-momentum-v1-research.md"
+    ],
+    "D7": [
+      "docs/pairs-stat-arb-v1-research.md",
+      "docs/pairs-stat-arb-v1-diagnostic-audit.md",
+      "docs/pairs-stat-arb-v1-identity-epochs.md",
+      "docs/security-reference.md"
+    ],
+    "D8": [
+      "docs/post-audit-baseline-revalidation.md",
+      "docs/repository-audit.md"
+    ],
+    "C4": [
+      "src/trading_system/cli.py",
+      "tests/test_champion_consolidation.py"
+    ]
+  },
+  "missing_artifact_count": 18,
+  "validation": {
+    "inventory_all_registry_families": "PASS",
+    "R1_R2_trade_pnl_reconciliation": "PASS",
+    "pairs_required_counts": "PASS",
+    "R3_cost_cases": "BASELINE_ONLY",
+    "input_sha256_before_after": "PASS",
+    "database_size_mtime_metadata": "PASS_NO_DATABASE_OPEN",
+    "csv_json_roundtrip": "PASS",
+    "git_diff_check": "PASS",
+    "new_artifact_whitespace_check": "PASS_ALL_8_FILES",
+    "full_suite_run": false,
+    "ruff_format": "NOT_APPLICABLE_DATA_AND_DOCUMENTATION_ONLY",
+    "candidate_card_required_fields": "PASS",
+    "source_reference_resolution": "PASS",
+    "inventory_all_registry_ids": "PASS",
+    "input_sha256_final": "PASS_58_FILES",
+    "database_final_metadata": "PASS_NO_DATABASE_OPEN",
+    "artifact_schema_and_row_width": "PASS"
+  },
+  "report": "strategy_portfolio_audit.md",
+  "status_rating_semantics": "STRONG/MODERATE/WEAK evaluate favorable evidence; UNKNOWN is unavailable; FAILED is observed negative economic test. This is qualitative, no total score.",
+  "artifact_selection_rules": [
+    "current-compatible frozen identity",
+    "completed validation over preflight versions",
+    "explicit final decision over old ACTIVE snapshot",
+    "latest valid compatible result over filename order",
+    "R1/R2 compatible 91 trades and same PnL; not independent replications",
+    "R3/R4 shared baseline not two independent successes",
+    "R5 research holdout predates current cutoff; diagnostic tail not genuine forward"
+  ],
+  "artifact_counts": {
+    "inventory_rows": 23,
+    "evidence_cards": 11,
+    "evidence_rows": 210,
+    "missing_artifacts": 18,
+    "status_drift_rows": 7,
+    "gap_rows": 22,
+    "input_files_hashed": 58
+  },
+  "blocker_scope": "Three groups block scientifically interpretable shadow/order execution, not beginning preparation. Broker/order mapping is not required for signal-only shadow; all three must be resolved before an order-submitting paper experiment."
+}

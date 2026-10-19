@@ -1,0 +1,325 @@
+{
+  "source_commit": "da2370e1be7c262bda5c4342926ace394d94c517",
+  "files": [
+    {
+      "path": ".gitignore",
+      "size_bytes": 5040,
+      "sha256": "fd8b15a5371ce23963b4a15e26aee7ff39756fe92cc4f08146bee60080df792f"
+    },
+    {
+      "path": "README.md",
+      "size_bytes": 64761,
+      "sha256": "4e29aa6ecb1ffd92f81d4079a769bcee38b335e663ffa7efa1bb2294313fdb83"
+    },
+    {
+      "path": "config/strategy.yaml",
+      "size_bytes": 5137,
+      "sha256": "655a0f71346278563e692b9b74894292df58d54f29dadb53c0a97b7709c65dba"
+    },
+    {
+      "path": "docs/extended-strategy-validation.md",
+      "size_bytes": 18426,
+      "sha256": "a3cb3ef9da1a07b6edcc7d04665ff23fd67f09e9ae810b0063a91f4b3cfb2379"
+    },
+    {
+      "path": "docs/f-champion-edge-decomposition-v1.md",
+      "size_bytes": 14777,
+      "sha256": "3c0daae313a941d950df92d82a1be7072a5712549f3f4434c0761b4f7333efbc"
+    },
+    {
+      "path": "docs/f-configured-capacity-research.md",
+      "size_bytes": 2530,
+      "sha256": "7a07b33308ca9b32b352c1991bdc7385311fde8e1143484a4b229d641addf0f8"
+    },
+    {
+      "path": "docs/f-configured-robustness-validation.md",
+      "size_bytes": 5603,
+      "sha256": "72387fd7f17c8d8ebf5c50c57a636168889e5e5abf0baf1b139ef35ebcad11b9"
+    },
+    {
+      "path": "docs/f-lifecycle-v2-research.md",
+      "size_bytes": 25603,
+      "sha256": "d92fd3c793b4b18839367e25f4b08964a7158fc00d410226c90c17c70179c272"
+    },
+    {
+      "path": "docs/f-regime-capacity-research.md",
+      "size_bytes": 3208,
+      "sha256": "b9453b1392fd1a13510920f55e3db50ac2417f57049de875c9658b6b17348156"
+    },
+    {
+      "path": "docs/intraday-reversal-v1-research.md",
+      "size_bytes": 13530,
+      "sha256": "fd3a683bce69f332de8cd019f337f4090f5badeb5dd741b5b0f71c0b9a595211"
+    },
+    {
+      "path": "docs/market-intraday-momentum-v1-research.md",
+      "size_bytes": 14301,
+      "sha256": "66fa56322ef520fc2213c65022a0f022541614a0e33448a052fb8ed68fb7a791"
+    },
+    {
+      "path": "docs/orb-v1-research.md",
+      "size_bytes": 22099,
+      "sha256": "f5fea48431aa2f2c5666383e6eadf4bfac5b1e4fe65323d6e1e1aa657cc49373"
+    },
+    {
+      "path": "docs/pairs-stat-arb-v1-diagnostic-audit.md",
+      "size_bytes": 21256,
+      "sha256": "eb3567d45d49167dbf3c97345e404785b1a8d5da150b871eaacb8c3793750ed1"
+    },
+    {
+      "path": "docs/pairs-stat-arb-v1-identity-epochs.md",
+      "size_bytes": 9617,
+      "sha256": "b7e108faa23095ea3a73306691995f1dcc7a13eacc6e258f53e3e4caa790e48c"
+    },
+    {
+      "path": "docs/pairs-stat-arb-v1-research.md",
+      "size_bytes": 23601,
+      "sha256": "83fd1f88016c406629970279b9f8f456f55395329c3cca36a3d3ca9a280f05b8"
+    },
+    {
+      "path": "docs/pairs-v2-feasibility.md",
+      "size_bytes": 18791,
+      "sha256": "693512c090a2e5bba5bc1745948ff3ecbfc9aaa58f8907ec30d0fbb9c2ef360c"
+    },
+    {
+      "path": "docs/post-audit-baseline-revalidation.md",
+      "size_bytes": 21314,
+      "sha256": "87f90c05fff90f332de565369c0a5eb0d9cf85956f519948fa16aaf17cd42423"
+    },
+    {
+      "path": "docs/repository-audit.md",
+      "size_bytes": 52157,
+      "sha256": "2b73c41003a48970af8a3b37491392993df1314f724d671dbed8aea72f051584"
+    },
+    {
+      "path": "docs/research-code-audit.md",
+      "size_bytes": 7919,
+      "sha256": "5c8cc6fc6f563f33dad94bbd8a100d93ff4d05b5981116c1680a446f1afce92c"
+    },
+    {
+      "path": "docs/security-reference.md",
+      "size_bytes": 23078,
+      "sha256": "774718034f587be8b976b3f94e6c72fa1ab89a46f6ce09e3a76fc25b438af47e"
+    },
+    {
+      "path": "docs/strategy-research-lifecycle.md",
+      "size_bytes": 2800,
+      "sha256": "d624d02a044fb50e9c74406f74ca92ad50546abbf250733aafabe475556dbb7e"
+    },
+    {
+      "path": "reports/all_comparison_2026-01-01_2026-08-20.json",
+      "size_bytes": 1586690,
+      "sha256": "be48d606f72ee3a5c54d8ab59fe8c89528ed1233b1c0e4d4f10d8cd3855b1ca9"
+    },
+    {
+      "path": "reports/champion_consolidation_audit.md",
+      "size_bytes": 19935,
+      "sha256": "6ed743ae6a3b88e71737363c25de452e58c967755588da39e7abad4d7d8184e6"
+    },
+    {
+      "path": "reports/champion_f_recheck_2024-01-02_2026-08-12_v1.json",
+      "size_bytes": 1589791,
+      "sha256": "3592256c22dfb20f12eab31eb471a31f00b9868d51738ebb431e5380efef07b1"
+    },
+    {
+      "path": "reports/f_champion_edge_decomposition_2024-01-02_2026-08-12_v1_market_beta.csv",
+      "size_bytes": 646,
+      "sha256": "4b4706012a936c16d01511088917730fbd63f8efe7401bcc5368c4feb8367983"
+    },
+    {
+      "path": "reports/f_champion_edge_decomposition_2024-01-02_2026-08-12_v1_market_regime_attribution.csv",
+      "size_bytes": 5560,
+      "sha256": "a1724172095d977ffa86185aaa57856962859b134f4407f815829d8da7d1859c"
+    },
+    {
+      "path": "reports/f_champion_edge_decomposition_2024-01-02_2026-08-12_v1_summary.json",
+      "size_bytes": 13365,
+      "sha256": "c25ee601836cbaa27b062263f832ec440c362dd9bf523b82fce8601719fd80d2"
+    },
+    {
+      "path": "reports/f_champion_edge_decomposition_2024-01-02_2026-08-12_v1_symbol_concentration.csv",
+      "size_bytes": 5169,
+      "sha256": "d6d4c30c11a45f97b5d3d59d22969857a27e5b2ec8adb6c7380e906368ed0f23"
+    },
+    {
+      "path": "reports/f_intraday_entry_validation_2022-03-09_2024-08-12_v1_chronological_subperiods.csv",
+      "size_bytes": 4255,
+      "sha256": "ed17de4cb34ada1eaa3219f485f994d7c76b62939e595bf2c8d8e919698aa406"
+    },
+    {
+      "path": "reports/f_intraday_entry_validation_2022-03-09_2024-08-12_v1_cost_stress.csv",
+      "size_bytes": 1535,
+      "sha256": "6e2301fa21d3cb9b366320770ee43217f722e01346d80975c3724d4c5fbcd6c1"
+    },
+    {
+      "path": "reports/f_intraday_entry_validation_2022-03-09_2024-08-12_v1_monthly.csv",
+      "size_bytes": 33196,
+      "sha256": "b5fcc803315b5c01595ad187cc4b66ffa70029e7b154ad5e8ee1240a8495bfe9"
+    },
+    {
+      "path": "reports/f_intraday_entry_validation_2022-03-09_2024-08-12_v1_summary.json",
+      "size_bytes": 1420965,
+      "sha256": "5b07c3ae91d4e1fd2510c193e87f99f57eff3a9c3ff47f24ab885ba01bea44c3"
+    },
+    {
+      "path": "reports/f_intraday_entry_validation_2022-03-09_2024-08-12_v1_yearly.csv",
+      "size_bytes": 3720,
+      "sha256": "39e9e725f0245b5982b1c16eaf98b2d35cb85f7b685229df62c326d9f28fff59"
+    },
+    {
+      "path": "reports/f_intraday_risk_validation_2022-03-09_2024-08-12_v1_summary.json",
+      "size_bytes": 70965,
+      "sha256": "54bf96c7de2603c3f08b47cbd29f8476e39ceefe66d4cc60eddbccbc4680e211"
+    },
+    {
+      "path": "reports/f_l5_forward_2024-08-13_2026-08-12_v1_chronological_subperiods.csv",
+      "size_bytes": 2540,
+      "sha256": "c14c2540a6f9212635218ffa83f711549bcbd060fa5afe170fcced173e614d88"
+    },
+    {
+      "path": "reports/f_l5_forward_2024-08-13_2026-08-12_v1_monthly.csv",
+      "size_bytes": 15676,
+      "sha256": "6d1e620cacd34ca720451ee2199ac667833351ed7a3b79399f465160c05a047d"
+    },
+    {
+      "path": "reports/f_l5_forward_2024-08-13_2026-08-12_v1_summary.json",
+      "size_bytes": 40574,
+      "sha256": "01462fe512ea534a5d2b09350b788a9dc3a53045c81fcb2ed8ac13719a6b8cdd"
+    },
+    {
+      "path": "reports/f_l5_forward_2024-08-13_2026-08-12_v1_yearly.csv",
+      "size_bytes": 2169,
+      "sha256": "a1f66c06c6e0017478a97efa0272e431703524eb4e4f74e4742c00f5549856a0"
+    },
+    {
+      "path": "reports/intraday_reversal_v1_validation_2024-01-02_2026-08-12_v1_summary.json",
+      "size_bytes": 544306,
+      "sha256": "9eb352f1119c2e038b3f63e33f547b248538405bdf4264f96969cc99c61bd8a1"
+    },
+    {
+      "path": "reports/market_intraday_momentum_v1_validation_2024-01-02_2026-08-12_v1_summary.json",
+      "size_bytes": 102763,
+      "sha256": "2269f54c6d18bfee72dfa13cdcb07ec18a070e68ab3f5e548cf889583b7235b5"
+    },
+    {
+      "path": "reports/orb_v1_us_equity_validation_2024-01-02_2026-08-12_v1_summary.json",
+      "size_bytes": 761192,
+      "sha256": "d3673448e166a65033c26df4655dfb4a3c1e88b502c532a8617139188caab927"
+    },
+    {
+      "path": "reports/pairs_stat_arb_v1_2024-01-02_2026-08-12_v1_diagnostic_diagnostic_summary.json",
+      "size_bytes": 30325,
+      "sha256": "e7f779161418282eef2610f8819dabf912d9ea6216070a2af0fc31e1d72326e1"
+    },
+    {
+      "path": "reports/pairs_stat_arb_v1_2024-01-02_2026-08-12_v1_summary.json",
+      "size_bytes": 7036313,
+      "sha256": "eb7184ea74eb33abcb48fd8671c488e1f39a69a9d2ce50e65cadbe49c54cb4e9"
+    },
+    {
+      "path": "reports/pairs_v2_feasibility_2024-01-02_2026-08-12_v1_summary.json",
+      "size_bytes": 31465,
+      "sha256": "c89b0e64adc535c528e3bea422a3d997d773f4b66bb93c9a9895202ba9bd7e23"
+    },
+    {
+      "path": "src/trading_system/backtest/engine.py",
+      "size_bytes": 188612,
+      "sha256": "9e94e631b7d98339e365569595bea4915e21771302cd65b44129383effb37847"
+    },
+    {
+      "path": "src/trading_system/backtest/metrics.py",
+      "size_bytes": 4649,
+      "sha256": "a9ffd5460bce58171968b82699af9d52e905e965b90c3034479b22d65ca51a5d"
+    },
+    {
+      "path": "src/trading_system/backtest/position_manager.py",
+      "size_bytes": 25174,
+      "sha256": "bba999482e151e8550b97f92364e7d5f71dee0b9979523df3c51777fe974d6f8"
+    },
+    {
+      "path": "src/trading_system/backtest/research_definitions.py",
+      "size_bytes": 9521,
+      "sha256": "7d203a8410eb512b9ea75e17165299563f7bbcec3fd8a18ec3484e9d3a7e2ce3"
+    },
+    {
+      "path": "src/trading_system/backtest/research_registry.py",
+      "size_bytes": 24181,
+      "sha256": "cc531a94735bdaa15b3b461e37e646f689abc083edbaddc21a9129eb4499a98a"
+    },
+    {
+      "path": "src/trading_system/backtest/screen_strategies.py",
+      "size_bytes": 15049,
+      "sha256": "3984b377c1fbe1c058409b52643330405fef5072497e0496ac801eb074acae83"
+    },
+    {
+      "path": "src/trading_system/backtest/universe_provenance.py",
+      "size_bytes": 6703,
+      "sha256": "8e23ed415f46e8a92f608be961b3df4d7c4f4b2e4090d35d63872367b6ab0eb3"
+    },
+    {
+      "path": "src/trading_system/backtest/validation.py",
+      "size_bytes": 105219,
+      "sha256": "7ac86bb9bbe7e59f72e8ae29fe18b4b4f4c91c2c3c98a37c81252ca0095652e0"
+    },
+    {
+      "path": "src/trading_system/champion.py",
+      "size_bytes": 2758,
+      "sha256": "dd78057b65f891ef951b60390f4624f97e2f2d8409c8fdb5d1128b2f1fa551a4"
+    },
+    {
+      "path": "src/trading_system/cli.py",
+      "size_bytes": 105996,
+      "sha256": "496deece3932e5aab6a9c3ad56c71c3b1931710cace959c37e0b64cf3a946b53"
+    },
+    {
+      "path": "src/trading_system/data/database.py",
+      "size_bytes": 75437,
+      "sha256": "bc0ee6c4a77590eac31de1c77abb87b42fe43116539970de35554fc13a296956"
+    },
+    {
+      "path": "src/trading_system/models/backtest.py",
+      "size_bytes": 26945,
+      "sha256": "45ad3218b82e42fa1b8616ca294c998738f083b0b107f3dde520939e17126eef"
+    },
+    {
+      "path": "src/trading_system/strategy/screener.py",
+      "size_bytes": 31712,
+      "sha256": "94709e96c8f6c27a706c8f5b8946b1e7986d5b25fbacf5be17d26b23059b1301"
+    },
+    {
+      "path": "tests/test_champion_consolidation.py",
+      "size_bytes": 20985,
+      "sha256": "ff2c7d3f87ab1e2701190ab285e40e2afd1313f4859224f0baf70e3425c73923"
+    }
+  ],
+  "database_metadata_before": {
+    "data/trading_system.sqlite3": {
+      "size_bytes": 9274884096,
+      "mtime_ns": 1792180046114604800
+    },
+    "data/trading_system.sqlite3-shm": {
+      "size_bytes": 32768,
+      "mtime_ns": 1792354016998454300
+    },
+    "data/trading_system.sqlite3-wal": {
+      "size_bytes": 0,
+      "mtime_ns": 1792180046129543100
+    }
+  },
+  "database_metadata_after": {
+    "data/trading_system.sqlite3": {
+      "size_bytes": 9274884096,
+      "mtime_ns": 1792180046114604800
+    },
+    "data/trading_system.sqlite3-shm": {
+      "size_bytes": 32768,
+      "mtime_ns": 1792354016998454300
+    },
+    "data/trading_system.sqlite3-wal": {
+      "size_bytes": 0,
+      "mtime_ns": 1792180046129543100
+    }
+  },
+  "database_opened": false,
+  "scope": "Selected actual local inputs;file hashes do not certify historical data or bind old runs to current source"
+}
