@@ -2,6 +2,7 @@
 
 from datetime import date
 
+from trading_system.backtest.data_integrity import DataIntegrityMode
 from trading_system.backtest.engine import BacktestEngine, ScreenSource, evaluate_variant_entry
 from trading_system.backtest.research_registry import FROZEN_CHAMPION_F, validate_champion_config
 from trading_system.config import StrategyConfig
@@ -57,10 +58,18 @@ def run_champion_backtest(
     end: date,
     *,
     screen_source: ScreenSource | None = None,
+    data_integrity_mode: DataIntegrityMode = DataIntegrityMode.LEGACY_RESEARCH,
 ) -> BacktestResult:
-    """Select the champion with no research hooks; never fetch or normalize settings."""
+    """Local historical replay; forward callers must explicitly select STRICT.
+
+    Legacy research remains the default to preserve published historical results.
+    The complete Shadow preflight API lives in backtest.data_integrity; no journal
+    or broker execution is implemented here.
+    """
     validate_champion_config(config)
-    return BacktestEngine(database, config, screen_source=screen_source).run(
+    return BacktestEngine(
+        database, config, screen_source=screen_source, data_integrity_mode=data_integrity_mode
+    ).run(
         start,
         end,
         variant=FROZEN_CHAMPION_F.variant,

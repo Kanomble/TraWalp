@@ -13,6 +13,11 @@ from typing import TYPE_CHECKING, Protocol
 import pandas as pd
 
 from trading_system.backtest.coverage import warmup_coverage_diagnostics
+from trading_system.backtest.data_integrity import (
+    DataIntegrityError,
+    DataIntegrityMode,
+    validate_session_position_data,
+)
 from trading_system.backtest.diagnostics import (
     add_post_exit_diagnostics,
     aggregate_entry_scores,
@@ -397,6 +402,7 @@ class BacktestEngine:
         entry_context_observer: Callable | None = None,
         execution_context_observer: Callable | None = None,
         require_complete_daily_position_bars: bool = False,
+        data_integrity_mode: DataIntegrityMode = DataIntegrityMode.LEGACY_RESEARCH,
         progress: ProgressPhase | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
@@ -417,6 +423,7 @@ class BacktestEngine:
         self.entry_context_observer = entry_context_observer
         self.execution_context_observer = execution_context_observer
         self.require_complete_daily_position_bars = require_complete_daily_position_bars
+        self.data_integrity_mode = DataIntegrityMode(data_integrity_mode)
         self.progress = progress
         self.entry_quality_events: list[dict] = []
         self.clock = clock
@@ -510,6 +517,8 @@ class BacktestEngine:
             )
         daily_managed_first_hour_entry = first_hour_pullback_entry and not intraday_monitoring
         native_intraday_loop = intraday_monitoring or confirmed_entry or first_hour_pullback_entry
+        if self.data_integrity_mode is DataIntegrityMode.STRICT and native_intraday_loop:
+            raise DataIntegrityError("STRICT_DAILY_PATH_REQUIRED", session=start)
         execution_timeframe = (
             BarTimeframe.MINUTES_15
             if confirmed_entry or first_hour_pullback_entry
@@ -548,7 +557,13 @@ class BacktestEngine:
         self._candidate_events: list[dict] = []
         self._entry_capacity_trace_by_session: dict[date, EntryCapacityTrace] = {}
         self._entry_capacity_traces_by_execution: dict[date, list[EntryCapacityTrace]] = {}
-        sessions = _backtest_sessions(self.database, start, end)
+        sessions = (
+            _backtest_sessions(
+                self.database, start, end, data_integrity_mode=DataIntegrityMode.STRICT
+            )
+            if self.data_integrity_mode is DataIntegrityMode.STRICT
+            else _backtest_sessions(self.database, start, end)
+        )
         if self.progress:
             self.progress.update(
                 sessions_processed=0,
@@ -608,7 +623,10 @@ class BacktestEngine:
             return closed
 
         for index, session in enumerate(sessions):
-            if lifecycle_management:
+            if (
+                lifecycle_management
+                and self.data_integrity_mode is DataIntegrityMode.LEGACY_RESEARCH
+            ):
                 self.position_manager.start_session(session)
             final_session = index == len(sessions) - 1
             active_symbols = set(positions) | {order.record.symbol for order in pending}
@@ -618,12 +636,25 @@ class BacktestEngine:
                 else active_symbols
             )
             bars = self.database.bars_on_session(active_symbols, session)
+            if self.data_integrity_mode is DataIntegrityMode.STRICT:
+                # Whole-session preflight precedes every fill, holding-counter increment,
+                # lifecycle callback and mark. Missing OHLC cannot observe stop/target.
+                validate_session_position_data(
+                    session,
+                    bars=bars,
+                    held_positions={s: p.entry_date for s, p in positions.items()},
+                    pending_entries={o.record.symbol: o.signal_date for o in pending},
+                    previous_processed_session=sessions[index - 1] if index else None,
+                    now=self.clock(),
+                )
             missing_held_daily = set(positions) - set(bars)
             if self.require_complete_daily_position_bars and missing_held_daily:
                 raise ValueError(
                     f"DAILY_POSITION_DATA_UNAVAILABLE on {session}: "
                     f"{', '.join(sorted(missing_held_daily))}; cannot execute lifecycle exits"
                 )
+            if lifecycle_management and self.data_integrity_mode is DataIntegrityMode.STRICT:
+                self.position_manager.start_session(session)
             intraday_by_symbol: dict[str, list[DailyBar]] = {}
             last_intraday_bars: dict[str, DailyBar] = {}
             regular_open, regular_close = regular_session_bounds(session)
@@ -1357,6 +1388,16 @@ class BacktestEngine:
 
             # 5. The last session liquidates at its close; no new signal is queued.
             if final_session:
+                if self.data_integrity_mode is DataIntegrityMode.STRICT:
+                    # Explicit final barrier: legacy stale-history liquidation is unreachable.
+                    validate_session_position_data(
+                        session,
+                        bars=bars,
+                        held_positions={s: p.entry_date for s, p in positions.items()},
+                        pending_entries={},
+                        previous_processed_session=sessions[index - 1] if index else None,
+                        now=self.clock(),
+                    )
                 for symbol in list(positions):
                     position = positions[symbol]
                     bar = (
@@ -1460,9 +1501,17 @@ class BacktestEngine:
                 "and new trailing highs affect only the next bar"
             )
         first_bound, last_bound = self.database.bar_date_bounds()
-        if first_bound is not None and start < first_bound:
+        if (
+            self.data_integrity_mode is DataIntegrityMode.LEGACY_RESEARCH
+            and first_bound is not None
+            and start < first_bound
+        ):
             warnings.append(f"requested start predates local bars and was clipped to {sessions[0]}")
-        if last_bound is not None and end > last_bound:
+        if (
+            self.data_integrity_mode is DataIntegrityMode.LEGACY_RESEARCH
+            and last_bound is not None
+            and end > last_bound
+        ):
             warnings.append(f"requested end exceeds local bars and was clipped to {sessions[-1]}")
         benchmark = self._benchmark(sessions[0], sessions[-1])
         if benchmark.warning:
@@ -3120,6 +3169,8 @@ class BacktestEngine:
                 "entry": (
                     "existing first-hour pullback planner on the next eligible session"
                     if preset is PositionManagementPreset.F_FIRST_HOUR_PULLBACK_CONFIGURED
+                    else "next official session open; critical Daily preflight required"
+                    if self.data_integrity_mode is DataIntegrityMode.STRICT
                     else "next available portfolio session open"
                 ),
                 "screening_timeframe": BarTimeframe.DAY_1.value,
@@ -3129,8 +3180,17 @@ class BacktestEngine:
                 "extended_hours": self.config.intraday.extended_hours,
                 "intrabar_ambiguity": "pre_bar_stops_first; new trails apply next bar",
                 "close_rules": "signal_decay, portfolio_rotation, max_hold",
-                "end_of_backtest": "last available close",
+                "end_of_backtest": (
+                    "last official session close; no stale fallback"
+                    if self.data_integrity_mode is DataIntegrityMode.STRICT
+                    else "last available close"
+                ),
             },
+            **(
+                {"data_integrity_mode": "STRICT"}
+                if self.data_integrity_mode is DataIntegrityMode.STRICT
+                else {}
+            ),
             "variant_definition": screen_strategy_definition(variant).description,
             "variant_name": screen_strategy_definition(variant).name,
             "variant_lifecycle": screen_strategy_definition(variant).lifecycle.value,
@@ -3157,7 +3217,18 @@ class BacktestEngine:
         }
 
 
-def _backtest_sessions(database: Database, start: date, end: date) -> list[date]:
+def _backtest_sessions(
+    database: Database,
+    start: date,
+    end: date,
+    *,
+    data_integrity_mode: DataIntegrityMode = DataIntegrityMode.LEGACY_RESEARCH,
+) -> list[date]:
+    if DataIntegrityMode(data_integrity_mode) is DataIntegrityMode.STRICT:
+        sessions = trading_sessions_between(start, end)
+        if len(sessions) < 2:
+            raise ValueError("Strict Daily replay requires at least two official XNYS sessions")
+        return sessions
     official_sessions = set(trading_sessions_between(start, end))
     sessions = [
         session for session in database.bar_sessions(start, end) if session in official_sessions
