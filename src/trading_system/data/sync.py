@@ -180,8 +180,7 @@ def parse_daily_master_index(payload: str, index_date: date) -> DailyMasterIndex
 
     def normalized_header(line: str) -> tuple[str, ...]:
         return tuple(
-            re.sub(r"\s+", "", field).casefold()
-            for field in line.lstrip("\ufeff").split("|")
+            re.sub(r"\s+", "", field).casefold() for field in line.lstrip("\ufeff").split("|")
         )
 
     header_index = next(
@@ -328,9 +327,7 @@ def _incremental_bar_ranges(
     end: datetime,
     overlap_bars: int,
 ) -> list[tuple[datetime, datetime]]:
-    earliest, latest = database.bar_bounds(
-        symbol, timeframe, start=start, end=end
-    )
+    earliest, latest = database.bar_bounds(symbol, timeframe, start=start, end=end)
     return _bar_edge_ranges(earliest, latest, timeframe, start, end, overlap_bars)
 
 
@@ -547,13 +544,37 @@ class DataSynchronizer:
         assets = self.alpaca.list_tradable_us_equities()
         return {**self.database.reconcile_assets(assets), "errors": 0}
 
-    def sync_sec_full(self, requested_symbols: list[str] | None = None) -> dict[str, Any]:
-        return self._run_stage("sec", lambda: self._sync_sec(requested_symbols, full=True))
+    def sync_sec_full(
+        self,
+        requested_symbols: list[str] | None = None,
+        *,
+        companyfacts_only: bool = False,
+    ) -> dict[str, Any]:
+        """Force existing SEC ingestion, optionally using validated local identity only.
+
+        The explicit bounded mode never requests ticker maps or submissions. It
+        keeps local company/SIC metadata and the ordinary parser/upsert semantics.
+        """
+        local = None
+        if companyfacts_only:
+            from trading_system.data.sec_force import resolve_local_companies
+
+            local = resolve_local_companies(self.database.path, requested_symbols or [])
+        return self._run_stage(
+            "sec_force_companyfacts" if companyfacts_only else "sec",
+            lambda: self._sync_sec(requested_symbols, full=True, local_companies=local),
+        )
 
     def sync_sec_incremental(self, requested_symbols: list[str] | None = None) -> dict[str, Any]:
         return self._run_stage("sec", lambda: self._sync_sec(requested_symbols, full=False))
 
-    def _sync_sec(self, requested_symbols: list[str] | None, *, full: bool) -> dict[str, Any]:
+    def _sync_sec(
+        self,
+        requested_symbols: list[str] | None,
+        *,
+        full: bool,
+        local_companies: dict[str, CompanyIdentity] | None = None,
+    ) -> dict[str, Any]:
         if self.sec is None:
             raise ValueError("SEC client is required for SEC synchronization")
         assets = self.database.list_tradable_assets()
@@ -563,14 +584,21 @@ class DataSynchronizer:
         selected_assets = [asset for asset in assets if not requested or asset.symbol in requested]
         symbols = {asset.symbol for asset in selected_assets}
         request_counts_before = self._sec_request_counts()
-        remote_map = {
-            str(symbol).upper(): str(cik).zfill(10)
-            for symbol, cik in self.sec.ticker_to_cik().items()
-        }
-        self.database.set_sync_value("sec_reference", "ticker_to_cik", remote_map)
+        local_only = local_companies is not None
+        if local_only:
+            remote_map = {symbol: company.cik for symbol, company in local_companies.items()}
+        else:
+            remote_map = {
+                str(symbol).upper(): str(cik).zfill(10)
+                for symbol, cik in self.sec.ticker_to_cik().items()
+            }
+            self.database.set_sync_value("sec_reference", "ticker_to_cik", remote_map)
         local_map = self.database.company_symbol_to_cik()
         identity = resolve_sec_identities(symbols, local_map, remote_map)
-        self._persist_identity_conflicts(identity, symbols, local_map, remote_map)
+        if not local_only:
+            self._persist_identity_conflicts(identity, symbols, local_map, remote_map)
+        elif identity.conflicts or set(identity.ticker_map) != symbols:
+            raise ValueError("SEC_FORCE_IDENTITY_RESOLUTION_CHANGED")
         ticker_map = identity.ticker_map
         alias_mappings = identity.alias_mappings
         unmapped = [asset for asset in selected_assets if asset.symbol not in ticker_map]
@@ -679,11 +707,13 @@ class DataSynchronizer:
             "other_failures": 0,
             "errors": 0,
         }
+        if local_only:
+            counts["symbol_results"] = []
         submissions_seconds = 0.0
         companyfacts_seconds = 0.0
         parse_and_persist_seconds = 0.0
         logical_requests = {
-            "ticker_map": 1,
+            "ticker_map": 0 if local_only else 1,
             "daily_index_directory": discovery.directories_checked if discovery else 0,
             "daily_master_index": len(discovery.snapshots) if discovery else 0,
             "submissions": 0,
@@ -706,7 +736,7 @@ class DataSynchronizer:
                 unavailable_status = companyfacts_statuses.get(cik)
                 submissions_status = submissions_statuses.get(cik)
                 counts["companies_checked"] += 1
-                logical_requests["submissions"] += 1
+                logical_requests["submissions"] += not local_only
                 try:
                     outcome = self._sync_sec_company(
                         symbol,
@@ -719,6 +749,7 @@ class DataSynchronizer:
                             or self._negative_cache_expired(submissions_status)
                         ),
                         write_connection=write_connection,
+                        local_company=local_companies[symbol] if local_only else None,
                     )
                     write_connection.commit()
                     counts["facts_processed"] += outcome["facts_processed"]
@@ -731,6 +762,18 @@ class DataSynchronizer:
                     logical_requests["companyfacts"] += outcome["companyfacts_requests"]
                     if outcome["accessions"] is not None:
                         accession_states[cik] = outcome["accessions"]
+                    if local_only:
+                        counts["symbol_results"].append(
+                            {
+                                "symbol": symbol,
+                                "cik": cik,
+                                "status": "success" if outcome["companies_updated"] else "failed",
+                                "facts_processed": outcome["facts_processed"],
+                                "error": "COMPANYFACTS_UNAVAILABLE"
+                                if outcome["companyfacts_unavailable"]
+                                else None,
+                            }
+                        )
                 except SecCompanySyncError as exc:
                     write_connection.rollback()
                     if exc.phase in {"parse", "database"}:
@@ -742,6 +785,18 @@ class DataSynchronizer:
                         logical_requests["companyfacts"] += 1
                     _classify_sync_failure(counts, exc)
                     counts["errors"] += 1
+                    if local_only:
+                        response = getattr(exc.cause, "response", None)
+                        counts["symbol_results"].append(
+                            {
+                                "symbol": symbol,
+                                "cik": cik,
+                                "status": "failed",
+                                "error": type(exc.cause).__name__,
+                                "phase": exc.phase,
+                                "http_status": getattr(response, "status_code", None),
+                            }
+                        )
                     LOGGER.exception(
                         "SEC update failed symbol=%s cik=%s phase=%s resource=%s",
                         symbol,
@@ -769,9 +824,7 @@ class DataSynchronizer:
             {
                 "sec_requests_total": sum(request_counts.values()),
                 "ticker_map_requests": request_counts.get("ticker_map", 0),
-                "daily_index_directory_requests": request_counts.get(
-                    "daily_index_directory", 0
-                ),
+                "daily_index_directory_requests": request_counts.get("daily_index_directory", 0),
                 "daily_master_index_requests": request_counts.get("daily_master_index", 0),
                 "change_detection_requests": (
                     request_counts.get("daily_index_directory", 0)
@@ -834,12 +887,21 @@ class DataSynchronizer:
         detected_accessions: set[str],
         retry_unavailable: bool,
         write_connection: Any,
+        local_company: CompanyIdentity | None = None,
     ) -> dict[str, Any]:
         if self.sec is None:  # Narrowed by _sync_sec; retained for direct testability.
             raise ValueError("SEC client is required for SEC synchronization")
         request_started = self.timer()
         try:
-            submissions = self.sec.submissions(cik)
+            submissions = (
+                {
+                    "name": local_company.name,
+                    "sic": local_company.sic,
+                    "sicDescription": local_company.sic_description,
+                }
+                if local_company is not None
+                else self.sec.submissions(cik)
+            )
         except SecResourceNotFound:
             elapsed = self.timer() - request_started
             accessions = sorted(set(stored_accessions or []) | detected_accessions)
@@ -923,7 +985,13 @@ class DataSynchronizer:
             companyfacts_seconds = self.timer() - request_started
             processing_started = self.timer()
             try:
+                if local_company is not None and str(payload.get("cik", "")).zfill(10) != cik:
+                    raise ValueError("SEC_FORCE_RESPONSE_CIK_MISMATCH")
                 facts = parse_company_facts(payload, symbol)
+                if local_company is not None:
+                    new_state = sorted(
+                        set(new_state) | {f.accession_number for f in facts if f.accession_number}
+                    )
             except Exception as exc:
                 raise SecCompanySyncError(
                     "parse", "companyfacts", self.timer() - processing_started, exc
@@ -1338,9 +1406,7 @@ class DataSynchronizer:
                 )
 
         completed_symbols = {
-            symbol
-            for symbol in symbols
-            if planned_ranges[symbol] == successful_ranges[symbol]
+            symbol for symbol in symbols if planned_ranges[symbol] == successful_ranges[symbol]
         }
         checked_at = self.clock().isoformat()
         self.database.set_sync_values(
@@ -1363,12 +1429,8 @@ class DataSynchronizer:
             start=start_at,
             end=end_at,
         )
-        global_first, global_last = self.database.bar_bounds(
-            "SPY", BarTimeframe.DAY_1
-        )
-        daily_first, daily_last = self.database.bar_date_bounds(
-            timeframe=BarTimeframe.DAY_1
-        )
+        global_first, global_last = self.database.bar_bounds("SPY", BarTimeframe.DAY_1)
+        daily_first, daily_last = self.database.bar_date_bounds(timeframe=BarTimeframe.DAY_1)
         first_expected = expected_sessions[0]
         without_older = [
             symbol
@@ -1376,9 +1438,7 @@ class DataSynchronizer:
             if first.date() > first_expected
         ]
         boundary_counts = Counter(
-            first.date()
-            for first, _last in bounds_before.values()
-            if first > start_at
+            first.date() for first, _last in bounds_before.values() if first > start_at
         )
         integrity = []
         for boundary, _occurrences in boundary_counts.most_common(3):
@@ -1387,9 +1447,7 @@ class DataSynchronizer:
                 for symbol, (first, _last) in bounds_before.items()
                 if first.date() == boundary
             ]
-            integrity.append(
-                boundary_integrity_check(self.database, boundary_symbols, boundary)
-            )
+            integrity.append(boundary_integrity_check(self.database, boundary_symbols, boundary))
         elapsed = max(self.timer() - started, 1e-12)
         file_size_after = self.database.path.stat().st_size if self.database.path.exists() else 0
         bars_after = self.database.bar_count(BarTimeframe.DAY_1)
@@ -1444,9 +1502,7 @@ class DataSynchronizer:
                 end,
                 incremental=self.intraday_incremental if incremental is None else incremental,
                 extended_hours=(
-                    self.intraday_extended_hours
-                    if extended_hours is None
-                    else extended_hours
+                    self.intraday_extended_hours if extended_hours is None else extended_hours
                 ),
             ),
         )

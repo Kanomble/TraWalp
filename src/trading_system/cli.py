@@ -307,6 +307,14 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="Externally reviewed interval/CUSIP evidence JSON; raw API JSON is insufficient",
     )
+    force_sec = commands.add_parser(
+        "sync-sec-force", help="Bounded SEC Companyfacts-only pilot using audited local CIKs"
+    )
+    force_scope = force_sec.add_mutually_exclusive_group(required=True)
+    force_scope.add_argument("--symbols", help="Comma-separated audit candidate symbols")
+    force_scope.add_argument("--manifest", type=Path, help="Existing SEC backfill candidate CSV")
+    force_sec.add_argument("--limit", type=_positive_int, default=15)
+    force_sec.add_argument("--dry-run", action="store_true", help="Read-only; zero provider calls")
     sync = commands.add_parser("sync", help="Synchronize SEC data or run a complete refresh")
     mode = sync.add_mutually_exclusive_group()
     mode.add_argument("--full", action="store_true", help="Run the complete legacy sync pipeline")
@@ -766,6 +774,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
     database = Database(settings.strategy.storage.database_path)
+    if args.command == "sync-sec-force":
+        from sqlite3 import Error as SQLiteError
+
+        from trading_system.data.sec_force import command
+
+        try:
+            return command(settings, args)
+        except (OSError, ValueError, RuntimeError, SQLiteError) as exc:
+            print(f"SEC force pilot refused: {exc}", file=sys.stderr)
+            return 1
     if args.command == "sync-security-lifecycle":
         from sqlite3 import Error as SQLiteError
 
