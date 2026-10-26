@@ -285,6 +285,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--verbose", action="store_true")
     commands = parser.add_subparsers(dest="command", required=True)
+    for name in ("shadow-f-init", "shadow-f-run", "shadow-f-status", "shadow-f-verify"):
+        shadow = commands.add_parser(name, help="Local immutable F/configured/C1 Shadow journal")
+        shadow.add_argument("--journal", type=Path, help="Separate Shadow SQLite path")
+        if name == "shadow-f-init":
+            shadow.add_argument("--initial-capital", type=float, default=100.0)
+        if name == "shadow-f-run":
+            shadow.add_argument("--session", type=date.fromisoformat)
     commands.add_parser(
         "recover-massive-rate-limit",
         help="Manual clock recovery under the shared lock after a full expiry window; no API calls",
@@ -709,6 +716,10 @@ def main(argv: list[str] | None = None) -> int:
     ):
         parser.error("--champion cannot be combined with --variant or --strategy")
     configure_logging(args.verbose)
+    if args.command.startswith("shadow-f-"):
+        from trading_system.shadow.cli import command
+
+        return command(args)
     if args.command == "research-pairs-v2-feasibility":
         from trading_system.backtest.pairs_v2_feasibility import offline, run, validate_period
 
