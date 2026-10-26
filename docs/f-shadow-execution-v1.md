@@ -31,7 +31,9 @@ the latest completed official session at creation. Capital defaults to `100.0`;
 `--initial-capital` can override it with a positive finite value.
 
 There is no historical start-date or inception-date CLI option. Initialization
-does not read market data, screen, create an entry intent, or process a session.
+now requires a local dataset readiness check and one read-only current-session
+Champion screen, before creating a file. It creates no entry intent and processes
+no session. See [pre-inception hardening](f-shadow-pre-inception-hardening-v1.md).
 Every session at or before the inception completed-session boundary is refused
 with `SHADOW_BEFORE_INCEPTION`. If inception occurs during a session, that session
 can first be processed after its official close. If inception occurs after its
@@ -95,8 +97,9 @@ STRICT backtest final-liquidation regression is also included in validation.
 
 ## Candidate ranking and data completeness
 
-Production screening calls `screen_champion`, which uses the existing local
-`Screener` with `use_market_snapshots=False` and `champion_ranking`. Injected
+Production screening uses the exact `screen_champion` operations: the existing local
+`Screener` with `use_market_snapshots=False` and `champion_ranking`. It retains the
+raw report for causal completeness and reuses the ranked report. Injected
 fixture screens pass through the same `champion_ranking`. Selection uses the
 existing `BacktestEngine._entry_orders`. No Shadow ranking formula exists.
 F combines Quality and Valuation with its existing normalized F weights;
@@ -106,12 +109,12 @@ records symbol, F score, Quality score, Valuation score, and rank.
 Observed threshold failures are legitimate ineligibility. A complete evaluated
 cross-section without eligible names records `NO_ELIGIBLE_CANDIDATES`. An
 occupied C1 records `CAPACITY_FULL`; there is no rotation. Availability failures
-record `NO_TRADE_DATA_INCOMPLETE`, including an empty/wrong-session cross-section,
-duplicate/missing report membership, stale rows, unavailable Quality/Valuation,
-missing F gate features/ATR, analysis errors, missing PIT facts, and insufficient
-market history when reported by the canonical screener. Existing identity-conflict
-exclusions remain exclusions. This conservative gate can suppress entries even
-when the canonical research path could rank a smaller usable subset.
+record `NO_TRADE_DATA_INCOMPLETE` when an input remains rank-relevant: an
+empty/wrong-session cross-section, inconsistent membership, unresolved current
+observation, scores, PIT prerequisites, F gate features or selected rank-one ATR.
+A fully observed mandatory rejection makes later gaps irrelevant. Upstream
+dataset readiness failures also prevent new intents. Position risk management
+and prior intent execution still require the unchanged STRICT critical bars.
 
 `NO_TRADE_DATA_INCOMPLETE` prevents new intent selection across the whole
 cross-section. It does not defer a previously committed intent or stop management

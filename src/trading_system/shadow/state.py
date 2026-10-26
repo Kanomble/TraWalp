@@ -73,7 +73,12 @@ def validate_state(state: dict, capital: float) -> None:
         )
     if state["pending"]:
         typed = PENDING.validate_python(state["pending"]["order"])
-        require(normalized(typed) == state["pending"]["order"], "pending serialization")
+        encoded = normalized(typed)
+        if "current_market_observation" not in state["pending"]["order"]["record"]:
+            # Optional forward provenance was absent in the original V1 record.
+            # Verify its old bytes without rewriting events or granting readiness.
+            encoded["record"].pop("current_market_observation")
+        require(encoded == state["pending"]["order"], "pending serialization")
         require(typed.daily_candidate_rank == 1, "pending rank")
         require(typed.variant is FROZEN_CHAMPION_F.variant, "pending champion identity")
         execution = date.fromisoformat(state["pending"]["expected_execution_session"])

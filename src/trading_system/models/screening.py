@@ -36,6 +36,8 @@ class ScreenRecord(BaseModel):
     estimated_market_cap: float | None = Field(default=None, ge=0)
     latest_pit_filing_date: date | None = None
     latest_pit_period_end: date | None = None
+    # Forward-only qualification evidence; never changes legacy screen economics.
+    current_market_observation: str = "UNQUALIFIED"
 
 
 class ScreenReport(BaseModel):

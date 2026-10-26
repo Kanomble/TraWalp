@@ -135,11 +135,14 @@ def test_explicit_asset_sync_persists_provider_class_without_inferring_it_from_r
                 fractionable=False,
                 shortable=False,
             )
-            if asset_class is not None:
-                row.asset_class = asset_class
+            row.asset_class = asset_class if asset_class is not None else "UNKNOWN"
             rows.append(row)
-        rows.append(SimpleNamespace(symbol="INACTIVE", tradable=True, status=AssetStatus.INACTIVE))
-        rows.append(SimpleNamespace(symbol="UNTRADABLE", tradable=False))
+        rows.append(
+            SimpleNamespace(
+                **{**vars(rows[0]), "symbol": "INACTIVE", "status": AssetStatus.INACTIVE}
+            )
+        )
+        rows.append(SimpleNamespace(**{**vars(rows[0]), "symbol": "UNTRADABLE", "tradable": False}))
         return rows
 
     client = AlpacaDataClient(

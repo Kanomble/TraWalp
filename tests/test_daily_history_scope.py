@@ -170,9 +170,9 @@ def test_us_equity_cli_uses_one_asset_load_no_sec_and_existing_batches(
     assert cli.main(COMMAND + ["--universe", "us-equity"]) == 0
     repeated = json.loads(capsys.readouterr().out)
     assert loads == [database.path, database.path]
-    assert all(
-        start.date() == END for _, start, _ in provider.calls
-    )  # Verified correction overlap.
+    # Only the final session was returned. Request success cannot certify the
+    # omitted history, so an incremental retry must retain the whole range.
+    assert all(start.date() == START for _, start, _ in provider.calls)
     assert repeated["bars_inserted"] == repeated["bars_updated"] == 0
 
 

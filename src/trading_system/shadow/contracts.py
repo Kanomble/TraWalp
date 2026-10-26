@@ -107,6 +107,7 @@ FINGERPRINT_PATTERNS = (
     "data/market_sessions.py",
     "data/universe.py",
     "data/sec_identity.py",
+    "data/observations.py",
     "fundamentals/*.py",
     "technical/*.py",
     "strategy/screener.py",
@@ -114,6 +115,43 @@ FINGERPRINT_PATTERNS = (
     "models/*.py",
     "shadow/*.py",
 )
+
+DATA_PIPELINE_PATTERNS = (
+    "config.py",
+    "data/alpaca_client.py",
+    "data/sync.py",
+    "data/xbrl_parser.py",
+    "data/sec_client.py",
+    "data/sec_identity.py",
+    "data/database.py",
+    "data/market_sessions.py",
+    "data/observations.py",
+    "data/daily_history.py",
+    "data/universe.py",
+    "models/market_data.py",
+    "models/fundamentals.py",
+)
+
+
+def runtime_manifest() -> dict:
+    """Installed versions only: no package resolution, installation or network."""
+    import platform
+
+    return {
+        "python": platform.python_version(),
+        **{
+            package: version(package)
+            for package in (
+                "alpaca-py",
+                "requests",
+                "exchange-calendars",
+                "pandas",
+                "numpy",
+                "pydantic",
+                "PyYAML",
+            )
+        },
+    }
 
 
 def economic_config(config: StrategyConfig) -> dict:
@@ -142,11 +180,11 @@ def fingerprints(config: StrategyConfig) -> dict:
         ).hexdigest()
         for path in files
     }
-    import platform
-
-    runtime = {"python": platform.python_version()}
-    for package in ("exchange-calendars", "pandas", "numpy", "pydantic", "PyYAML"):
-        runtime[package] = version(package)
+    runtime = runtime_manifest()
+    pipeline_files = {
+        name: hashlib.sha256((root / name).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+        for name in DATA_PIPELINE_PATTERNS
+    }
     return {
         "strategy_identity": IDENTITY,
         "production_label": FROZEN_CHAMPION_F.production_label,
@@ -157,6 +195,8 @@ def fingerprints(config: StrategyConfig) -> dict:
         "engine_fingerprint": digest({"files": file_hashes, "runtime": runtime}),
         "engine_files": file_hashes,
         "runtime": runtime,
+        "data_pipeline_files": pipeline_files,
+        "data_pipeline_fingerprint": digest({"files": pipeline_files, "runtime": runtime}),
         "data_integrity_contract_version": STRICT_CONTRACT_VERSION,
         "strict_contract_fingerprint": file_hashes["backtest/data_integrity.py"],
         "journal_schema_version": SCHEMA_VERSION,

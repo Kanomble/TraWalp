@@ -23,6 +23,7 @@ from trading_system.data.market_sessions import (
     latest_completed_trading_session,
     trading_sessions_between,
 )
+from trading_system.data.observations import current_session_observation
 from trading_system.data.sec_client import SecClient, SecResourceNotFound
 from trading_system.data.sec_identity import (
     SecIdentityResolution,
@@ -390,6 +391,11 @@ def _daily_range_verified(
 ) -> bool:
     if not isinstance(value, Mapping):
         return False
+    if (
+        value.get("verification_contract") != "daily-observations/v2"
+        or value.get("status") != "VERIFIED_COMPLETE"
+    ):
+        return False
     if value.get("feed") != feed or value.get("adjustment") != adjustment:
         return False
     try:
@@ -407,9 +413,14 @@ def _daily_coverage_value(
     feed: str | None,
     adjustment: str | None,
     checked_at: str,
-) -> dict[str, str | None]:
+    *,
+    status: str = "VERIFIED_COMPLETE",
+) -> dict:
     if isinstance(previous, Mapping) and (
-        previous.get("feed") == feed and previous.get("adjustment") == adjustment
+        previous.get("feed") == feed
+        and previous.get("adjustment") == adjustment
+        and previous.get("status") == status == "VERIFIED_COMPLETE"
+        and previous.get("verification_contract") == "daily-observations/v2"
     ):
         try:
             previous_start = datetime.fromisoformat(str(previous["start"]))
@@ -425,6 +436,8 @@ def _daily_coverage_value(
         "feed": feed,
         "adjustment": adjustment,
         "checked_at": checked_at,
+        "verification_contract": "daily-observations/v2",
+        "status": status,
     }
 
 
@@ -542,7 +555,11 @@ class DataSynchronizer:
         if self.alpaca is None:
             raise ValueError("Alpaca client is required for asset synchronization")
         assets = self.alpaca.list_tradable_us_equities()
-        return {**self.database.reconcile_assets(assets), "errors": 0}
+        return {
+            **self.database.reconcile_assets(assets),
+            **getattr(self.alpaca, "last_asset_diagnostics", {}),
+            "errors": 0,
+        }
 
     def sync_sec_full(
         self,
@@ -1162,6 +1179,8 @@ class DataSynchronizer:
             )
         counts = {
             "symbols_checked": len(symbols),
+            "feed": _enum_text(getattr(self.alpaca, "feed", None)),
+            "adjustment": _enum_text(getattr(self.alpaca, "adjustment", None)),
             "identity_conflicts_skipped": len(skipped),
             "identity_conflict_sample": skipped[:10],
             "records_updated": 0,
@@ -1311,6 +1330,8 @@ class DataSynchronizer:
             for items in grouped_ranges.values()
         )
         successful_ranges: Counter[str] = Counter()
+        invalid_symbols: set[str] = set()
+        request_missing: Counter[str] = Counter()
         symbols_received: set[str] = set()
         first_received: datetime | None = None
         last_received: datetime | None = None
@@ -1355,11 +1376,35 @@ class DataSynchronizer:
                 try:
                     download_started = self.timer()
                     downloaded = self.alpaca.daily_bars(batch, range_start, range_end)
+                    response_observations: dict[str, set[date]] = defaultdict(set)
+                    invalid_returned_symbols = set()
+                    for bar in downloaded:
+                        if (
+                            current_session_observation(bar, bar.timestamp.date())
+                            == "OBSERVATION_PRESENT"
+                        ):
+                            response_observations[bar.symbol].add(bar.timestamp.date())
+                        else:
+                            invalid_returned_symbols.add(bar.symbol)
+                    requested_sessions = set(
+                        trading_sessions_between(
+                            range_start.date(), (range_end - timedelta(microseconds=1)).date()
+                        )
+                    )
+                    for symbol in batch:
+                        request_missing[symbol] += len(
+                            requested_sessions - response_observations[symbol]
+                        )
+                    invalid_symbols.update(invalid_returned_symbols)
                     download_seconds += self.timer() - download_started
                     counts["bars_received"] += len(downloaded)
                     symbols_received.update(bar.symbol for bar in downloaded)
                     diagnostics = getattr(self.alpaca, "last_bar_diagnostics", {})
                     counts["invalid_bars"] += int(diagnostics.get("invalid_bars", 0))
+                    invalid_symbols.update(diagnostics.get("invalid_symbols", []))
+                    if diagnostics.get("invalid_bars") and not diagnostics.get("invalid_symbols"):
+                        # Older adapters cannot attribute the rejected record: fail the batch.
+                        invalid_symbols.update(batch)
                     if downloaded:
                         batch_first = min(bar.timestamp for bar in downloaded)
                         batch_last = max(bar.timestamp for bar in downloaded)
@@ -1383,6 +1428,8 @@ class DataSynchronizer:
                         "invalid_bars",
                     ):
                         counts[key] += write_counts[key]
+                    if write_counts["invalid_bars"] and not invalid_returned_symbols:
+                        invalid_symbols.update(batch)
                     successful_ranges.update(batch)
                 except Exception:
                     counts["errors"] += 1
@@ -1405,23 +1452,67 @@ class DataSynchronizer:
                     counts["errors"],
                 )
 
-        completed_symbols = {
+        request_succeeded = {
             symbol for symbol in symbols if planned_ranges[symbol] == successful_ranges[symbol]
         }
         checked_at = self.clock().isoformat()
-        self.database.set_sync_values(
-            "daily_history_coverage",
-            {
-                symbol: _daily_coverage_value(
+        observations: dict[str, set[date]] = defaultdict(set)
+        # Verify the actual bounded local set, not the HTTP batch's success flag.
+        for batch in _chunks(symbols, self.market_data_batch_size):
+            for bar in self.database.bars_between(
+                batch, start_at, end_at, timeframe=BarTimeframe.DAY_1
+            ):
+                if current_session_observation(bar, bar.timestamp.date()) == "OBSERVATION_PRESENT":
+                    observations[bar.symbol].add(bar.timestamp.date())
+                else:
+                    invalid_symbols.add(bar.symbol)
+        expected = set(expected_sessions)
+        coverage = {}
+        for symbol in symbols:
+            if symbol not in request_succeeded:
+                continue  # A failed request cannot advance its previous proof.
+            missing = sorted(expected - observations[symbol])
+            status = (
+                "OBSERVATION_INVALID"
+                if symbol in invalid_symbols
+                else "OBSERVATION_ABSENT"
+                if missing or request_missing[symbol]
+                else "VERIFIED_COMPLETE"
+            )
+            coverage[symbol] = {
+                **_daily_coverage_value(
                     coverage_state.get(symbol),
                     start_at,
                     end_at,
                     feed,
                     adjustment,
                     checked_at,
-                )
-                for symbol in completed_symbols
-            },
+                    status=status,
+                ),
+                "request_status": "REQUEST_SUCCESS"
+                if planned_ranges[symbol]
+                else "NOT_REQUESTED_LOCAL_VERIFICATION",
+                "observation_status": "OBSERVATION_PRESENT"
+                if status == "VERIFIED_COMPLETE"
+                else status,
+                "expected_observations": len(expected),
+                "present_observations": len(observations[symbol] & expected),
+                "missing_observations": len(missing),
+                "request_missing_observations": request_missing[symbol],
+                "missing_session_sample": [day.isoformat() for day in missing[:10]],
+            }
+        counts["coverage_verified_complete"] = sum(
+            value["status"] == "VERIFIED_COMPLETE" for value in coverage.values()
+        )
+        counts["coverage_observation_absent"] = sum(
+            value["status"] == "OBSERVATION_ABSENT" for value in coverage.values()
+        )
+        counts["coverage_observation_invalid"] = sum(
+            value["status"] == "OBSERVATION_INVALID" for value in coverage.values()
+        )
+        self.database.set_sync_values(
+            "daily_history_coverage",
+            coverage,
         )
         bounds_after = self.database.bar_bounds_by_symbol(
             symbols,
@@ -1778,12 +1869,14 @@ class DataSynchronizer:
         state = {
             **previous,
             "last_started_at": started_at.isoformat(),
+            "last_completed_at": self.clock().isoformat(),
             "last_success_at": (
                 self.clock().isoformat() if status == "success" else previous.get("last_success_at")
             ),
             "status": status,
             **result,
         }
+        state.pop("error", None)
         self.database.set_sync_value("dataset", dataset, state)
         LOGGER.info("Stage %s completed status=%s elapsed=%.3fs", dataset, status, elapsed)
         return result

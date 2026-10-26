@@ -119,7 +119,15 @@ class Journal:
         finally:
             connection.close()
 
-    def initialize(self, *, now: datetime, fingerprints: dict, git_identity: dict, capital=100.0):
+    def initialize(
+        self,
+        *,
+        now: datetime,
+        fingerprints: dict,
+        git_identity: dict,
+        capital=100.0,
+        input_readiness=None,
+    ):
         if not math.isfinite(capital) or capital <= 0:
             raise ShadowError("SHADOW_INVALID_INITIAL_CAPITAL")
         boundary = latest_completed_trading_session(now)
@@ -131,6 +139,7 @@ class Journal:
                 **fingerprints,
                 "initial_capital": float(capital),
                 "latest_completed_official_session_at_inception": boundary,
+                **({"input_readiness": input_readiness} if input_readiness is not None else {}),
             }
         )
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -232,6 +241,7 @@ class Journal:
             "branch",
             "initial_capital",
             "latest_completed_official_session_at_inception",
+            "input_readiness",
         }
         committed, session_events = set(), []
         preflight = screened = decided = False
@@ -297,6 +307,43 @@ class Journal:
                     == inception["engine_files"]["backtest/data_integrity.py"],
                     "inception strict digest",
                 )
+                if "data_pipeline_fingerprint" in inception:
+                    require(
+                        inception["data_pipeline_fingerprint"]
+                        == digest(
+                            {
+                                "files": inception["data_pipeline_files"],
+                                "runtime": inception["runtime"],
+                            }
+                        ),
+                        "inception data pipeline digest",
+                    )
+                if "input_readiness" in inception:
+                    readiness = inception["input_readiness"]
+                    require(
+                        readiness["ready"] and not readiness["blocking_reasons"],
+                        "inception readiness",
+                    )
+                    require(
+                        readiness["unresolved_rank_relevant_count"] == 0,
+                        "inception unresolved inputs",
+                    )
+                    require(
+                        readiness["analysis_session"]
+                        == inception["latest_completed_official_session_at_inception"],
+                        "inception analysis session",
+                    )
+                    require(
+                        readiness["input_readiness_digest"]
+                        == digest(
+                            {
+                                key: value
+                                for key, value in readiness.items()
+                                if key != "input_readiness_digest"
+                            }
+                        ),
+                        "inception readiness digest",
+                    )
                 capital = inception["initial_capital"]
                 require(math.isfinite(capital) and capital > 0, "inception capital")
                 state = initial_state(capital)

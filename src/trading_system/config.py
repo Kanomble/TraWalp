@@ -482,8 +482,8 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
-@lru_cache(maxsize=4)
-def load_settings(strategy_path: str | Path | None = None) -> Settings:
+def strategy_config_location(strategy_path: str | Path | None = None) -> tuple[Path, Path]:
+    """Resolve configuration without environment loading or provider construction."""
     config_path = (
         DEFAULT_STRATEGY_PATH
         if strategy_path is None
@@ -494,7 +494,12 @@ def load_settings(strategy_path: str | Path | None = None) -> Settings:
         if config_path.parent.name.casefold() == "config"
         else config_path.parent
     )
-    load_dotenv(config_base / ".env")
+    return config_path, config_base
+
+
+def load_strategy_config(strategy_path: str | Path | None = None) -> StrategyConfig:
+    """The shared, local-only CLI path contract (independent of default CWD)."""
+    config_path, config_base = strategy_config_location(strategy_path)
     strategy = StrategyConfig.model_validate(_read_yaml(config_path))
     storage = strategy.storage
     strategy = strategy.model_copy(
@@ -507,8 +512,15 @@ def load_settings(strategy_path: str | Path | None = None) -> Settings:
             )
         }
     )
+    return strategy
+
+
+@lru_cache(maxsize=4)
+def load_settings(strategy_path: str | Path | None = None) -> Settings:
+    _, config_base = strategy_config_location(strategy_path)
+    load_dotenv(config_base / ".env")
     return Settings(
-        strategy=strategy,
+        strategy=load_strategy_config(strategy_path),
         alpaca_api_key=os.getenv("ALPACA_API_KEY") or None,
         alpaca_secret_key=os.getenv("ALPACA_SECRET_KEY") or None,
         sec_user_agent=os.getenv("SEC_USER_AGENT") or None,

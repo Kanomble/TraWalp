@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, date, datetime
 
 from trading_system.backtest.data_integrity import (
@@ -20,6 +21,7 @@ from trading_system.shadow.contracts import (
 from trading_system.shadow.execution import ChampionSession
 from trading_system.shadow.inputs import LocalInputs, separate_paths
 from trading_system.shadow.journal import Journal
+from trading_system.shadow.readiness import evaluate_shadow_input_readiness
 from trading_system.shadow.state import portfolio
 
 
@@ -38,12 +40,37 @@ class ShadowRunner:
         self.screen_source = screen_source
 
     def initialize(self, *, capital=100.0):
-        # No market access, screening, simulation, --as-of, or historical start option.
+        if self.journal.path.exists():
+            raise ShadowError("SHADOW_ALREADY_INITIALIZED", path=str(self.journal.path))
+        if not math.isfinite(capital) or capital <= 0:
+            raise ShadowError("SHADOW_INVALID_INITIAL_CAPITAL")
+        current, now = fingerprints(self.config), self.clock()
+        if not self.market_path.is_file():
+            raise ShadowError(
+                "SHADOW_INCEPTION_DATA_NOT_READY", blocking_reasons=["MARKET_DATABASE_MISSING"]
+            )
+        with LocalInputs(self.market_path, capture_provenance=False).snapshot() as inputs:
+            readiness = evaluate_shadow_input_readiness(
+                inputs, self.config, now=now, screen_source=self.screen_source
+            )
+        if not readiness.ready:
+            raise ShadowError("SHADOW_INCEPTION_DATA_NOT_READY", **readiness.as_dict())
+        completed_at = self.clock()
+        # A large screen can span the official close. Never bind a stale boundary
+        # or silently perform a second expensive screen in this initialization.
+        if (
+            latest_completed_trading_session(completed_at).isoformat()
+            != readiness.details["analysis_session"]
+        ):
+            raise ShadowError("SHADOW_INCEPTION_SESSION_CHANGED_RETRY")
+        if completed_at < now:
+            raise ShadowError("SHADOW_INCEPTION_CLOCK_REGRESSION")
         return self.journal.initialize(
-            now=self.clock(),
-            fingerprints=fingerprints(self.config),
+            now=completed_at,
+            fingerprints=current,
             git_identity=local_git_identity(),
             capital=capital,
+            input_readiness=readiness.as_dict(),
         )
 
     def status(self):
@@ -177,6 +204,13 @@ class ShadowRunner:
                     )
                     failure = exc
                 if failure is None:
+                    readiness = evaluate_shadow_input_readiness(
+                        inputs,
+                        self.config,
+                        now=now,
+                        session=selected,
+                        screen_source=self.screen_source,
+                    )
                     terminal = self.journal.append(
                         connection,
                         "SESSION_STARTED",
@@ -207,7 +241,7 @@ class ShadowRunner:
                         },
                     )
                     after = ChampionSession(
-                        inputs, self.config, screen_source=self.screen_source
+                        inputs, self.config, qualified_inputs=readiness
                     ).process(state, selected, next_official_session(selected), bars, emit)
                     terminal = self.journal.append(
                         connection,

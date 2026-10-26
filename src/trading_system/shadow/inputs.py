@@ -16,6 +16,10 @@ class LocalInputs(Database):
     synchronizer or provider is imported or accepted by the Shadow runner.
     """
 
+    def __init__(self, path, *, capture_provenance=True):
+        super().__init__(path)
+        self.capture_provenance = capture_provenance
+
     @contextmanager
     def snapshot(self):
         with super().read_only() as connection:
@@ -45,14 +49,16 @@ class LocalInputs(Database):
     def bars_available_as_of(self, symbol, as_of, **kwargs):
         bars = super().bars_available_as_of(symbol, as_of, **kwargs)
         key = f"{symbol}|{as_of.isoformat()}|{kwargs.get('limit')}|{kwargs.get('timeframe', '1d')}"
-        self.provenance["market_inputs"][key] = digest(bars)
+        if self.capture_provenance:
+            self.provenance["market_inputs"][key] = digest(bars)
         return bars
 
     def facts_available_as_of(self, symbol, as_of, metric=None, **kwargs):
         facts = super().facts_available_as_of(symbol, as_of, metric, **kwargs)
-        self.provenance["fundamental_inputs"][f"{symbol}|{as_of.isoformat()}|{metric}"] = digest(
-            facts
-        )
+        if self.capture_provenance:
+            self.provenance["fundamental_inputs"][f"{symbol}|{as_of.isoformat()}|{metric}"] = (
+                digest(facts)
+            )
         return facts
 
     def list_tradable_companies(self):

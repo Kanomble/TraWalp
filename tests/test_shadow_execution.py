@@ -17,7 +17,11 @@ from trading_system.backtest.research_registry import FROZEN_CHAMPION_F
 from trading_system.champion import champion_ranking, run_champion_backtest
 from trading_system.config import StrategyConfig, _read_yaml
 from trading_system.data.database import Database
-from trading_system.data.market_sessions import regular_session_bounds, trading_sessions_between
+from trading_system.data.market_sessions import (
+    latest_completed_trading_session,
+    regular_session_bounds,
+    trading_sessions_between,
+)
 from trading_system.models.screening import ScreenReport
 from trading_system.shadow import runner as runner_module
 from trading_system.shadow.contracts import GENESIS_HASH, ShadowError, digest, fingerprints
@@ -41,6 +45,11 @@ class Screens:
             row.model_copy(
                 update={
                     "as_of": session,
+                    "current_market_observation": (
+                        "OBSERVATION_PRESENT"
+                        if row.current_market_observation == "UNQUALIFIED"
+                        else row.current_market_observation
+                    ),
                     "technical": row.technical.model_copy(update={"market_session": session}),
                 }
             )
@@ -55,12 +64,30 @@ class Screens:
         )
 
 
+def ready_states(db, now):
+    """Explicit synthetic successful local ingest; no provider or production DB."""
+    for key in ("asset_universe", "sec", "daily_history"):
+        db.set_sync_value(
+            "dataset",
+            key,
+            {
+                "status": "success",
+                "last_success_at": now.isoformat(),
+                "errors": 0,
+                "feed": "iex",
+                "adjustment": "all",
+            },
+        )
+
+
 @pytest.fixture
 def case(tmp_path, config):
     db = Database(tmp_path / "market.sqlite3")
     db.initialize()
     sessions = trading_sessions_between(date(2024, 1, 2), date(2024, 1, 23))
     db.upsert_bars([bar(symbol, day) for symbol in ("AAA", "BBB", "SPY") for day in sessions])
+    db.upsert_bars([bar("SPY", date(2023, 12, 29))])
+    ready_states(db, datetime(2023, 12, 29, 22, tzinfo=UTC))
     source = Screens({sessions[0]: (record("BBB"), record("AAA"))})
     journal = Journal(tmp_path / "shadow.sqlite3")
     runner = ShadowRunner(
@@ -72,6 +99,7 @@ def case(tmp_path, config):
     )
     runner.initialize()
     runner.clock = lambda: datetime(2024, 2, 1, tzinfo=UTC)
+    ready_states(db, runner.clock())
     return runner, db, sessions, source
 
 
@@ -102,13 +130,14 @@ def test_inception_exactly_once_and_no_backfill(case):
     assert runner.journal.path.read_bytes() == before
 
 
-def test_custom_capital_and_no_market_database_needed(tmp_path, config):
+def test_missing_market_database_refuses_inception(tmp_path, config):
     journal = Journal(tmp_path / "shadow.sqlite3")
     runner = ShadowRunner(
         journal, tmp_path / "absent.sqlite3", config, clock=lambda: datetime(2024, 1, 1, tzinfo=UTC)
     )
-    runner.initialize(capital=123.45)
-    assert journal.verify().state["cash"] == 123.45
+    with pytest.raises(ShadowError, match="SHADOW_INCEPTION_DATA_NOT_READY"):
+        runner.initialize(capital=123.45)
+    assert not journal.path.exists()
     assert not runner.market_path.exists()
 
 
@@ -127,6 +156,7 @@ def test_invalid_capital_does_not_create_file(tmp_path, config, capital):
         "strategy_fingerprint",
         "production_label",
         "engine_fingerprint",
+        "data_pipeline_fingerprint",
         "strict_contract_fingerprint",
         "data_integrity_contract_version",
         "journal_schema_version",
@@ -493,8 +523,18 @@ def test_default_production_screen_path_is_used_read_only(case, monkeypatch):
     assert runner.journal.verify().state["pending"]["order"]["record"]["symbol"] == "AAA"
 
 
-def test_cli_all_commands_only_temporary_journal(case, tmp_path, capsys):
+def test_cli_all_commands_only_temporary_journal(case, tmp_path, capsys, monkeypatch):
+    from trading_system.shadow import cli as shadow_cli
+
     runner, db, _, _ = case
+    monkeypatch.setattr(
+        shadow_cli,
+        "ShadowRunner",
+        lambda journal, market, config: ShadowRunner(
+            journal, market, config, clock=runner.clock, screen_source=runner.screen_source
+        ),
+    )
+    db.upsert_bars([bar("SPY", latest_completed_trading_session(runner.clock()))])
     path = tmp_path / "cli-shadow.sqlite3"
     config_path = tmp_path / "config.json"
     config_path.write_text(
@@ -572,8 +612,14 @@ def test_real_nonempty_screener_records_local_bar_fact_and_feature_provenance(tm
         db.path,
         config,
         clock=lambda: regular_session_bounds(session)[0] - timedelta(hours=1),
+        screen_source=Screens(),
+    )
+    ready_states(db, runner.clock())
+    db.upsert_bars(
+        [bar("SPY", latest_completed_trading_session(runner.clock())), bar("SPY", session)]
     )
     runner.initialize()
+    runner.screen_source = None
     runner.clock = lambda: regular_session_bounds(session)[1]
     before = db.path.read_bytes()
     runner.run()
@@ -635,6 +681,8 @@ def test_official_early_close_and_holiday_sequence(case):
         screen_source=source,
         clock=lambda: datetime(2024, 11, 27, 22, tzinfo=UTC),
     )
+    ready_states(db, runner.clock())
+    db.upsert_bars([bar("SPY", date(2024, 11, 27)), bar("SPY", date(2024, 11, 29))])
     runner.initialize()
     runner.clock = lambda: datetime(2024, 11, 29, 17, 59, tzinfo=UTC)
     assert runner.run()["status"] == "NO_COMPLETED_SESSION"

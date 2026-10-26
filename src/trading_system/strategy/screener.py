@@ -21,6 +21,7 @@ from trading_system.data.market_sessions import (
     full_history_request_window,
     regular_session_bounds,
 )
+from trading_system.data.observations import current_session_observation
 from trading_system.data.universe import (
     UniverseSnapshot,
     is_financial_or_reit,
@@ -80,6 +81,7 @@ class _PreparedCandidate:
     estimated_market_cap: float | None = None
     latest_pit_filing_date: date | None = None
     latest_pit_period_end: date | None = None
+    current_market_observation: str = "UNQUALIFIED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,6 +466,9 @@ class Screener:
                 data_warnings=warnings,
                 analysis_date=analysis_date,
                 market_history_count=len(bars),
+                current_market_observation=current_session_observation(
+                    bars[-1] if bars else None, market_session
+                ),
                 pit_fact_count=len(facts),
                 estimated_market_cap=(
                     float(fundamentals.market_cap) if fundamentals.market_cap is not None else None
@@ -641,6 +646,7 @@ class Screener:
             estimated_market_cap=candidate.estimated_market_cap,
             latest_pit_filing_date=candidate.latest_pit_filing_date,
             latest_pit_period_end=candidate.latest_pit_period_end,
+            current_market_observation=candidate.current_market_observation,
         )
         self.diagnostics.report_construction_seconds += perf_counter() - started
         return record

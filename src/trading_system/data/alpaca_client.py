@@ -13,7 +13,7 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest, StockSnapshotRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import AssetClass, AssetStatus
+from alpaca.trading.enums import AssetClass, AssetExchange, AssetStatus
 from alpaca.trading.requests import GetAssetsRequest
 
 from trading_system.models.market_data import (
@@ -46,6 +46,7 @@ class AlpacaDataClient:
         historical_client: StockHistoricalDataClient | None = None,
         trading_client: TradingClient | None = None,
         symbol_mapping: Mapping[str, str] | None = None,
+        minimum_retained_ratio: float = 0.5,
     ) -> None:
         # Explicit provider aliases only. Never guess punctuation conversions or
         # apply SEC ticker aliases to market-data requests. The default is identity.
@@ -65,31 +66,82 @@ class AlpacaDataClient:
         self.historical = historical_client or StockHistoricalDataClient(api_key, secret_key)
         self.feed = feed
         self.adjustment = adjustment
-        self.last_bar_diagnostics: dict[str, int] = {"invalid_bars": 0}
+        self.last_bar_diagnostics: dict = {"invalid_bars": 0}
+        if not 0 < minimum_retained_ratio <= 1:
+            raise ValueError("minimum_retained_ratio must be within (0, 1]")
+        self.minimum_retained_ratio = minimum_retained_ratio
+        self.last_asset_diagnostics: dict = {}
         # Explicit paper=True is defense in depth, though only read operations are exposed.
-        self.trading = trading_client or TradingClient(api_key, secret_key, paper=True)
+        self.trading = trading_client or TradingClient(
+            api_key, secret_key, paper=True, raw_data=True
+        )
 
     def list_tradable_us_equities(self) -> list[TradableAsset]:
         request = GetAssetsRequest(status=AssetStatus.ACTIVE, asset_class=AssetClass.US_EQUITY)
         assets = self.trading.get_all_assets(request)
-        result = sorted(
-            (
-                TradableAsset(
-                    symbol=self._canonical_symbols.get(asset.symbol, asset.symbol),
-                    name=asset.name,
-                    exchange=str(
-                        asset.exchange.value if hasattr(asset.exchange, "value") else asset.exchange
-                    ),
-                    tradable=asset.tradable,
-                    fractionable=asset.fractionable,
-                    shortable=asset.shortable,
-                    asset_class=getattr(asset, "asset_class", None),
+        if not isinstance(assets, list):
+            raise ValueError("ALPACA_INVALID_ASSET_SNAPSHOT")
+        result, unknown, parsed, invalid = [], set(), 0, 0
+        unknown_count = 0
+        known_exchanges = {item.value for item in AssetExchange}
+        for asset in assets:
+            try:
+                get = (
+                    asset.get
+                    if isinstance(asset, Mapping)
+                    else lambda key, row=asset: getattr(row, key)
                 )
-                for asset in assets
-                if asset.tradable and asset.status == AssetStatus.ACTIVE
-            ),
-            key=lambda asset: asset.symbol,
-        )
+                symbol = get("symbol")
+                status = getattr(get("status"), "value", get("status"))
+                class_value = (
+                    asset.get("class", asset.get("asset_class"))
+                    if isinstance(asset, Mapping)
+                    else get("asset_class")
+                )
+                asset_class = getattr(class_value, "value", class_value)
+                exchange = getattr(get("exchange"), "value", get("exchange"))
+                if (
+                    not isinstance(symbol, str)
+                    or not symbol
+                    or any(char.isspace() for char in symbol)
+                ):
+                    raise ValueError("invalid symbol")
+                if status not in {item.value for item in AssetStatus}:
+                    raise ValueError("invalid status")
+                if not isinstance(asset_class, str) or not asset_class.strip():
+                    raise ValueError("missing asset_class")
+                if not isinstance(exchange, str) or not exchange.strip():
+                    raise ValueError("missing exchange")
+                flags = {key: get(key) for key in ("tradable", "fractionable", "shortable")}
+                if any(type(value) is not bool for value in flags.values()):
+                    raise ValueError("asset flags must be booleans")
+                normalized_asset = TradableAsset(
+                    symbol=self._canonical_symbols.get(symbol, symbol),
+                    name=get("name") or symbol,
+                    exchange=exchange,
+                    asset_class=asset_class,
+                    **flags,
+                )
+                parsed += 1
+                if exchange not in known_exchanges:
+                    unknown.add(exchange)
+                    unknown_count += 1
+                if flags["tradable"] and status == AssetStatus.ACTIVE.value:
+                    result.append(normalized_asset)
+            except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                invalid += 1
+                LOGGER.warning("Skipped invalid Alpaca asset: %s", exc)
+        result.sort(key=lambda asset: asset.symbol)
+        self.last_asset_diagnostics = {
+            "raw_assets_received": len(assets),
+            "assets_parsed": parsed,
+            "assets_skipped_invalid": invalid,
+            "unknown_exchange_count": unknown_count,
+            "unknown_exchange_values": sorted(unknown),
+            "tradable_assets_final": len(result),
+        }
+        if not assets or parsed / len(assets) < self.minimum_retained_ratio:
+            raise ValueError("ALPACA_ASSET_PARSE_RETENTION_FAILURE")
         if len({asset.symbol for asset in result}) != len(result):
             raise ValueError("ALPACA_SYMBOL_MAPPING_COLLISION")
         return result
@@ -130,6 +182,7 @@ class AlpacaDataClient:
         normalized_timeframe = BarTimeframe(timeframe)
         output: list[MarketDataBar] = []
         total_invalid = 0
+        invalid_symbols: set[str] = set()
         for batch in _chunks(normalized, batch_size):
             provider_batch = [self.symbol_mapping.get(symbol, symbol) for symbol in batch]
             request = StockBarsRequest(
@@ -174,6 +227,7 @@ class AlpacaDataClient:
                         validate_market_bar(normalized_bar)
                         output.append(normalized_bar)
                     except (AttributeError, InvalidOperation, TypeError, ValueError) as exc:
+                        invalid_symbols.add(symbol)
                         invalid_count += 1
                         if len(invalid_samples) < 3:
                             invalid_samples.append(
@@ -195,7 +249,12 @@ class AlpacaDataClient:
                     invalid_samples,
                 )
             total_invalid += invalid_count
-        self.last_bar_diagnostics = {"invalid_bars": total_invalid}
+        self.last_bar_diagnostics = {
+            "invalid_bars": total_invalid,
+            "invalid_symbols": sorted(invalid_symbols),
+            "requested_feed": self.feed.value,
+            "requested_adjustment": self.adjustment.value,
+        }
         return sorted(output, key=lambda bar: (bar.symbol, bar.timestamp))
 
     def stock_snapshots(self, symbols: Iterable[str]) -> list[MarketSnapshot]:

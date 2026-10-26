@@ -7,7 +7,7 @@ import sqlite3
 import sys
 
 from trading_system.backtest.data_integrity import DataIntegrityError
-from trading_system.config import DEFAULT_STRATEGY_PATH, StrategyConfig, _read_yaml
+from trading_system.config import load_strategy_config
 from trading_system.shadow.contracts import ShadowError, normalized
 from trading_system.shadow.inputs import source_error
 from trading_system.shadow.journal import Journal
@@ -16,7 +16,7 @@ from trading_system.shadow.runner import ShadowRunner
 
 def command(args) -> int:
     try:
-        config = StrategyConfig.model_validate(_read_yaml(args.config or DEFAULT_STRATEGY_PATH))
+        config = load_strategy_config(args.config)
         journal_path = args.journal or config.storage.database_path.with_name("shadow_f.sqlite3")
         runner = ShadowRunner(Journal(journal_path), config.storage.database_path, config)
         if args.command == "shadow-f-init":
@@ -34,6 +34,7 @@ def command(args) -> int:
                         "strategy_fingerprint",
                         "economic_config_fingerprint",
                         "engine_fingerprint",
+                        "data_pipeline_fingerprint",
                         "journal_schema_version",
                     )
                 },

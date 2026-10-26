@@ -15,58 +15,25 @@ from trading_system.backtest.engine import (
 from trading_system.backtest.position_manager import PositionAction, PositionManager
 from trading_system.backtest.presets import position_management_preset
 from trading_system.backtest.research_registry import FROZEN_CHAMPION_F
-from trading_system.champion import champion_ranking, screen_champion
+from trading_system.champion import champion_ranking
 from trading_system.models.backtest import BacktestPosition
 from trading_system.shadow.contracts import digest, normalized
+from trading_system.shadow.qualification import qualify_f_inputs
 from trading_system.shadow.state import PENDING, POSITION
+from trading_system.strategy.screener import Screener
 
 
 def ranking_incompleteness(report, session, config) -> list[dict]:
-    """Conservative availability gate, never a substitute for F eligibility.
-
-    Missing inputs are distinguished from observed values failing thresholds.
-    Excluded identity conflicts retain the canonical exclusion. All other rows
-    must have a current market session and sufficient score/gate inputs.
-    """
-    issues = []
-    if report.as_of != session or not report.records:
-        issues.append({"symbol": None, "reason": "EMPTY_OR_WRONG_SESSION_CROSS_SECTION"})
-    if report.analyzed_count != len(report.records) or len(
-        {r.symbol for r in report.records}
-    ) != len(report.records):
-        issues.append({"symbol": None, "reason": "CROSS_SECTION_MEMBERSHIP_INCONSISTENT"})
-    missing_reasons = {
-        "stale_market_data",
-        "analysis_error",
-        "no_point_in_time_fundamentals",
-        "insufficient_market_history",
-        "quality_score_unavailable",
-        "valuation_score_unavailable",
-    }
-    for record in sorted(report.records, key=lambda item: item.symbol):
-        if "identity_conflict" in record.exclusion_reasons:
-            continue
-        reasons = sorted(missing_reasons.intersection(record.exclusion_reasons))
-        if record.as_of != session or record.technical.market_session != session:
-            reasons.append("SIGNAL_MARKET_SESSION_UNAVAILABLE")
-        if record.scores.quality.score is None or record.scores.valuation.score is None:
-            reasons.append("RANK_SCORE_UNAVAILABLE")
-        # These are precisely the F momentum-gate features, not new thresholds.
-        for name in ("price", "sma50", "sma200", "sma20_rising", "momentum126", "drawdown_52w"):
-            if getattr(record.technical, name) is None:
-                reasons.append(f"F_GATE_INPUT_UNAVAILABLE:{name}")
-        if record.technical.atr14 is None or record.technical.atr14 <= 0:
-            reasons.append("ATR14_UNAVAILABLE")
-        if reasons:
-            issues.append({"symbol": record.symbol, "reasons": reasons})
-    return issues
+    """Compatibility entry point for the causal forward completeness contract."""
+    return qualify_f_inputs(report, session, config)["incomplete_inputs"]
 
 
 class ChampionSession:
     """Only orchestration is new. Every economic rule is delegated to the engine."""
 
-    def __init__(self, database, config, *, screen_source=None):
+    def __init__(self, database, config, *, screen_source=None, qualified_inputs=None):
         self.database, self.config, self.screen_source = database, config, screen_source
+        self.qualified_inputs = qualified_inputs
         self.engine = BacktestEngine(database, config)
         champion = FROZEN_CHAMPION_F
         self.engine.current_preset = champion.preset
@@ -164,14 +131,24 @@ class ChampionSession:
                 transition("POSITION_MANAGED", phase="BAR_COMPLETED")
 
         # Signal T is evaluated at the close, after prior intent execution and risk exits.
-        raw = self.screen_source.screen(session) if self.screen_source is not None else None
-        if raw is None:
-            report = screen_champion(self.database, self.config, session)
-            # Champion ranking rewrites exclusions; use the retained raw input
-            # features/warnings plus provenance for availability checks below.
+        if self.qualified_inputs is not None:
+            raw, report = self.qualified_inputs.raw_report, self.qualified_inputs.ranked_report
+            qualification = self.qualified_inputs.qualification
+            upstream_issues = [
+                {"symbol": None, "reason": reason}
+                for reason in self.qualified_inputs.details["blocking_reasons"]
+                if reason != "RANKING_UNRESOLVED"
+            ]
         else:
+            raw = (
+                self.screen_source.screen(session)
+                if self.screen_source is not None
+                else Screener(self.database, self.config).run(session, use_market_snapshots=False)
+            )
             report = champion_ranking(raw, self.config)
-        issues = ranking_incompleteness(raw or report, session, self.config)
+            qualification = qualify_f_inputs(raw, session, self.config, ranked=report)
+            upstream_issues = []
+        issues = qualification["incomplete_inputs"] + upstream_issues
         candidates = [
             {
                 "symbol": r.symbol,
@@ -198,6 +175,10 @@ class ChampionSession:
                 "ranking_digest": digest(candidates),
                 "data_complete": not issues,
                 "incomplete_inputs": issues,
+                "qualification": qualification,
+                "input_readiness": self.qualified_inputs.as_dict()
+                if self.qualified_inputs is not None
+                else None,
                 "input_provenance": provenance,
                 "input_set_digest": digest(provenance),
                 "exclusion_summary": dict(
