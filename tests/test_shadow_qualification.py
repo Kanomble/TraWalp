@@ -3,8 +3,8 @@
 from datetime import date
 
 import pytest
-from test_champion_consolidation import record
 from test_champion_consolidation import offline as offline
+from test_champion_consolidation import record
 
 from trading_system.champion import champion_ranking
 from trading_system.config import load_strategy_config
