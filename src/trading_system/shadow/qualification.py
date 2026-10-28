@@ -13,6 +13,35 @@ from trading_system.backtest.screen_strategies import evaluate_strategy_gate
 from trading_system.champion import champion_ranking
 
 
+def _independent_history_failure(row, session, config):
+    """Bound the existing stored-row gate without trusting current market values.
+
+    The screener counts every stored Daily row, including zero-volume rows.
+    Replacing an unqualified current row cannot increase that count; an absent
+    current row can add at most one. Historical backfills change the gate inputs
+    and must be evaluated in a new source snapshot.
+    """
+    count = row.market_history_count
+    observation = row.current_market_observation
+    if "analysis_error" in row.exclusion_reasons:
+        return False
+    if observation in {"OBSERVATION_ZERO_VOLUME", "OBSERVATION_INVALID"}:
+        if count <= 0 or row.as_of != session or row.technical.market_session != session:
+            return False
+        maximum = count
+    elif observation == "OBSERVATION_ABSENT":
+        if count != 0 or row.as_of != session or row.technical.market_session is not None:
+            return False
+        maximum = 1
+    elif observation == "OBSERVATION_WRONG_SESSION":
+        if count <= 0 or row.as_of >= session or row.technical.market_session != row.as_of:
+            return False
+        maximum = count + 1
+    else:
+        return False
+    return maximum < config.data_quality.min_market_history_days
+
+
 def qualify_f_inputs(report, session, config, *, ranked=None):
     ranked = ranked if ranked is not None else champion_ranking(report, config)
     rejected, evaluated, unresolved = {}, [], []
@@ -38,7 +67,11 @@ def qualify_f_inputs(report, session, config, *, ranked=None):
         )
         # These are canonical hard rejections, qualified by their actual evidence.
         for reason, known in (
-            ("insufficient_market_history", observed and row.market_history_count > 0),
+            (
+                "insufficient_market_history",
+                (observed and row.market_history_count > 0)
+                or _independent_history_failure(row, session, config),
+            ),
             ("invalid_or_low_price", observed and tech.price is not None),
             ("missing_or_small_market_cap", observed and row.estimated_market_cap is not None),
             ("insufficient_liquidity", observed and row.average_dollar_volume_20d is not None),
