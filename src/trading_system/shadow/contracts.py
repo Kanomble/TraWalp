@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from trading_system.backtest.research_registry import FROZEN_CHAMPION_F, validate_champion_config
 from trading_system.config import PROJECT_ROOT, StrategyConfig
+from trading_system.data.forward_market import CONTRACT
 
 SCHEMA_VERSION = 1
 # Names the existing CC-01 API, not a second integrity implementation.
@@ -117,6 +118,13 @@ FINGERPRINT_PATTERNS = (
 )
 
 DATA_PIPELINE_PATTERNS = (
+    "cli.py",
+    "champion.py",
+    "strategy/screener.py",
+    "data/forward_market.py",
+    "shadow/inputs.py",
+    "shadow/readiness.py",
+    "shadow/qualification.py",
     "config.py",
     "data/alpaca_client.py",
     "data/sync.py",
@@ -187,6 +195,8 @@ def fingerprints(config: StrategyConfig) -> dict:
     }
     return {
         "strategy_identity": IDENTITY,
+        "market_data_contract": CONTRACT.copy(),
+        "market_data_contract_fingerprint": digest(CONTRACT),
         "production_label": FROZEN_CHAMPION_F.production_label,
         "champion_definition": normalized(asdict(FROZEN_CHAMPION_F)),
         "strategy_fingerprint": digest(asdict(FROZEN_CHAMPION_F)),

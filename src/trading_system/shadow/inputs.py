@@ -6,6 +6,7 @@ import sqlite3
 from contextlib import contextmanager
 
 from trading_system.data.database import Database
+from trading_system.data.forward_market import CONTRACT, install_forward_view
 from trading_system.shadow.contracts import digest
 
 
@@ -16,6 +17,8 @@ class LocalInputs(Database):
     synchronizer or provider is imported or accepted by the Shadow runner.
     """
 
+    forward_sip_required = True
+
     def __init__(self, path, *, capture_provenance=True):
         super().__init__(path)
         self.capture_provenance = capture_provenance
@@ -23,12 +26,18 @@ class LocalInputs(Database):
     @contextmanager
     def snapshot(self):
         with super().read_only() as connection:
+            install_forward_view(connection)
             connection.execute("PRAGMA query_only=ON")
             connection.execute("BEGIN")
             # Establish the read snapshot before any collection of source inputs.
             connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
             self._connection = connection
-            self.provenance = {"market_inputs": {}, "fundamental_inputs": {}, "identity_inputs": {}}
+            self.provenance = {
+                **CONTRACT,
+                "market_inputs": {},
+                "fundamental_inputs": {},
+                "identity_inputs": {},
+            }
             try:
                 yield self
             finally:
@@ -50,7 +59,38 @@ class LocalInputs(Database):
         bars = super().bars_available_as_of(symbol, as_of, **kwargs)
         key = f"{symbol}|{as_of.isoformat()}|{kwargs.get('limit')}|{kwargs.get('timeframe', '1d')}"
         if self.capture_provenance:
-            self.provenance["market_inputs"][key] = digest(bars)
+            self.provenance["market_inputs"][key] = self._market_manifest(bars)
+        return bars
+
+    def _market_manifest(self, bars):
+        if not bars:
+            return []
+        rows = self._connection.execute(
+            """SELECT * FROM main.forward_market_observations WHERE symbol=?
+            AND provider='alpaca' AND feed='sip' AND adjustment='all' AND timeframe='1d'""",
+            (bars[0].symbol,),
+        ).fetchall()
+        by_key = {(row["symbol"], row["timestamp"]): dict(row) for row in rows}
+        observations = []
+        for bar in bars:
+            row = by_key[(bar.symbol, bar.timestamp.isoformat())]
+            observations.append(
+                {
+                    **dict(row),
+                    "symbol": bar.symbol,
+                    "timeframe": "1d",
+                    "source_timestamp": bar.timestamp.isoformat(),
+                }
+            )
+        return observations
+
+    def bars_on_session(self, symbols, session):
+        symbols = tuple(sorted(set(symbols)))
+        bars = super().bars_on_session(symbols, session)
+        if self.capture_provenance:
+            self.provenance["market_inputs"][f"execution|{session}|{','.join(symbols)}"] = [
+                item for bar in bars.values() for item in self._market_manifest([bar])
+            ]
         return bars
 
     def facts_available_as_of(self, symbol, as_of, metric=None, **kwargs):

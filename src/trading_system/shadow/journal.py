@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import math
 import sqlite3
+import zlib
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -87,6 +89,45 @@ def event_hash(event: dict) -> str:
 
 
 class Journal:
+    @staticmethod
+    def load_input_manifest(connection, content_hash):
+        row = connection.execute(
+            "SELECT content FROM input_manifests WHERE content_hash=?", (content_hash,)
+        ).fetchone()
+        require(row is not None, "input manifest missing")
+        content = json.loads(row[0])
+        if content.get("manifest_encoding") == "zlib+base64/v1":
+            content = json.loads(zlib.decompress(base64.b64decode(content["data"])))
+        require(digest(content) == content_hash, "input manifest corrupted")
+        return content
+
+    @staticmethod
+    def store_input_manifest(connection, manifest):
+        connection.execute("""CREATE TABLE IF NOT EXISTS input_manifests (
+            content_hash TEXT PRIMARY KEY, content TEXT NOT NULL)""")
+        connection.execute("""CREATE TRIGGER IF NOT EXISTS immutable_manifest_update
+            BEFORE UPDATE ON input_manifests BEGIN SELECT RAISE(ABORT,'IMMUTABLE'); END""")
+        connection.execute("""CREATE TRIGGER IF NOT EXISTS immutable_manifest_delete
+            BEFORE DELETE ON input_manifests BEGIN SELECT RAISE(ABORT,'IMMUTABLE'); END""")
+        content_hash = digest(manifest)
+        content = canonical_json(manifest)
+        # Full-universe manifests can exceed SQLite's single TEXT value limit.
+        # Compress evidence once; its identity remains the uncompressed content hash.
+        if len(content) > 1_000_000:
+            content = canonical_json(
+                {
+                    "manifest_encoding": "zlib+base64/v1",
+                    "data": base64.b64encode(zlib.compress(content.encode("utf-8"))).decode(
+                        "ascii"
+                    ),
+                }
+            )
+        connection.execute(
+            "INSERT OR IGNORE INTO input_manifests VALUES (?,?)",
+            (content_hash, content),
+        )
+        return content_hash
+
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
 
@@ -127,6 +168,7 @@ class Journal:
         git_identity: dict,
         capital=100.0,
         input_readiness=None,
+        input_manifest=None,
     ):
         if not math.isfinite(capital) or capital <= 0:
             raise ShadowError("SHADOW_INVALID_INITIAL_CAPITAL")
@@ -139,6 +181,9 @@ class Journal:
                 **fingerprints,
                 "initial_capital": float(capital),
                 "latest_completed_official_session_at_inception": boundary,
+                "forward_sip_transition_boundary": (
+                    input_readiness.get("analysis_session") if input_readiness else None
+                ),
                 **({"input_readiness": input_readiness} if input_readiness is not None else {}),
             }
         )
@@ -154,6 +199,7 @@ class Journal:
         try:
             connection.execute("PRAGMA synchronous=FULL")
             connection.executescript("BEGIN IMMEDIATE;\n" + DDL)
+            self.store_input_manifest(connection, input_manifest or {})
             self.append(connection, "SHADOW_INITIALIZED", inception, now=now)
             connection.commit()
         except BaseException:
@@ -220,6 +266,7 @@ class Journal:
         expected = sqlite3.connect(":memory:")
         try:
             expected.executescript(DDL)
+            self.store_input_manifest(expected, {})
             schema_query = (
                 "SELECT type,name,sql FROM sqlite_master "
                 "WHERE name NOT LIKE 'sqlite_%' ORDER BY name"
@@ -235,6 +282,7 @@ class Journal:
         previous = GENESIS_HASH
         inception = state = last = decision = active = None
         inception_only_keys = {
+            "forward_sip_transition_boundary",
             "journal_id",
             "created_at_utc",
             "local_git_commit",
@@ -270,6 +318,14 @@ class Journal:
                     "inception identity",
                 )
                 require(inception["journal_schema_version"] == SCHEMA_VERSION, "inception schema")
+                if inception.get("input_readiness"):
+                    readiness = inception["input_readiness"]
+                    require(
+                        inception["forward_sip_transition_boundary"]
+                        == readiness["analysis_session"],
+                        "SIP transition boundary",
+                    )
+                    self.load_input_manifest(connection, readiness["input_provenance_hash"])
                 require(
                     inception["data_integrity_contract_version"] == STRICT_CONTRACT_VERSION,
                     "inception contract",
@@ -439,8 +495,20 @@ class Journal:
                         )
                         require(payload["ranking_digest"] == digest(rows), "ranking digest")
                         require(
-                            payload["input_set_digest"] == digest(payload["input_provenance"]),
+                            payload["input_set_digest"] == payload["input_manifest_hash"],
                             "input provenance digest",
+                        )
+                        evidence = self.load_input_manifest(
+                            connection, payload["input_manifest_hash"]
+                        )
+                        contract = inception["market_data_contract"]
+                        require(
+                            all(evidence.get(k) == v for k, v in contract.items()),
+                            "manifest market contract",
+                        )
+                        require(
+                            payload["input_provenance_hash"] == payload["input_manifest_hash"],
+                            "manifest reference hash",
                         )
                         require(
                             payload["data_complete"] == (not payload["incomplete_inputs"]),

@@ -255,7 +255,7 @@ def test_selected_atr_unknown_does_not_promote_rank_two(case):
     "state,status",
     [
         ("asset_universe", "failed"),
-        ("daily_history", "running"),
+        ("forward_sip", "running"),
         ("sec", "partial"),
         ("sec", "missing"),
     ],

@@ -285,7 +285,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--verbose", action="store_true")
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("shadow-f-init", "shadow-f-run", "shadow-f-status", "shadow-f-verify"):
+    for name in (
+        "shadow-f-init",
+        "shadow-f-run",
+        "shadow-f-status",
+        "shadow-f-verify",
+        "shadow-f-preflight",
+    ):
         shadow = commands.add_parser(name, help="Local immutable F/configured/C1 Shadow journal")
         shadow.add_argument("--journal", type=Path, help="Separate Shadow SQLite path")
         if name == "shadow-f-init":
@@ -341,6 +347,13 @@ def _parser() -> argparse.ArgumentParser:
         "update-bars", help="Incrementally update completed historical daily bars"
     )
     update_bars.add_argument("--symbols", nargs="*")
+    update_bars.add_argument(
+        "--forward-sip",
+        action="store_true",
+        help="Isolated SIP/all forward storage; no legacy bar writes",
+    )
+    update_bars.add_argument("--start", type=date.fromisoformat)
+    update_bars.add_argument("--end", type=date.fromisoformat)
     daily_history = commands.add_parser(
         "sync-daily-history",
         help="Backfill an inclusive adjusted Daily range with backward and forward gaps",
@@ -1240,6 +1253,18 @@ def main(argv: list[str] | None = None) -> int:
         "refresh-market",
         "sync-intraday",
     }:
+        if args.command == "update-bars" and args.forward_sip:
+            from trading_system.data.forward_market import sync_forward
+
+            if args.start is None or args.end is None or args.start > args.end:
+                print("Forward SIP requires explicit valid --start and --end", file=sys.stderr)
+                return 2
+            key, secret = settings.require_alpaca_credentials()
+            client = AlpacaDataClient(key, secret, feed=DataFeed.SIP, adjustment=Adjustment.ALL)
+            symbols = args.symbols or [c.symbol for c in database.list_tradable_companies()]
+            count = sync_forward(database, client, args.start, args.end, symbols)
+            print(json.dumps({"forward_sip_observations_written": count}))
+            return 0
         if args.command == "sync-intraday":
             if args.start > args.end:
                 print("Intraday sync refused: --start must not be after --end", file=sys.stderr)

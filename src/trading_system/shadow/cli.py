@@ -17,6 +17,20 @@ from trading_system.shadow.runner import ShadowRunner
 def command(args) -> int:
     try:
         config = load_strategy_config(args.config)
+        if args.command == "shadow-f-preflight":
+            from trading_system.shadow.inputs import LocalInputs
+            from trading_system.shadow.readiness import evaluate_shadow_input_readiness
+
+            with LocalInputs(config.storage.database_path).snapshot() as inputs:
+                readiness = evaluate_shadow_input_readiness(inputs, config)
+            print(
+                json.dumps(
+                    normalized({**readiness.details, "qualification": readiness.qualification}),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0 if readiness.ready else 1
         journal_path = args.journal or config.storage.database_path.with_name("shadow_f.sqlite3")
         runner = ShadowRunner(Journal(journal_path), config.storage.database_path, config)
         if args.command == "shadow-f-init":

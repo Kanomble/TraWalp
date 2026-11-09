@@ -17,6 +17,7 @@ from trading_system.backtest.research_registry import FROZEN_CHAMPION_F
 from trading_system.champion import champion_ranking, run_champion_backtest
 from trading_system.config import StrategyConfig, _read_yaml
 from trading_system.data.database import Database
+from trading_system.data.forward_market import persist
 from trading_system.data.market_sessions import (
     latest_completed_trading_session,
     regular_session_bounds,
@@ -66,7 +67,7 @@ class Screens:
 
 def ready_states(db, now):
     """Explicit synthetic successful local ingest; no provider or production DB."""
-    for key in ("asset_universe", "sec", "daily_history"):
+    for key in ("asset_universe", "sec", "daily_history", "forward_sip"):
         db.set_sync_value(
             "dataset",
             key,
@@ -76,6 +77,7 @@ def ready_states(db, now):
                 "errors": 0,
                 "feed": "iex",
                 "adjustment": "all",
+                "end": latest_completed_trading_session(now).isoformat(),
             },
         )
 
@@ -87,6 +89,30 @@ def case(tmp_path, config):
     sessions = trading_sessions_between(date(2024, 1, 2), date(2024, 1, 23))
     db.upsert_bars([bar(symbol, day) for symbol in ("AAA", "BBB", "SPY") for day in sessions])
     db.upsert_bars([bar("SPY", date(2023, 12, 29))])
+    persist(
+        db,
+        [bar(symbol, day) for symbol in ("AAA", "BBB", "SPY") for day in sessions]
+        + [bar("SPY", date(2023, 12, 29))],
+        provider="alpaca",
+        feed="sip",
+        adjustment="all",
+        sync_reference="synthetic-shadow-fixture",
+    )
+    legacy_upsert = db.upsert_bars
+
+    def fixture_upsert(values):
+        values = list(values)
+        persist(
+            db,
+            values,
+            provider="alpaca",
+            feed="sip",
+            adjustment="all",
+            sync_reference="synthetic-shadow-update",
+        )
+        return legacy_upsert(values)
+
+    db.upsert_bars = fixture_upsert
     ready_states(db, datetime(2023, 12, 29, 22, tzinfo=UTC))
     source = Screens({sessions[0]: (record("BBB"), record("AAA"))})
     journal = Journal(tmp_path / "shadow.sqlite3")
@@ -111,6 +137,16 @@ def events(journal, kind=None):
         for row in rows
         if kind is None or row["event_type"] == kind
     ]
+
+
+def input_manifest(journal, payload):
+    with journal.connection() as connection:
+        return json.loads(
+            connection.execute(
+                "SELECT content FROM input_manifests WHERE content_hash=?",
+                (payload["input_manifest_hash"],),
+            ).fetchone()[0]
+        )
 
 
 def test_inception_exactly_once_and_no_backfill(case):
@@ -282,7 +318,8 @@ def test_strict_preflight_no_economic_commit_and_no_deferral(
     before = runner.journal.verify()
     with db.connect() as connection:
         connection.execute(
-            "DELETE FROM bars WHERE symbol='AAA' AND substr(timestamp,1,10)=?",
+            "DELETE FROM forward_market_observations WHERE symbol='AAA' "
+            "AND substr(timestamp,1,10)=?",
             (sessions[missing_index].isoformat(),),
         )
     original = LocalInputs.bars_available_as_of
@@ -496,7 +533,7 @@ def test_source_snapshot_is_read_only_and_provenance_changes_with_inputs(case):
         assert initial != inputs.provenance
     runner.run()
     screen = events(runner.journal, "SCREEN_EVALUATED")[0]["payload"]
-    assert screen["input_set_digest"] == digest(screen["input_provenance"])
+    assert screen["input_set_digest"] == digest(input_manifest(runner.journal, screen))
 
 
 def test_market_journal_alias_refused(case):
@@ -591,7 +628,9 @@ def test_empty_local_production_screen_fails_closed_without_synchronizing(case):
     runner.run()
     assert runner.journal.verify().state["pending"] is None
     screen = events(runner.journal, "SCREEN_EVALUATED")[0]["payload"]
-    assert screen["input_provenance"]["identity_inputs"]["tradable_companies"] == digest([])
+    assert input_manifest(runner.journal, screen)["identity_inputs"][
+        "tradable_companies"
+    ] == digest([])
     assert (
         events(runner.journal, "DECISION_NO_TRADE")[0]["payload"]["reason"]
         == "NO_TRADE_DATA_INCOMPLETE"
@@ -605,6 +644,14 @@ def test_real_nonempty_screener_records_local_bar_fact_and_feature_provenance(tm
     from trading_system.champion import screen_champion
 
     db, session = _database(tmp_path)
+    persist(
+        db,
+        db.bars_available_as_of("AAA", session),
+        provider="alpaca",
+        feed="sip",
+        adjustment="all",
+        sync_reference="synthetic-nonempty-screen",
+    )
     expected = screen_champion(db, config, session)
     journal = Journal(tmp_path / "nonempty-shadow.sqlite3")
     runner = ShadowRunner(
@@ -618,6 +665,14 @@ def test_real_nonempty_screener_records_local_bar_fact_and_feature_provenance(tm
     db.upsert_bars(
         [bar("SPY", latest_completed_trading_session(runner.clock())), bar("SPY", session)]
     )
+    persist(
+        db,
+        [bar("SPY", latest_completed_trading_session(runner.clock())), bar("SPY", session)],
+        provider="alpaca",
+        feed="sip",
+        adjustment="all",
+        sync_reference="synthetic-spy",
+    )
     runner.initialize()
     runner.screen_source = None
     runner.clock = lambda: regular_session_bounds(session)[1]
@@ -625,9 +680,9 @@ def test_real_nonempty_screener_records_local_bar_fact_and_feature_provenance(tm
     runner.run()
     screen = events(journal, "SCREEN_EVALUATED")[0]["payload"]
     assert screen["eligible_candidate_count"] == expected.eligible_count
-    assert screen["input_provenance"]["market_inputs"]
-    assert screen["input_provenance"]["fundamental_inputs"]
-    assert screen["input_provenance"]["relevant_feature_set_digest"]
+    assert input_manifest(journal, screen)["market_inputs"]
+    assert input_manifest(journal, screen)["fundamental_inputs"]
+    assert input_manifest(journal, screen)["relevant_feature_set_digest"]
     assert db.path.read_bytes() == before
 
 

@@ -10,6 +10,7 @@ from trading_system.backtest.data_integrity import (
     validate_session_position_data,
 )
 from trading_system.backtest.engine import BacktestEngine
+from trading_system.data.forward_market import CONTRACT
 from trading_system.data.market_sessions import latest_completed_trading_session
 from trading_system.shadow.contracts import (
     ShadowError,
@@ -49,9 +50,23 @@ class ShadowRunner:
             raise ShadowError(
                 "SHADOW_INCEPTION_DATA_NOT_READY", blocking_reasons=["MARKET_DATABASE_MISSING"]
             )
-        with LocalInputs(self.market_path, capture_provenance=False).snapshot() as inputs:
+        with LocalInputs(self.market_path).snapshot() as inputs:
+            # The acquisition command requires an explicit --end. Use that stored
+            # declaration, never an implicit date chosen by the initialization clock.
+            declared = inputs.sync_values("dataset").get("forward_sip", {}).get("end")
+            if not declared:
+                raise ShadowError(
+                    "SHADOW_INCEPTION_DATA_NOT_READY",
+                    blocking_reasons=["SIP_TRANSITION_BOUNDARY_NOT_DECLARED"],
+                )
+            transition = date.fromisoformat(declared)
+            if transition != latest_completed_trading_session(now):
+                raise ShadowError(
+                    "SHADOW_INCEPTION_DATA_NOT_READY",
+                    blocking_reasons=["SIP_TRANSITION_BOUNDARY_NOT_CURRENT"],
+                )
             readiness = evaluate_shadow_input_readiness(
-                inputs, self.config, now=now, screen_source=self.screen_source
+                inputs, self.config, now=now, session=transition, screen_source=self.screen_source
             )
         if not readiness.ready:
             raise ShadowError("SHADOW_INCEPTION_DATA_NOT_READY", **readiness.as_dict())
@@ -71,6 +86,7 @@ class ShadowRunner:
             git_identity=local_git_identity(),
             capital=capital,
             input_readiness=readiness.as_dict(),
+            input_manifest=inputs.provenance,
         )
 
     def status(self):
@@ -176,6 +192,9 @@ class ShadowRunner:
                 else {}
             )
             with LocalInputs(self.market_path).snapshot() as inputs:
+                inputs.manifest_sink = lambda manifest: self.journal.store_input_manifest(
+                    connection, manifest
+                )
                 bars = inputs.bars_on_session(set(held) | set(intents), selected)
                 try:
                     validate_session_position_data(
@@ -193,6 +212,9 @@ class ShadowRunner:
                         connection,
                         "DATA_PREFLIGHT_FAILED",
                         {
+                            **CONTRACT,
+                            "session": selected,
+                            "input_manifest_hash": inputs.manifest_sink(inputs.provenance),
                             "error": exc.as_dict(),
                             "state_digest": digest(state),
                             "observed_bars": bars,

@@ -389,7 +389,13 @@ class Screener:
             facts = self.database.facts_available_as_of(
                 company.symbol, analysis_date, connection=connection
             )
-            price = bars[-1].close if bars else None
+            observation_ready = (
+                not getattr(self.database, "forward_sip_required", False)
+                or current_session_observation(bars[-1] if bars else None, market_session)
+                == "OBSERVATION_PRESENT"
+            )
+            economic_bars = bars if observation_ready else []
+            price = economic_bars[-1].close if economic_bars else None
             market_snapshot = (
                 self.database.latest_market_snapshot(company.symbol)
                 if use_market_snapshots
@@ -426,7 +432,7 @@ class Screener:
                 price = market_snapshot.latest_trade_price
                 snapshot_price_selected = True
             fundamentals = analyze_fundamentals(facts, analysis_date, price)
-            technical = technical_snapshot(_bar_frame(bars), self.config.technical)
+            technical = technical_snapshot(_bar_frame(economic_bars), self.config.technical)
             technical_updates: dict[str, Any] = {"market_session": analysis_date if bars else None}
             if snapshot_price_selected and price is not None:
                 closes = [bar.close for bar in bars[-252:]]
@@ -435,12 +441,14 @@ class Screener:
                     float(price / max(closes) - Decimal(1)) if len(closes) == 252 else None
                 )
             technical = technical.model_copy(update=technical_updates)
-            average_dollar_volume = _average_dollar_volume(bars)
+            average_dollar_volume = _average_dollar_volume(economic_bars)
             snapshot = UniverseSnapshot(
                 symbol=company.symbol,
                 latest_price=price,
-                average_price_20d=_average_decimal([bar.close for bar in bars[-20:]]),
-                average_volume_20d=_average_decimal([Decimal(bar.volume) for bar in bars[-20:]]),
+                average_price_20d=_average_decimal([bar.close for bar in economic_bars[-20:]]),
+                average_volume_20d=_average_decimal(
+                    [Decimal(bar.volume) for bar in economic_bars[-20:]]
+                ),
                 shares_outstanding=(
                     fundamentals.market_cap / price
                     if fundamentals.market_cap is not None and price is not None and price > 0

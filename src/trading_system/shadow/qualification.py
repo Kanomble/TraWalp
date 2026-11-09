@@ -43,9 +43,10 @@ def _independent_history_failure(row, session, config):
 
 
 def qualify_f_inputs(report, session, config, *, ranked=None):
+    # False requests input qualification before any cross-sectional F ranking.
     ranked = ranked if ranked is not None else champion_ranking(report, config)
     rejected, evaluated, unresolved = {}, [], []
-    eligible = [row for row in ranked.records if row.eligible]
+    eligible = [] if ranked is False else [row for row in ranked.records if row.eligible]
     structural = []
     if report.as_of != session or not report.records:
         structural.append({"symbol": None, "reason": "EMPTY_OR_WRONG_SESSION_CROSS_SECTION"})
@@ -113,8 +114,10 @@ def qualify_f_inputs(report, session, config, *, ranked=None):
             if getattr(scores, name).score is None:
                 missing.append(f"{name.upper()}_UNAVAILABLE")
         missing.extend(reason for reason in gate.blocking_reasons if "unavailable" in reason)
-        evaluation = evaluate_variant_entry(row, FROZEN_CHAMPION_F.variant, config)
-        if not evaluation.eligible and not missing:
+        evaluation = (
+            evaluate_variant_entry(row, FROZEN_CHAMPION_F.variant, config) if not missing else None
+        )
+        if evaluation is not None and not evaluation.eligible:
             # Unrecognized hard exclusions are not silently declared resolved.
             missing.append(f"UNRESOLVED_CANONICAL_EXCLUSION:{evaluation.first_failure}")
         if missing:
@@ -141,3 +144,23 @@ def qualify_f_inputs(report, session, config, *, ranked=None):
         "rejected": rejected,
         "rejection_summary": dict(sorted(Counter(rejected.values()).items())),
     }
+
+
+def qualified_forward_screen(raw, session, config):
+    """Never rank candidates against an unresolved economic cross-section."""
+    qualification = qualify_f_inputs(raw, session, config, ranked=False)
+    if not qualification["unresolved_rank_relevant_count"]:
+        ranked = champion_ranking(raw, config)
+        qualification = qualify_f_inputs(raw, session, config, ranked=ranked)
+        if not qualification["unresolved_rank_relevant_count"]:
+            return ranked, qualification
+    # Keep diagnostic features for held risk management, but publish no ranking.
+    qualification["eligible_count"] = 0
+    return raw.model_copy(
+        update={
+            "eligible_count": 0,
+            "records": tuple(
+                row.model_copy(update={"eligible": False, "rank": None}) for row in raw.records
+            ),
+        }
+    ), qualification

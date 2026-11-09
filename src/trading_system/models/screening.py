@@ -42,6 +42,9 @@ class ScreenRecord(BaseModel):
 
 class ScreenReport(BaseModel):
     model_config = ConfigDict(frozen=True)
+    market_data_contract_id: str | None = None
+    market_input_manifest_hash: str | None = None
+    market_input_manifest_path: str | None = None
     strategy_label: str | None = None
     as_of: date
     requested_as_of: date | None = None

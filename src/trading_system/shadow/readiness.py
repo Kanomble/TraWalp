@@ -3,14 +3,14 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from trading_system.champion import champion_ranking
+from trading_system.data.forward_market import CONTRACT
 from trading_system.data.market_sessions import (
     latest_completed_trading_session,
     regular_session_bounds,
 )
 from trading_system.data.observations import current_session_observation
 from trading_system.shadow.contracts import digest, normalized
-from trading_system.shadow.qualification import qualify_f_inputs
+from trading_system.shadow.qualification import qualified_forward_screen
 from trading_system.strategy.screener import Screener
 
 READINESS_CONTRACT = "shadow-input-readiness/v1"
@@ -55,8 +55,7 @@ def evaluate_shadow_input_readiness(
         if screen_source is not None
         else Screener(database, config).run(session, use_market_snapshots=False)
     )
-    ranked = champion_ranking(raw, config)
-    qualification = qualify_f_inputs(raw, session, config, ranked=ranked)
+    ranked, qualification = qualified_forward_screen(raw, session, config)
     blocking, warnings = [], []
 
     def check_state(key, *, sec=False):
@@ -72,8 +71,11 @@ def evaluate_shadow_input_readiness(
             and status == "partial"
             and state.get("identity_conflicts", 0) > 0
             and not state.get("errors", 0)
-            and qualification["unresolved_rank_relevant_count"] == 0
         )
+        # Identity-conflict-only partial completion has its own valid completion
+        # time. Ranking completeness is checked independently below; coupling it
+        # here falsely labels a fresh, error-free SEC refresh as stale/invalid.
+        # Overall admission still requires BOTH checks, so no guard is relaxed.
         if status != "success" and not resolved_partial:
             blocking.append(f"{key.upper()}_STATE_{str(status or 'missing').upper()}")
         if state.get("errors", 0):
@@ -95,25 +97,9 @@ def evaluate_shadow_input_readiness(
 
     asset = check_state("asset_universe")
     sec = check_state("sec", sec=True)
-    # Both existing workflows can refresh Daily inputs. A more recent failed or
-    # running attempt cannot be hidden by an older successful workflow.
-    daily_keys = [
-        key for key in ("daily_history", "historical_bars") if isinstance(states.get(key), dict)
-    ]
-    daily_key = max(
-        daily_keys,
-        key=lambda key: str(
-            states[key].get("last_started_at") or states[key].get("last_success_at") or ""
-        ),
-        default="daily_history",
-    )
-    daily = check_state(daily_key)
-    requested_feed, requested_adjustment = (
-        config.universe.market_data_feed,
-        config.universe.market_data_adjustment,
-    )
-    if daily.get("feed") != requested_feed or daily.get("adjustment") != requested_adjustment:
-        blocking.append("DAILY_FEED_ADJUSTMENT_UNVERIFIED")
+    daily = check_state("forward_sip")
+    # Legacy sync state cannot attest forward bars. The connection-local SIP view
+    # and per-observation manifest provide the forward feed/adjustment authority.
     spy_bar = database.bars_on_session({"SPY"}, session).get("SPY")
     spy = {"status": current_session_observation(spy_bar, session)}
     if spy["status"] != "OBSERVATION_PRESENT":
@@ -123,6 +109,9 @@ def evaluate_shadow_input_readiness(
     if qualification["unresolved_rank_relevant_count"]:
         blocking.append("RANKING_UNRESOLVED")
     details = {
+        **CONTRACT,
+        "forward_sip_transition_boundary": session,
+        "input_provenance_hash": digest(database.provenance),
         "contract": READINESS_CONTRACT,
         "ready": not blocking,
         "latest_completed_session": latest,

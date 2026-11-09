@@ -15,10 +15,10 @@ from trading_system.backtest.engine import (
 from trading_system.backtest.position_manager import PositionAction, PositionManager
 from trading_system.backtest.presets import position_management_preset
 from trading_system.backtest.research_registry import FROZEN_CHAMPION_F
-from trading_system.champion import champion_ranking
+from trading_system.data.forward_market import CONTRACT
 from trading_system.models.backtest import BacktestPosition
 from trading_system.shadow.contracts import digest, normalized
-from trading_system.shadow.qualification import qualify_f_inputs
+from trading_system.shadow.qualification import qualified_forward_screen, qualify_f_inputs
 from trading_system.shadow.state import PENDING, POSITION
 from trading_system.strategy.screener import Screener
 
@@ -145,8 +145,7 @@ class ChampionSession:
                 if self.screen_source is not None
                 else Screener(self.database, self.config).run(session, use_market_snapshots=False)
             )
-            report = champion_ranking(raw, self.config)
-            qualification = qualify_f_inputs(raw, session, self.config, ranked=report)
+            report, qualification = qualified_forward_screen(raw, session, self.config)
             upstream_issues = []
         issues = qualification["incomplete_inputs"] + upstream_issues
         candidates = [
@@ -170,6 +169,9 @@ class ChampionSession:
         emit(
             "SCREEN_EVALUATED",
             {
+                **CONTRACT,
+                "session": session,
+                "input_provenance_hash": digest(provenance),
                 "eligible_candidate_count": len(candidates),
                 "candidates": candidates,
                 "ranking_digest": digest(candidates),
@@ -179,7 +181,7 @@ class ChampionSession:
                 "input_readiness": self.qualified_inputs.as_dict()
                 if self.qualified_inputs is not None
                 else None,
-                "input_provenance": provenance,
+                "input_manifest_hash": self.database.manifest_sink(provenance),
                 "input_set_digest": digest(provenance),
                 "exclusion_summary": dict(
                     sorted(
