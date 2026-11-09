@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 
-from trading_system.data.database import Database
+from trading_system.data.database import Database, _fact_from_row
 from trading_system.data.forward_market import CONTRACT, install_forward_view
 from trading_system.shadow.contracts import digest
 
@@ -32,6 +32,8 @@ class LocalInputs(Database):
             # Establish the read snapshot before any collection of source inputs.
             connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
             self._connection = connection
+            self._fact_ciks = None
+            self._conflict_symbols = None
             self.provenance = {
                 **CONTRACT,
                 "market_inputs": {},
@@ -94,7 +96,27 @@ class LocalInputs(Database):
         return bars
 
     def facts_available_as_of(self, symbol, as_of, metric=None, **kwargs):
-        facts = super().facts_available_as_of(symbol, as_of, metric, **kwargs)
+        # Company Facts are issuer-keyed (including the storage uniqueness key).
+        # Ticker labels are acquisition provenance, not an accounting identity.
+        # Never join different CIKs merely because a ticker was reused, and never
+        # relabel original observations or fall back on quarantined identities.
+        symbol = symbol.upper()
+        if self._fact_ciks is None:
+            self._fact_ciks = self.company_symbol_to_cik()
+        cik = self._fact_ciks.get(symbol)
+        if symbol in self.unresolved_sec_identity_conflict_symbols():
+            cik = None
+        self.provenance["identity_inputs"][f"fundamental_cik|{symbol}"] = cik
+        facts = []
+        if cik is not None:
+            query = "SELECT * FROM fundamental_facts WHERE cik=? AND filed<=?"
+            parameters = [cik, as_of.isoformat()]
+            if metric:
+                query += " AND metric=?"
+                parameters.append(metric)
+            query += " ORDER BY filed,period_end,id"
+            with self.connect() as connection:
+                facts = [_fact_from_row(row) for row in connection.execute(query, parameters)]
         if self.capture_provenance:
             self.provenance["fundamental_inputs"][f"{symbol}|{as_of.isoformat()}|{metric}"] = (
                 digest(facts)
@@ -107,7 +129,9 @@ class LocalInputs(Database):
         return companies
 
     def unresolved_sec_identity_conflict_symbols(self):
-        conflicts = super().unresolved_sec_identity_conflict_symbols()
+        if self._conflict_symbols is None:
+            self._conflict_symbols = super().unresolved_sec_identity_conflict_symbols()
+        conflicts = self._conflict_symbols
         self.provenance["identity_inputs"]["identity_conflicts"] = digest(conflicts)
         return conflicts
 
