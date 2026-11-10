@@ -259,7 +259,7 @@ def test_non_xnys_session_rejected(case, session):
 
 
 def test_current_incomplete_future_and_no_new_session(case):
-    runner, _, sessions, _ = case
+    runner, db, sessions, _ = case
     runner.clock = lambda: regular_session_bounds(sessions[0])[1] - timedelta(microseconds=1)
     with pytest.raises(DataIntegrityError, match="SESSION_NOT_COMPLETE"):
         runner.run(sessions[0])
@@ -267,6 +267,7 @@ def test_current_incomplete_future_and_no_new_session(case):
     with pytest.raises(DataIntegrityError, match="SESSION_NOT_COMPLETE"):
         runner.run(sessions[1])
     runner.clock = lambda: regular_session_bounds(sessions[0])[1]
+    ready_states(db, runner.clock())
     assert runner.run()["session"] == sessions[0]
 
 
@@ -440,6 +441,12 @@ def test_reentry_after_exit_matches_champion(case):
 def test_no_trade_reasons_are_explicit(case, kind, expected):
     runner, _, sessions, source = case
     source.signals = {sessions[0]: ()} if kind == "incomplete" else {}
+    if kind == "incomplete":
+        with pytest.raises(ShadowError, match="SHADOW_SESSION_DATA_NOT_READY"):
+            runner.run()
+        assert not events(runner.journal, "DECISION_NO_TRADE")
+        assert runner.journal.verify().last_session is None
+        return
     runner.run()
     assert events(runner.journal, "DECISION_NO_TRADE")[-1]["payload"]["reason"] == expected
     assert runner.journal.verify().last_session == sessions[0]
@@ -451,12 +458,10 @@ def test_partial_stale_cross_section_never_selects_fresh_candidate(case):
         record("AAA"),
         record("BBB").model_copy(update={"exclusion_reasons": ("stale_market_data",)}),
     )
-    runner.run()
+    with pytest.raises(ShadowError, match="SHADOW_SESSION_DATA_NOT_READY"):
+        runner.run()
     assert not events(runner.journal, "ENTRY_INTENT_CREATED")
-    assert (
-        events(runner.journal, "DECISION_NO_TRADE")[0]["payload"]["reason"]
-        == "NO_TRADE_DATA_INCOMPLETE"
-    )
+    assert not events(runner.journal, "DECISION_NO_TRADE")
 
 
 def test_source_revisions_do_not_rewrite_old_decisions(case):
@@ -625,16 +630,11 @@ def test_empty_local_production_screen_fails_closed_without_synchronizing(case):
     runner, db, _, _ = case
     before = db.path.read_bytes()
     runner.screen_source = None
-    runner.run()
+    with pytest.raises(ShadowError, match="SHADOW_SESSION_DATA_NOT_READY") as error:
+        runner.run()
     assert runner.journal.verify().state["pending"] is None
-    screen = events(runner.journal, "SCREEN_EVALUATED")[0]["payload"]
-    assert input_manifest(runner.journal, screen)["identity_inputs"][
-        "tradable_companies"
-    ] == digest([])
-    assert (
-        events(runner.journal, "DECISION_NO_TRADE")[0]["payload"]["reason"]
-        == "NO_TRADE_DATA_INCOMPLETE"
-    )
+    assert "SOURCE_UNIVERSE_EMPTY" in error.value.details["blocking_reasons"]
+    assert not events(runner.journal, "SCREEN_EVALUATED")
     assert db.path.read_bytes() == before
 
 
@@ -673,33 +673,38 @@ def test_real_nonempty_screener_records_local_bar_fact_and_feature_provenance(tm
         adjustment="all",
         sync_reference="synthetic-spy",
     )
-    runner.initialize()
+    runner.initialize(shadow_mode="OBSERVATION_ONLY")
     runner.screen_source = None
     runner.clock = lambda: regular_session_bounds(session)[1]
+    ready_states(db, runner.clock())
     before = db.path.read_bytes()
     runner.run()
-    screen = events(journal, "SCREEN_EVALUATED")[0]["payload"]
-    assert screen["eligible_candidate_count"] == expected.eligible_count
-    assert input_manifest(journal, screen)["market_inputs"]
-    assert input_manifest(journal, screen)["fundamental_inputs"]
-    assert input_manifest(journal, screen)["relevant_feature_set_digest"]
+    observed = events(journal, "OBSERVATION_SESSION")[0]["payload"]
+    with journal.connection() as connection:
+        evidence = journal.load_input_manifest(connection, observed["observation_manifest_hash"])
+        inputs = journal.load_input_manifest(connection, evidence["input_manifest_hash"])
+    assert inputs["market_inputs"] and inputs["fundamental_inputs"]
+    assert evidence["readiness"]["feature_set_digest"]
+    assert observed["economic_action_allowed"] is False
+    assert expected.eligible_count == 0
     assert db.path.read_bytes() == before
 
 
-def test_incomplete_signal_cross_section_still_manages_existing_position(case):
+def test_incomplete_economic_cross_section_preserves_state_until_complete(case):
     runner, _, sessions, source = case
     runner.run()
     runner.run()
     before = runner.journal.verify().state
     source.signals[sessions[2]] = ()
-    runner.run()
+    with pytest.raises(ShadowError, match="SHADOW_SESSION_DATA_NOT_READY"):
+        runner.run()
     after = runner.journal.verify().state
-    assert after["cash"] == before["cash"]
-    assert after["position"]["holding_days"] == before["position"]["holding_days"] + 1
-    assert after["pending"] is None
+    assert after == before
+    source.signals[sessions[2]] = (record(quality=50),)
+    runner.run()
     assert (
-        events(runner.journal, "DECISION_NO_TRADE")[-1]["payload"]["reason"]
-        == "NO_TRADE_DATA_INCOMPLETE"
+        runner.journal.verify().state["position"]["holding_days"]
+        == before["position"]["holding_days"] + 1
     )
 
 
@@ -742,6 +747,7 @@ def test_official_early_close_and_holiday_sequence(case):
     runner.clock = lambda: datetime(2024, 11, 29, 17, 59, tzinfo=UTC)
     assert runner.run()["status"] == "NO_COMPLETED_SESSION"
     runner.clock = lambda: datetime(2024, 11, 29, 18, tzinfo=UTC)
+    ready_states(db, runner.clock())
     assert runner.run()["session"] == date(2024, 11, 29)
     assert runner.status()["next_expected_session"] == date(2024, 12, 2)
 

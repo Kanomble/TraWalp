@@ -22,6 +22,14 @@ from trading_system.shadow.contracts import (
 from trading_system.shadow.execution import ChampionSession
 from trading_system.shadow.inputs import LocalInputs, separate_paths
 from trading_system.shadow.journal import Journal
+from trading_system.shadow.modes import (
+    ECONOMIC,
+    OBSERVATION_ONLY,
+    blocked_payload,
+    evidence_manifest,
+    observation_payload,
+    validate_mode,
+)
 from trading_system.shadow.readiness import evaluate_shadow_input_readiness
 from trading_system.shadow.state import portfolio
 
@@ -40,7 +48,8 @@ class ShadowRunner:
         self.clock = clock or (lambda: datetime.now(UTC))
         self.screen_source = screen_source
 
-    def initialize(self, *, capital=100.0):
+    def initialize(self, *, capital=100.0, shadow_mode=ECONOMIC):
+        validate_mode(shadow_mode)
         if self.journal.path.exists():
             raise ShadowError("SHADOW_ALREADY_INITIALIZED", path=str(self.journal.path))
         if not math.isfinite(capital) or capital <= 0:
@@ -68,7 +77,10 @@ class ShadowRunner:
             readiness = evaluate_shadow_input_readiness(
                 inputs, self.config, now=now, session=transition, screen_source=self.screen_source
             )
-        if not readiness.ready:
+        admitted = (
+            readiness.observation_ready if shadow_mode == OBSERVATION_ONLY else readiness.ready
+        )
+        if not admitted:
             raise ShadowError("SHADOW_INCEPTION_DATA_NOT_READY", **readiness.as_dict())
         completed_at = self.clock()
         # A large screen can span the official close. Never bind a stale boundary
@@ -87,6 +99,7 @@ class ShadowRunner:
             capital=capital,
             input_readiness=readiness.as_dict(),
             input_manifest=inputs.provenance,
+            shadow_mode=shadow_mode,
         )
 
     def status(self):
@@ -103,6 +116,20 @@ class ShadowRunner:
         state = portfolio(verified.state)
         position, pending = state["position"], state["pending"]
         return {
+            "journal_mode": verified.shadow_mode,
+            "last_observed_session": verified.last_observed_session,
+            "last_economic_session": verified.last_economic_session,
+            "ranking_blocked_sessions": verified.ranking_blocked_sessions,
+            "economic_sessions": verified.economic_sessions,
+            "economic_inception_session": verified.economic_inception_session
+            or (
+                next_official_session(
+                    date.fromisoformat(inception["latest_completed_official_session_at_inception"])
+                )
+                if inception.get("shadow_mode", ECONOMIC) == ECONOMIC
+                else None
+            ),
+            "current_position_state": "OPEN" if position else "PENDING" if pending else "FLAT",
             "journal_id": inception["journal_id"],
             "inception": inception["created_at_utc"],
             "inception_session": inception["latest_completed_official_session_at_inception"],
@@ -140,6 +167,63 @@ class ShadowRunner:
             "last_decision": verified.last_decision,
             "journal_verification": "VALID",
             "configuration_drift": drift,
+        }
+
+    def activate_economic(self):
+        """Explicit append-only admission; first economic decision is a FUTURE session."""
+        now = self.clock()
+        with self.journal.connection(write=True) as connection:
+            verified = self.journal.verify(connection)
+            current = fingerprints(self.config)
+            assert_no_drift(verified.inception, current)
+            if (
+                verified.shadow_mode != OBSERVATION_ONLY
+                or verified.state["position"]
+                or verified.state["pending"]
+                or not verified.last_observation_ranking_complete
+                or verified.last_observed_session != verified.last_session
+                or verified.last_session != latest_completed_trading_session(now)
+            ):
+                raise ShadowError("SHADOW_ACTIVATION_NOT_READY")
+            with LocalInputs(self.market_path).snapshot() as inputs:
+                readiness = evaluate_shadow_input_readiness(
+                    inputs,
+                    self.config,
+                    now=now,
+                    session=verified.last_session,
+                    screen_source=self.screen_source,
+                )
+                if not readiness.ready:
+                    raise ShadowError("SHADOW_ACTIVATION_NOT_READY", **readiness.as_dict())
+                if latest_completed_trading_session(self.clock()) != verified.last_session:
+                    raise ShadowError("SHADOW_ACTIVATION_SESSION_CHANGED_RETRY")
+                input_hash = self.journal.store_input_manifest(connection, inputs.provenance)
+                evidence = evidence_manifest(readiness, input_hash)
+                evidence_hash = self.journal.store_input_manifest(connection, evidence)
+            completed_at = self.clock()
+            if (
+                completed_at < now
+                or latest_completed_trading_session(completed_at) != verified.last_session
+            ):
+                raise ShadowError("SHADOW_ACTIVATION_SESSION_CHANGED_RETRY")
+            self.journal.append(
+                connection,
+                "MODE_TRANSITION",
+                {
+                    "from": OBSERVATION_ONLY,
+                    "to": ECONOMIC,
+                    "effective_after_session": verified.last_session,
+                    "economic_inception_session": next_official_session(verified.last_session),
+                    "evidence_hash": evidence_hash,
+                    "state_digest": digest(verified.state),
+                    "fingerprints_digest": digest(current),
+                },
+                now=completed_at,
+            )
+            self.journal.verify(connection)
+        return {
+            "status": "ECONOMIC_MODE_ACTIVATED",
+            "economic_inception_session": next_official_session(verified.last_session),
         }
 
     def run(self, session: date | None = None):
@@ -233,6 +317,16 @@ class ShadowRunner:
                         session=selected,
                         screen_source=self.screen_source,
                     )
+                    admitted = (
+                        readiness.observation_ready
+                        if verified.shadow_mode == OBSERVATION_ONLY
+                        else readiness.ready
+                    )
+                    if not admitted:
+                        raise ShadowError("SHADOW_SESSION_DATA_NOT_READY", **readiness.as_dict())
+                    input_hash = self.journal.store_input_manifest(connection, inputs.provenance)
+                    evidence = evidence_manifest(readiness, input_hash)
+                    evidence_hash = self.journal.store_input_manifest(connection, evidence)
                     terminal = self.journal.append(
                         connection,
                         "SESSION_STARTED",
@@ -240,6 +334,7 @@ class ShadowRunner:
                             "portfolio_before": portfolio(state),
                             "fingerprints_digest": digest(current),
                             "fingerprint_keys": sorted(current),
+                            "readiness_evidence_hash": evidence_hash,
                         },
                         now=now,
                         session=selected,
@@ -262,9 +357,17 @@ class ShadowRunner:
                             "position_management_ohlc_digest": digest(bars),
                         },
                     )
-                    after = ChampionSession(
-                        inputs, self.config, qualified_inputs=readiness
-                    ).process(state, selected, next_official_session(selected), bars, emit)
+                    if verified.shadow_mode == OBSERVATION_ONLY:
+                        if position or pending:
+                            raise ShadowError("SHADOW_OBSERVATION_ECONOMIC_STATE")
+                        emit("OBSERVATION_SESSION", observation_payload(evidence, evidence_hash))
+                        if not readiness.details["ranking_complete"]:
+                            emit("RANKING_BLOCKED", blocked_payload(evidence, evidence_hash))
+                        after = state
+                    else:
+                        after = ChampionSession(
+                            inputs, self.config, qualified_inputs=readiness
+                        ).process(state, selected, next_official_session(selected), bars, emit)
                     terminal = self.journal.append(
                         connection,
                         "SESSION_COMMITTED",
@@ -283,7 +386,12 @@ class ShadowRunner:
         if failure:
             raise failure
         return {
-            "status": "SESSION_COMMITTED",
+            "status": (
+                "OBSERVED_NO_ECONOMIC_DECISION"
+                if verified.shadow_mode == OBSERVATION_ONLY
+                else "SESSION_COMMITTED"
+            ),
+            "ranking_complete": readiness.details["ranking_complete"],
             "session": selected,
             "portfolio": portfolio(after),
             "terminal_event_hash": terminal,

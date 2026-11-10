@@ -30,6 +30,10 @@ class ShadowInputReadiness:
     def ready(self):
         return self.details["ready"]
 
+    @property
+    def observation_ready(self):
+        return self.details["observation_shadow_ready"]
+
     def as_dict(self):
         return normalized(self.details)
 
@@ -106,6 +110,10 @@ def evaluate_shadow_input_readiness(
         blocking.append("SPY_CURRENT_OBSERVATION_UNUSABLE")
     if not raw.records:
         blocking.append("SOURCE_UNIVERSE_EMPTY")
+    if any(item.get("symbol") is None for item in qualification["incomplete_inputs"]):
+        blocking.append("CROSS_SECTION_INVALID")
+    if any("analysis_error" in row.exclusion_reasons for row in raw.records):
+        blocking.append("SCREEN_ANALYSIS_FAILURE")
     if qualification["unresolved_rank_relevant_count"]:
         blocking.append("RANKING_UNRESOLVED")
     details = {
@@ -114,6 +122,12 @@ def evaluate_shadow_input_readiness(
         "input_provenance_hash": digest(database.provenance),
         "contract": READINESS_CONTRACT,
         "ready": not blocking,
+        "economic_shadow_ready": not blocking,
+        "observation_shadow_ready": not [r for r in blocking if r != "RANKING_UNRESOLVED"],
+        "observation_blocking_reasons": sorted(
+            set(r for r in blocking if r != "RANKING_UNRESOLVED")
+        ),
+        "ranking_complete": qualification["unresolved_rank_relevant_count"] == 0,
         "latest_completed_session": latest,
         "analysis_session": session,
         "asset_state": asset,

@@ -291,11 +291,17 @@ def _parser() -> argparse.ArgumentParser:
         "shadow-f-status",
         "shadow-f-verify",
         "shadow-f-preflight",
+        "shadow-f-activate-economic",
     ):
         shadow = commands.add_parser(name, help="Local immutable F/configured/C1 Shadow journal")
         shadow.add_argument("--journal", type=Path, help="Separate Shadow SQLite path")
         if name == "shadow-f-init":
             shadow.add_argument("--initial-capital", type=float, default=100.0)
+            shadow.add_argument(
+                "--observation-only",
+                action="store_true",
+                help="Pin an observation-only journal; never trade automatically",
+            )
         if name == "shadow-f-run":
             shadow.add_argument("--session", type=date.fromisoformat)
     commands.add_parser(

@@ -34,7 +34,10 @@ def command(args) -> int:
         journal_path = args.journal or config.storage.database_path.with_name("shadow_f.sqlite3")
         runner = ShadowRunner(Journal(journal_path), config.storage.database_path, config)
         if args.command == "shadow-f-init":
-            inception = runner.initialize(capital=args.initial_capital)
+            inception = runner.initialize(
+                capital=args.initial_capital,
+                shadow_mode="OBSERVATION_ONLY" if args.observation_only else "ECONOMIC",
+            )
             output = {
                 "status": "SHADOW_INITIALIZED",
                 **{
@@ -50,6 +53,7 @@ def command(args) -> int:
                         "engine_fingerprint",
                         "data_pipeline_fingerprint",
                         "journal_schema_version",
+                        "shadow_mode",
                     )
                 },
             }
@@ -58,6 +62,8 @@ def command(args) -> int:
             output = {key: value for key, value in result.items() if key != "portfolio"}
         elif args.command == "shadow-f-status":
             output = runner.status()
+        elif args.command == "shadow-f-activate-economic":
+            output = runner.activate_economic()
         else:
             result = runner.journal.verify()
             output = {

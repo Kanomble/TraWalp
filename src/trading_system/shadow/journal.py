@@ -29,6 +29,15 @@ from trading_system.shadow.contracts import (
     digest,
     normalized,
 )
+from trading_system.shadow.modes import (
+    ECONOMIC,
+    MODES,
+    OBSERVATION_ONLY,
+    blocked_payload,
+    observation_payload,
+    validate_evidence,
+    validate_mode,
+)
 from trading_system.shadow.state import (
     TRANSITIONS,
     initial_state,
@@ -82,6 +91,13 @@ class VerifiedJournal:
     last_decision: dict | None
     terminal_hash: str
     event_count: int
+    shadow_mode: str = ECONOMIC
+    last_observed_session: date | None = None
+    last_economic_session: date | None = None
+    ranking_blocked_sessions: int = 0
+    economic_sessions: int = 0
+    last_observation_ranking_complete: bool = False
+    economic_inception_session: str | None = None
 
 
 def event_hash(event: dict) -> str:
@@ -169,7 +185,15 @@ class Journal:
         capital=100.0,
         input_readiness=None,
         input_manifest=None,
+        shadow_mode=ECONOMIC,
     ):
+        validate_mode(shadow_mode)
+        if shadow_mode == OBSERVATION_ONLY and (
+            not input_readiness
+            or not input_readiness.get("observation_shadow_ready")
+            or input_readiness.get("observation_blocking_reasons")
+        ):
+            raise ShadowError("SHADOW_INCEPTION_DATA_NOT_READY")
         if not math.isfinite(capital) or capital <= 0:
             raise ShadowError("SHADOW_INVALID_INITIAL_CAPITAL")
         boundary = latest_completed_trading_session(now)
@@ -180,6 +204,9 @@ class Journal:
                 **git_identity,
                 **fingerprints,
                 "initial_capital": float(capital),
+                "shadow_mode": shadow_mode,
+                "universe_policy": "U0_CURRENT",
+                "source_fingerprint": digest(fingerprints["engine_files"]),
                 "latest_completed_official_session_at_inception": boundary,
                 "forward_sip_transition_boundary": (
                     input_readiness.get("analysis_session") if input_readiness else None
@@ -281,6 +308,10 @@ class Journal:
         require(bool(events), "missing genesis")
         previous = GENESIS_HASH
         inception = state = last = decision = active = None
+        mode = ECONOMIC
+        last_observed = last_economic = economic_inception = None
+        blocked_sessions = economic_sessions = 0
+        observation_complete = False
         inception_only_keys = {
             "forward_sip_transition_boundary",
             "journal_id",
@@ -290,6 +321,9 @@ class Journal:
             "initial_capital",
             "latest_completed_official_session_at_inception",
             "input_readiness",
+            "shadow_mode",
+            "universe_policy",
+            "source_fingerprint",
         }
         committed, session_events = set(), []
         preflight = screened = decided = False
@@ -308,6 +342,18 @@ class Journal:
             if number == 1:
                 require(kind == "SHADOW_INITIALIZED" and session is None, "genesis")
                 inception = payload
+                mode = inception.get("shadow_mode", ECONOMIC)
+                require(mode in MODES, "inception shadow mode")
+                if "shadow_mode" in inception:
+                    require(
+                        inception["universe_policy"] == "U0_CURRENT", "inception universe policy"
+                    )
+                    require(
+                        inception["source_fingerprint"] == digest(inception["engine_files"]),
+                        "inception source fingerprint",
+                    )
+                if mode == OBSERVATION_ONLY:
+                    require("input_readiness" in inception, "observation inception evidence")
                 require(inception["journal_id"] == event["journal_id"], "inception journal id")
                 require(
                     inception["created_at_utc"] == event["created_at_utc"], "inception timestamp"
@@ -376,14 +422,30 @@ class Journal:
                     )
                 if "input_readiness" in inception:
                     readiness = inception["input_readiness"]
-                    require(
-                        readiness["ready"] and not readiness["blocking_reasons"],
-                        "inception readiness",
-                    )
-                    require(
-                        readiness["unresolved_rank_relevant_count"] == 0,
-                        "inception unresolved inputs",
-                    )
+                    if mode == OBSERVATION_ONLY:
+                        require(
+                            readiness["observation_shadow_ready"]
+                            and not readiness["observation_blocking_reasons"],
+                            "inception observation readiness",
+                        )
+                        require(
+                            readiness["observation_blocking_reasons"]
+                            == [
+                                r
+                                for r in readiness["blocking_reasons"]
+                                if r != "RANKING_UNRESOLVED"
+                            ],
+                            "inception observation blockers",
+                        )
+                    else:
+                        require(
+                            readiness["ready"] and not readiness["blocking_reasons"],
+                            "inception readiness",
+                        )
+                        require(
+                            readiness["unresolved_rank_relevant_count"] == 0,
+                            "inception unresolved inputs",
+                        )
                     require(
                         readiness["analysis_session"]
                         == inception["latest_completed_official_session_at_inception"],
@@ -436,6 +498,47 @@ class Journal:
                     require(
                         payload["fingerprints_digest"] == digest(identity), "failure fingerprint"
                     )
+                elif kind == "MODE_TRANSITION":
+                    require(active is None and mode == OBSERVATION_ONLY, "mode transition origin")
+                    require(
+                        payload["from"] == OBSERVATION_ONLY and payload["to"] == ECONOMIC,
+                        "explicit mode transition",
+                    )
+                    require(state == initial_state(capital), "activation economic state exists")
+                    require(
+                        last is not None and last_observed == last and observation_complete,
+                        "activation requires complete latest observation",
+                    )
+                    require(
+                        last == latest_completed_trading_session(timestamp),
+                        "activation session not current",
+                    )
+                    require(
+                        payload["effective_after_session"] == last.isoformat(),
+                        "activation boundary",
+                    )
+                    economic_inception = payload["economic_inception_session"]
+                    require(
+                        trading_sessions_between(last, date.fromisoformat(economic_inception))
+                        == [last, date.fromisoformat(economic_inception)],
+                        "activation next official session",
+                    )
+                    evidence = self.load_input_manifest(connection, payload["evidence_hash"])
+                    validate_evidence(
+                        evidence,
+                        last.isoformat(),
+                        lambda h: self.load_input_manifest(connection, h),
+                        economic=True,
+                    )
+                    require(payload["state_digest"] == digest(state), "activation changed state")
+                    require(
+                        payload["fingerprints_digest"]
+                        == digest(
+                            {k: v for k, v in inception.items() if k not in inception_only_keys}
+                        ),
+                        "activation fingerprint",
+                    )
+                    mode = ECONOMIC
                 elif kind == "SESSION_STARTED":
                     require(active is None, "nested session")
                     current = date.fromisoformat(session)
@@ -462,6 +565,15 @@ class Journal:
                         == digest({key: inception[key] for key in payload["fingerprint_keys"]}),
                         "session fingerprint",
                     )
+                    if "shadow_mode" in inception:
+                        admission_hash = payload["readiness_evidence_hash"]
+                        admission = self.load_input_manifest(connection, admission_hash)
+                        validate_evidence(
+                            admission,
+                            session,
+                            lambda h: self.load_input_manifest(connection, h),
+                            economic=mode == ECONOMIC,
+                        )
                     active = session
                     session_events = []
                     preflight = screened = decided = False
@@ -481,7 +593,52 @@ class Journal:
                             "preflight input digest",
                         )
                         preflight = True
+                    elif kind == "OBSERVATION_SESSION":
+                        require(
+                            mode == OBSERVATION_ONLY and preflight and not screened and not decided,
+                            "observation event order/mode",
+                        )
+                        require(state == initial_state(capital), "observation economic state")
+                        evidence = self.load_input_manifest(
+                            connection, payload["observation_manifest_hash"]
+                        )
+                        observation_hash = payload["observation_manifest_hash"]
+                        require(
+                            observation_hash == admission_hash, "observation admission reference"
+                        )
+                        qa = validate_evidence(
+                            evidence, session, lambda h: self.load_input_manifest(connection, h)
+                        )
+                        require(
+                            payload
+                            == observation_payload(evidence, payload["observation_manifest_hash"]),
+                            "observation payload",
+                        )
+                        screened = True
+                        observation_complete = qa["unresolved_rank_relevant_count"] == 0
+                        decided = observation_complete
+                        decision = {"session": session, "decision": "OBSERVED_NO_ECONOMIC_DECISION"}
+                    elif kind == "RANKING_BLOCKED":
+                        require(
+                            mode == OBSERVATION_ONLY and screened and not decided,
+                            "ranking blocked order/mode",
+                        )
+                        require(
+                            payload["observation_manifest_hash"] == observation_hash,
+                            "ranking blocked observation reference",
+                        )
+                        require(
+                            payload
+                            == blocked_payload(evidence, payload["observation_manifest_hash"]),
+                            "ranking blocked evidence",
+                        )
+                        require(
+                            payload["rank_blocking_unresolved_count"] > 0, "ranking blocked count"
+                        )
+                        blocked_sessions += 1
+                        decided = True
                     elif kind == "SCREEN_EVALUATED":
+                        require(mode == ECONOMIC, "economic screen in observation mode")
                         require(preflight and not screened, "screen order")
                         rows = payload["candidates"]
                         require(payload["eligible_candidate_count"] == len(rows), "candidate count")
@@ -517,6 +674,7 @@ class Journal:
                         screen = payload
                         screened = True
                     elif kind in TRANSITIONS:
+                        require(mode == ECONOMIC, "economic event in observation mode")
                         require(preflight, "economic transition before strict preflight")
                         if kind == "ENTRY_INTENT_CREATED":
                             require(screened and not decided, "intent order")
@@ -559,6 +717,7 @@ class Journal:
                             require(not decided, "management after signal decision")
                         state = reduce_transition(state, kind, payload, capital)
                     elif kind == "DECISION_NO_TRADE":
+                        require(mode == ECONOMIC, "economic decision in observation mode")
                         require(preflight and screened and not decided, "no trade order")
                         require(payload["state_digest"] == digest(state), "no trade changed state")
                         if not screen["data_complete"]:
@@ -611,6 +770,15 @@ class Journal:
                                 "pending intent was deferred",
                             )
                         last = date.fromisoformat(session)
+                        if mode == OBSERVATION_ONLY:
+                            require(
+                                state == initial_state(capital),
+                                "observation committed economic state",
+                            )
+                            last_observed = last
+                        else:
+                            last_economic = last
+                            economic_sessions += 1
                         committed.add(last)
                         active = None
                     else:
@@ -620,5 +788,18 @@ class Journal:
             previous = event["event_hash"]
         require(active is None, "uncommitted session tail")
         return VerifiedJournal(
-            inception, state, last, frozenset(committed), decision, previous, len(events)
+            inception,
+            state,
+            last,
+            frozenset(committed),
+            decision,
+            previous,
+            len(events),
+            mode,
+            last_observed,
+            last_economic,
+            blocked_sessions,
+            economic_sessions,
+            observation_complete,
+            economic_inception,
         )

@@ -243,12 +243,10 @@ def test_selected_atr_unknown_does_not_promote_rank_two(case):
         qualified_row(atr14=None),
         qualified_row(symbol="BBB", quality=80),
     )
-    runner.run()
+    with pytest.raises(ShadowError, match="SHADOW_SESSION_DATA_NOT_READY"):
+        runner.run()
     assert runner.journal.verify().state["pending"] is None
-    assert (
-        events(runner.journal, "DECISION_NO_TRADE")[-1]["payload"]["reason"]
-        == "NO_TRADE_DATA_INCOMPLETE"
-    )
+    assert not events(runner.journal, "DECISION_NO_TRADE")
 
 
 @pytest.mark.parametrize(
