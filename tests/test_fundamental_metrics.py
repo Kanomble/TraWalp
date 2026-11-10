@@ -389,3 +389,55 @@ def test_missing_da_leaves_ebitda_unavailable_without_blocking_ebit() -> None:
     assert ttm.ebitda is None
     assert ev_to_ebitda(Decimal("1000"), ttm.ebitda) is None
     assert ev_to_ebit(Decimal("1000"), ttm.ebit) == 10
+
+
+@pytest.mark.parametrize("combined_year", [2023, 2024, 2025])
+def test_da_representation_uses_newest_coherent_period(combined_year: int) -> None:
+    facts = []
+    for metric in ("operating_income", "depreciation", "amortization"):
+        facts.extend(cumulative_year(metric))
+    for source in cumulative_year("depreciation_amortization"):
+        facts.append(
+            source.model_copy(
+                update={
+                    "period_start": source.period_start.replace(year=combined_year),
+                    "period_end": source.period_end.replace(year=combined_year),
+                    "filed": source.filed.replace(year=source.filed.year + combined_year - 2024),
+                }
+            )
+        )
+    state = build_ttm(facts, date(2026, 3, 1))
+    assert state.depreciation_amortization == Decimal("1200" if combined_year < 2024 else "600")
+    assert state.metric_period_ends["depreciation_amortization"] == date(
+        max(combined_year, 2024), 12, 31
+    )
+    assert state.ebitda == (
+        None if combined_year > 2024 else Decimal("1800" if combined_year < 2024 else "1200")
+    )
+    if combined_year < 2024:
+        debug = debug_fundamentals("TEST", facts, date(2026, 3, 1))
+        da = next(item for item in debug.items if item.name == "D&A")
+        assert da.value == Decimal("1200")
+        assert "depreciation_amortization" not in da.xbrl_concepts
+        assert "depreciation" in da.xbrl_concepts
+        assert "amortization" in da.xbrl_concepts
+
+
+def test_da_component_pair_requires_coherence_and_pit() -> None:
+    facts = cumulative_year("depreciation_amortization")
+    for source in cumulative_year("depreciation") + cumulative_year("amortization"):
+        facts.append(
+            source.model_copy(
+                update={
+                    "period_start": source.period_start.replace(year=2025),
+                    "period_end": source.period_end.replace(year=2025),
+                    "filed": source.filed.replace(year=source.filed.year + 1),
+                }
+            )
+        )
+    assert build_ttm(facts, date(2025, 12, 31)).depreciation_amortization == Decimal("600")
+    assert build_ttm(facts, date(2026, 3, 1)).depreciation_amortization == Decimal("1200")
+    without_amortization = [f for f in facts if f.metric != "amortization"]
+    assert build_ttm(without_amortization, date(2026, 3, 1)).depreciation_amortization == Decimal(
+        "600"
+    )

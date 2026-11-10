@@ -127,7 +127,13 @@ def _da_item(
     current: TTMFundamentals, facts: list[FundamentalFact], as_of: date
 ) -> FundamentalDebugItem:
     combined = _flow_item("D&A", "depreciation_amortization", current, facts, as_of)
-    if combined.value is not None and combined.xbrl_concepts:
+    combined_quarters = discrete_quarters(facts, "depreciation_amortization", as_of)
+    combined_end = combined_quarters[-1].period_end if combined_quarters else None
+    if (
+        combined.value is not None
+        and combined.xbrl_concepts
+        and combined_end == current.metric_period_ends.get("depreciation_amortization")
+    ):
         return combined
     depreciation = _flow_item("Depreciation", "depreciation", current, facts, as_of)
     amortization = _flow_item("Amortization", "amortization", current, facts, as_of)
@@ -135,7 +141,8 @@ def _da_item(
         "D&A",
         current.depreciation_amortization,
         (depreciation, amortization),
-        "Depreciation + Amortization of intangible assets; combined tag preferred",
+        "Depreciation + Amortization of intangible assets; newest coherent period; "
+        "combined tag preferred at equal period end",
     )
 
 

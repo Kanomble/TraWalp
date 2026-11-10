@@ -290,13 +290,18 @@ def build_ttm(
         else None
     )
     da_formula: str | None = None
-    if values["depreciation_amortization"] is not None:
-        da_formula = "reported combined depreciation and amortization"
-    elif (
+    component_da_available = (
         values["depreciation"] is not None
         and values["amortization"] is not None
         and ends.get("depreciation") == ends.get("amortization")
+    )
+    # Competing representations must refer to the newest coherent period.
+    # Retain the reported combined concept's preference for equal period ends.
+    if values["depreciation_amortization"] is not None and (
+        not component_da_available or ends["depreciation_amortization"] >= ends["depreciation"]
     ):
+        da_formula = "reported combined depreciation and amortization"
+    elif component_da_available:
         values["depreciation_amortization"] = (
             values["depreciation"] + values["amortization"]  # type: ignore[operator]
         )
