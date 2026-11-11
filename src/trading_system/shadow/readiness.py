@@ -59,7 +59,12 @@ def evaluate_shadow_input_readiness(
         if screen_source is not None
         else Screener(database, config).run(session, use_market_snapshots=False)
     )
-    ranked, qualification = qualified_forward_screen(raw, session, config)
+    history_coverage = database.history_coverage(
+        [row.symbol for row in raw.records], session, config.data_quality.min_market_history_days
+    )
+    ranked, qualification = qualified_forward_screen(
+        raw, session, config, history_coverage=history_coverage
+    )
     blocking, warnings = [], []
 
     def check_state(key, *, sec=False):
@@ -128,6 +133,7 @@ def evaluate_shadow_input_readiness(
             set(r for r in blocking if r != "RANKING_UNRESOLVED")
         ),
         "ranking_complete": qualification["unresolved_rank_relevant_count"] == 0,
+        "history_coverage": history_coverage,
         "latest_completed_session": latest,
         "analysis_session": session,
         "asset_state": asset,

@@ -109,7 +109,10 @@ def install_forward_view(connection):
 
 def sync_forward(database, client, start, end, symbols):
     """Use the official historical client, exclusively in an explicit forward context."""
-    from trading_system.data.market_sessions import latest_completed_trading_session
+    from trading_system.data.market_sessions import (
+        latest_completed_trading_session,
+        trading_sessions_between,
+    )
 
     if client.feed.value != "sip" or client.adjustment.value != "all":
         raise ValueError("FORWARD_SIP_ALL_REQUIRED")
@@ -127,7 +130,23 @@ def sync_forward(database, client, start, end, symbols):
     begin = datetime.combine(start, datetime.min.time(), tzinfo=UTC)
     finish = datetime.combine(end + timedelta(days=1), datetime.min.time(), tzinfo=UTC)
     try:
-        bars = client.daily_bars(sorted(set(symbols) | {"SPY"}), begin, finish)
+        requested = sorted(set(symbols) | {"SPY"})
+        bars = list(client.daily_bars(requested, begin, finish))
+        expected = set(trading_sessions_between(start, end))
+        usable = {symbol: set() for symbol in requested}
+        for bar in bars:
+            if bar.symbol not in usable or bar.timestamp.date() not in expected:
+                raise ValueError("FORWARD_RESPONSE_OUTSIDE_REQUEST")
+            if current_session_observation(bar, bar.timestamp.date()) == "OBSERVATION_PRESENT":
+                usable[bar.symbol].add(bar.timestamp.date())
+        count = persist(
+            database,
+            bars,
+            provider="alpaca",
+            feed="sip",
+            adjustment="all",
+            sync_reference=f"update-bars/forward-sip/{start}/{end}",
+        )
     except Exception:
         database.set_sync_value(
             "dataset",
@@ -140,14 +159,6 @@ def sync_forward(database, client, start, end, symbols):
             },
         )
         raise
-    count = persist(
-        database,
-        bars,
-        provider="alpaca",
-        feed="sip",
-        adjustment="all",
-        sync_reference=f"update-bars/forward-sip/{start}/{end}",
-    )
     database.set_sync_value(
         "dataset",
         "forward_sip",
@@ -159,6 +170,15 @@ def sync_forward(database, client, start, end, symbols):
             "feed": "sip",
             "adjustment": "all",
             "records": count,
+            # Success attests acquisition/persistence, not listing age or coverage.
+            "coverage_status": "complete"
+            if all(days == expected for days in usable.values())
+            else "incomplete",
+            "coverage_expected_sessions": len(expected),
+            "coverage_missing_sessions": {
+                symbol: len(expected - days) for symbol, days in usable.items() if days != expected
+            },
+            "listing_history": "unknown",
         },
     )
     return count

@@ -78,7 +78,9 @@ def report(*rows):
         ("OBSERVATION_WRONG_SESSION", 298, PREVIOUS, PREVIOUS),
     ],
 )
-def test_independent_history_rejection(config, observation, count, as_of, market_session):
+def test_short_stored_history_is_not_independent_rejection(
+    config, observation, count, as_of, market_session
+):
     row = candidate(
         observation=observation,
         count=count,
@@ -89,8 +91,8 @@ def test_independent_history_rejection(config, observation, count, as_of, market
         valuation=None,
     )
     result = qualify_f_inputs(report(row), SESSION, config)
-    assert result["rejected"] == {row.symbol: "insufficient_market_history"}
-    assert result["unresolved_rank_relevant_count"] == 0
+    assert result["rejected"] == {}
+    assert result["unresolved_rank_relevant_count"] == 1
 
 
 @pytest.mark.parametrize(

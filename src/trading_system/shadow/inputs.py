@@ -5,8 +5,13 @@ from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 
-from trading_system.data.database import Database, _fact_from_row
+from trading_system.data.database import Database, _bar_from_row, _fact_from_row
 from trading_system.data.forward_market import CONTRACT, install_forward_view
+from trading_system.data.market_sessions import (
+    full_history_request_window,
+    trading_sessions_between,
+)
+from trading_system.data.observations import current_session_observation
 from trading_system.shadow.contracts import digest
 
 
@@ -53,6 +58,43 @@ class LocalInputs(Database):
         yield self._connection
 
     read_only = connect
+
+    def history_coverage(self, symbols, session, sessions):
+        """Batch evidence from the pinned SIP view, independent of stored row count.
+
+        Missing observations prove a source gap, never an issuer's listing date.
+        Zero-volume placeholders are retained in storage but cannot attest coverage.
+        """
+        start, _ = full_history_request_window(session, sessions)
+        expected = set(trading_sessions_between(start.date(), session))
+        usable = {symbol: set() for symbol in symbols}
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM bars WHERE timestamp>=? AND timestamp<?",
+                (start.isoformat(), session.isoformat() + "T23:59:59"),
+            )
+            for row in rows:
+                if row["symbol"] not in usable:
+                    continue
+                bar = _bar_from_row(row)
+                day = bar.timestamp.date()
+                if (
+                    day in expected
+                    and current_session_observation(bar, day) == "OBSERVATION_PRESENT"
+                ):
+                    usable[bar.symbol].add(day)
+        evidence = {
+            symbol: {
+                "status": "complete" if days == expected else "incomplete",
+                "expected_sessions": len(expected),
+                "usable_sessions": len(days),
+                "missing_sessions": sorted(expected - days),
+                "listing_history": "unknown",
+            }
+            for symbol, days in sorted(usable.items())
+        }
+        self.provenance["history_coverage"] = evidence
+        return evidence
 
     def initialize(self):
         raise RuntimeError("Shadow cannot initialize a market database")

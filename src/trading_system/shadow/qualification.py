@@ -14,35 +14,15 @@ from trading_system.champion import champion_ranking
 
 
 def _independent_history_failure(row, session, config):
-    """Bound the existing stored-row gate without trusting current market values.
+    """Stored row counts cannot prove listing age or historical unavailability.
 
-    The screener counts every stored Daily row, including zero-volume rows.
-    Replacing an unqualified current row cannot increase that count; an absent
-    current row can add at most one. Historical backfills change the gate inputs
-    and must be evaluated in a new source snapshot.
+    There is currently no authoritative listing-history evidence in ScreenRecord.
+    A short history therefore cannot independently prove strategy ineligibility.
     """
-    count = row.market_history_count
-    observation = row.current_market_observation
-    if "analysis_error" in row.exclusion_reasons:
-        return False
-    if observation in {"OBSERVATION_ZERO_VOLUME", "OBSERVATION_INVALID"}:
-        if count <= 0 or row.as_of != session or row.technical.market_session != session:
-            return False
-        maximum = count
-    elif observation == "OBSERVATION_ABSENT":
-        if count != 0 or row.as_of != session or row.technical.market_session is not None:
-            return False
-        maximum = 1
-    elif observation == "OBSERVATION_WRONG_SESSION":
-        if count <= 0 or row.as_of >= session or row.technical.market_session != row.as_of:
-            return False
-        maximum = count + 1
-    else:
-        return False
-    return maximum < config.data_quality.min_market_history_days
+    return False
 
 
-def qualify_f_inputs(report, session, config, *, ranked=None):
+def qualify_f_inputs(report, session, config, *, ranked=None, history_coverage=None):
     # False requests input qualification before any cross-sectional F ranking.
     ranked = ranked if ranked is not None else champion_ranking(report, config)
     rejected, evaluated, unresolved = {}, [], []
@@ -57,6 +37,11 @@ def qualify_f_inputs(report, session, config, *, ranked=None):
     for row in sorted(report.records, key=lambda r: r.symbol):
         reasons = set(row.exclusion_reasons)
         tech, scores = row.technical, row.scores
+        history_known = (
+            history_coverage.get(row.symbol, {}).get("status") == "complete"
+            if history_coverage is not None
+            else row.market_history_count >= config.data_quality.min_market_history_days
+        )
         observed = (
             row.current_market_observation == "OBSERVATION_PRESENT"
             and row.as_of == session
@@ -68,14 +53,12 @@ def qualify_f_inputs(report, session, config, *, ranked=None):
         )
         # These are canonical hard rejections, qualified by their actual evidence.
         for reason, known in (
-            (
-                "insufficient_market_history",
-                (observed and row.market_history_count > 0)
-                or _independent_history_failure(row, session, config),
-            ),
             ("invalid_or_low_price", observed and tech.price is not None),
             ("missing_or_small_market_cap", observed and row.estimated_market_cap is not None),
-            ("insufficient_liquidity", observed and row.average_dollar_volume_20d is not None),
+            (
+                "insufficient_liquidity",
+                history_known and observed and row.average_dollar_volume_20d is not None,
+            ),
             (
                 "positive_operating_cash_flow_required",
                 row.fundamentals.operating_cash_flow_positive is False,
@@ -97,7 +80,7 @@ def qualify_f_inputs(report, session, config, *, ranked=None):
         ):
             failures.append("valuation_threshold")
         gate = evaluate_strategy_gate(tech, FROZEN_CHAMPION_F.variant, config)
-        if observed:
+        if observed and history_known:
             failures.extend(
                 reason for reason in gate.blocking_reasons if "unavailable" not in reason
             )
@@ -105,6 +88,8 @@ def qualify_f_inputs(report, session, config, *, ranked=None):
             rejected[row.symbol] = failures[0]
             continue
         missing = []
+        if not history_known:
+            missing.append("MARKET_HISTORY_UNPROVEN")
         if not observed:
             missing.append(f"CURRENT_SESSION:{row.current_market_observation}")
         for name in ("analysis_error", "no_point_in_time_fundamentals", "stale_market_data"):
@@ -146,12 +131,16 @@ def qualify_f_inputs(report, session, config, *, ranked=None):
     }
 
 
-def qualified_forward_screen(raw, session, config):
+def qualified_forward_screen(raw, session, config, *, history_coverage=None):
     """Never rank candidates against an unresolved economic cross-section."""
-    qualification = qualify_f_inputs(raw, session, config, ranked=False)
+    qualification = qualify_f_inputs(
+        raw, session, config, ranked=False, history_coverage=history_coverage
+    )
     if not qualification["unresolved_rank_relevant_count"]:
         ranked = champion_ranking(raw, config)
-        qualification = qualify_f_inputs(raw, session, config, ranked=ranked)
+        qualification = qualify_f_inputs(
+            raw, session, config, ranked=ranked, history_coverage=history_coverage
+        )
         if not qualification["unresolved_rank_relevant_count"]:
             return ranked, qualification
     # Keep diagnostic features for held risk management, but publish no ranking.
