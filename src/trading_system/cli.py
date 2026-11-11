@@ -297,6 +297,7 @@ def _parser() -> argparse.ArgumentParser:
         shadow.add_argument("--journal", type=Path, help="Separate Shadow SQLite path")
         if name == "shadow-f-init":
             shadow.add_argument("--initial-capital", type=float, default=100.0)
+        if name in {"shadow-f-init", "shadow-f-preflight"}:
             shadow.add_argument(
                 "--observation-only",
                 action="store_true",

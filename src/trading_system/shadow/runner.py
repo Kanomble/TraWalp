@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from datetime import UTC, date, datetime
 
 from trading_system.backtest.data_integrity import (
@@ -12,6 +11,7 @@ from trading_system.backtest.data_integrity import (
 from trading_system.backtest.engine import BacktestEngine
 from trading_system.data.forward_market import CONTRACT
 from trading_system.data.market_sessions import latest_completed_trading_session
+from trading_system.shadow.admission import evaluate_inception_admission
 from trading_system.shadow.contracts import (
     ShadowError,
     assert_no_drift,
@@ -28,7 +28,6 @@ from trading_system.shadow.modes import (
     blocked_payload,
     evidence_manifest,
     observation_payload,
-    validate_mode,
 )
 from trading_system.shadow.readiness import evaluate_shadow_input_readiness
 from trading_system.shadow.state import portfolio
@@ -49,39 +48,19 @@ class ShadowRunner:
         self.screen_source = screen_source
 
     def initialize(self, *, capital=100.0, shadow_mode=ECONOMIC):
-        validate_mode(shadow_mode)
-        if self.journal.path.exists():
-            raise ShadowError("SHADOW_ALREADY_INITIALIZED", path=str(self.journal.path))
-        if not math.isfinite(capital) or capital <= 0:
-            raise ShadowError("SHADOW_INVALID_INITIAL_CAPITAL")
-        current, now = fingerprints(self.config), self.clock()
-        if not self.market_path.is_file():
-            raise ShadowError(
-                "SHADOW_INCEPTION_DATA_NOT_READY", blocking_reasons=["MARKET_DATABASE_MISSING"]
-            )
-        with LocalInputs(self.market_path).snapshot() as inputs:
-            # The acquisition command requires an explicit --end. Use that stored
-            # declaration, never an implicit date chosen by the initialization clock.
-            declared = inputs.sync_values("dataset").get("forward_sip", {}).get("end")
-            if not declared:
-                raise ShadowError(
-                    "SHADOW_INCEPTION_DATA_NOT_READY",
-                    blocking_reasons=["SIP_TRANSITION_BOUNDARY_NOT_DECLARED"],
-                )
-            transition = date.fromisoformat(declared)
-            if transition != latest_completed_trading_session(now):
-                raise ShadowError(
-                    "SHADOW_INCEPTION_DATA_NOT_READY",
-                    blocking_reasons=["SIP_TRANSITION_BOUNDARY_NOT_CURRENT"],
-                )
-            readiness = evaluate_shadow_input_readiness(
-                inputs, self.config, now=now, session=transition, screen_source=self.screen_source
-            )
-        admitted = (
-            readiness.observation_ready if shadow_mode == OBSERVATION_ONLY else readiness.ready
+        now = self.clock()
+        admission = evaluate_inception_admission(
+            self.market_path,
+            self.config,
+            journal_path=self.journal.path,
+            now=now,
+            requested_mode=shadow_mode,
+            capital=capital,
+            screen_source=self.screen_source,
         )
-        if not admitted:
-            raise ShadowError("SHADOW_INCEPTION_DATA_NOT_READY", **readiness.as_dict())
+        if not admission.selected_mode_ready:
+            raise ShadowError("SHADOW_INCEPTION_DATA_NOT_READY", **admission.as_dict())
+        readiness = admission.readiness
         completed_at = self.clock()
         # A large screen can span the official close. Never bind a stale boundary
         # or silently perform a second expensive screen in this initialization.
@@ -94,11 +73,11 @@ class ShadowRunner:
             raise ShadowError("SHADOW_INCEPTION_CLOCK_REGRESSION")
         return self.journal.initialize(
             now=completed_at,
-            fingerprints=current,
+            fingerprints=admission.fingerprints,
             git_identity=local_git_identity(),
             capital=capital,
             input_readiness=readiness.as_dict(),
-            input_manifest=inputs.provenance,
+            input_manifest=admission.input_manifest,
             shadow_mode=shadow_mode,
         )
 

@@ -124,6 +124,7 @@ DATA_PIPELINE_PATTERNS = (
     "data/forward_market.py",
     "shadow/inputs.py",
     "shadow/readiness.py",
+    "shadow/admission.py",
     "shadow/qualification.py",
     "config.py",
     "data/alpaca_client.py",

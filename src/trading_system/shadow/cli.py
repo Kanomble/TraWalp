@@ -18,19 +18,26 @@ def command(args) -> int:
     try:
         config = load_strategy_config(args.config)
         if args.command == "shadow-f-preflight":
-            from trading_system.shadow.inputs import LocalInputs
-            from trading_system.shadow.readiness import evaluate_shadow_input_readiness
+            from trading_system.shadow.admission import evaluate_inception_admission
+            from trading_system.shadow.modes import ECONOMIC, OBSERVATION_ONLY
 
-            with LocalInputs(config.storage.database_path).snapshot() as inputs:
-                readiness = evaluate_shadow_input_readiness(inputs, config)
+            admission = evaluate_inception_admission(
+                config.storage.database_path,
+                config,
+                journal_path=args.journal
+                or config.storage.database_path.with_name("shadow_f.sqlite3"),
+                requested_mode=OBSERVATION_ONLY
+                if getattr(args, "observation_only", False)
+                else ECONOMIC,
+            )
             print(
                 json.dumps(
-                    normalized({**readiness.details, "qualification": readiness.qualification}),
+                    admission.as_dict(),
                     indent=2,
                     sort_keys=True,
                 )
             )
-            return 0 if readiness.ready else 1
+            return 0 if admission.selected_mode_ready else 1
         journal_path = args.journal or config.storage.database_path.with_name("shadow_f.sqlite3")
         runner = ShadowRunner(Journal(journal_path), config.storage.database_path, config)
         if args.command == "shadow-f-init":
