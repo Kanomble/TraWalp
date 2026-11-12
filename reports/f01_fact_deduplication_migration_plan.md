@@ -1,4 +1,94 @@
-﻿# F01 Fact Deduplication — Conditional Migration Design (Phase B)
+# Task 8C — maßgebliches Resolution-Addendum (12.11.2026)
+
+Baseline Task 8C: `cb0c1b632f8c24113d22a603136bdc70c3711aaf`.
+Dieses Addendum präzisiert den darunter erhaltenen Task-8B-Entwurf. Details und
+Nachweise: `reports/f01_identity_survivor_resolution_audit.md`.
+**Keine Migration, Kopie, Bereinigung oder produktive Semantikänderung ausgeführt.**
+
+## Verbindliches Verdict und Klassen
+
+- **Vollmigration NO_GO:** alle 180.283 Aliasgruppen bleiben im bisherigen
+  Single-Row-/Legacy-Tickervertrag ungelöst. Keine bestätigte historische
+  Tickerwechselzuordnung: 0 verifizierte Epochen und 0 passende Corporate Actions.
+  Gleicher CIK oder heutiger SEC-/Reference-Match genügt nicht zur Security-Gleichsetzung.
+- **Teilkonzept fachlich GO nur für SAFE_TO_DEDUP:** 3.058.649 vollständige
+  Ein-Symbol-Gruppen / 9.150.908 Zusatzzeilen sind anhand des vollständigen
+  Snapshot-Keys und gleicher endlicher Werte/Nicht-Key-Metadaten isolierbar.
+  Diese Aussage ist keine Ausführungsfreigabe. Ein separater Copy-only-Dry-Run
+  benötigt weiterhin Original-ID-/Referenzprüfung, Backup, Abnahme und Autorisierung.
+- **MUST_PRESERVE:** komplette Alias-/Konfliktgruppen, alle legitimen verschiedenen
+  CIKs/Units/Tags/Accessions/Frames/Filingdaten/Perioden sowie Duration-Facts und
+  der nachgewiesene Survivor-Anker. Keine Skips oder Umlabelungen.
+- **SELECTION_SENSITIVE:** falsches MIN/MAX kann Wert, Scores und Rank 1 ändern.
+  Das Flag kann eine ansonsten reine Gruppe betreffen; SAFE ist sie nur mit dem
+  vollständig nachgewiesenen Reader-Anker, niemals mit beliebiger globaler Regel.
+- **AMBIGUOUS_IDENTITY / INSUFFICIENT_EVIDENCE:** insbesondere die historische
+  Beziehung der 180.283 Aliasgruppen bleibt offen. Unbekannte Consumer, neue
+  Metadata-/Wertkonflikte oder nicht abgenommene externe ID-Verträge sind STOP-Gates.
+  Diese Prüf-/Erhaltungsflags sind keine disjunkten zusätzlichen Zählmengen.
+
+## Geschlossener semantischer Teilvertrag
+
+Nur vollständig gleiche Gruppen mit bekanntem Consumer dürfen später auf einen
+Survivor reduziert werden:
+
+1. Cash, Equity, Assets/Current Assets/Current Liabilities, direkte Total-Debt-
+   Vertretung: frühester ursprünglicher ID-Auftritt (MIN).
+2. Debt Current/Noncurrent: spätester ursprünglicher ID-Auftritt (MAX).
+   Konkurrenz zwischen Direct Debt und Komponenten bleibt unverändert.
+3. Shares: vorhandene Date-/Taxonomy-/Accession-/Tag-/Wert- und Alterspriorität
+   unverändert; bei völlig gleichem Inhalt deterministisch MIN.
+4. NULL-start-Flows/EPS: nicht als Quartale ausgewertet, deterministisch MIN nur
+   im vollständig gleichen bekannten Consumer-Scope. Duration-Facts nie bereinigen.
+5. Alle Gruppen mit mehreren Source-Symbolen oder anderen relevanten Varianten
+   vollständig beibehalten, auch bei Wertgleichheit. Gruppenzugehörigkeit im
+   gesamten Snapshot prüfen, nicht aus einem Legacy-Symbolslice ableiten.
+
+Der früheste bzw. späteste Auftritt erhält den jeweiligen Gewinner gegenüber
+anderen interleavten Keys. Filed-/Periodenfilter sind identitätsintern gleich;
+Source-/CIK-Mitgliedschaft ist bei den zulässigen Ein-Symbol-Gruppen gleich.
+Die Aliasgruppen bleiben komplett im Stream. Somit verändert die Teilprojektion
+weder deren Membership noch die für die nachgewiesenen Reader relevante Reihenfolge.
+Der Beweis gilt für wirtschaftliche und ausgewählte Debug-Ausgaben, nicht für
+identische Raw-Listen, Counts, Cache-Keys oder Input-Fingerprints.
+
+29 gezielte Offline-Tests bestanden, einschließlich sechs AABB-Interleavings je
+neun Metric-Klassen und zwei Readern, Alias-/Wertkonfliktisolation, CIK/Unit/Perioden-
+Grenzen sowie SEC-Abbruch/Readiness. Die zwei danach verstärkten Rank-1-Proben
+bestanden ebenfalls. Reale vorab definierte Alias-Stichprobe: 18 Vergleiche,
+0 Fundamental-/Scoreänderungen, 6 Rankingvergleiche ohne Unterschied unter der
+Teilregel; 12 geänderte Input-Digests. Das ersetzt keine historische Vollvalidierung.
+
+## Aktuelle Sollzähler und verbleibende operative Grenzen
+
+Quelle: 18.698.090 Facts. Rechnerisch nach ausschließlich zulässiger Teilprojektion:
+**9.547.182 Facts**, davon 4.933.389 unveränderte Duration-Facts.
+Rest: **180.283 mehrdeutige Aliasgruppen / 1.217.274 Zusatzzeilen**.
+Diese Zahlen sind keine ausgeführten Migrationsresultate und keine Page-/GB-Prognose.
+
+Ein globaler partieller UNIQUE-Index für alle NULL-start-Facts bleibt bei solchen
+Restgruppen unmöglich. Kein Key um Symbol erweitern und keine Ausnahme/Skip-Logik
+für den Task-8-Writer. Ein Companyfacts-Paket, das eine ungelöste Gruppe enthält,
+bleibt Fail-closed und kann die ganze Company-Transaktion zurückrollen; eine
+Teilbereinigung verspricht daher keine uneingeschränkt erfolgreiche SEC-Ingestion.
+
+Für die spätere Teilumsetzung muss das Ausführungsmanifest ausschließlich vollständige
+SAFE-Gruppen enthalten, mit ihrer Source-/Metadata-Signatur, ursprünglichem gewähltem
+ID-Anker, Plan-/Reader-/Config-Version und Snapshot-Hash. Ein Teilbestand darf nicht
+anhand aktueller Symbole, Preis-/Scoreergebnissen oder gewünschter Performance gewählt
+werden. Bei Source-/Code-/Schemaänderung, unbekanntem Consumer oder neuem Konflikt
+muss Klassifikation/Beweis erneut geprüft werden; andernfalls NO_GO.
+
+Alle Backup-, Platz-, WAL-/Recovery-, Provenienz- und Rollback-Gates des folgenden
+Plans gelten fort. Historische Forschungsartefakte/Journale bleiben unverändert.
+Der separate Alias-/Reader-/Schema-Entwurf ist nur für eine spätere **vollständige**
+Migration erforderlich; er darf nicht still zur Ausweitung der sicheren Teilmenge dienen.
+
+---
+
+## Erhaltener ursprünglicher Task-8B-Entwurf
+
+# F01 Fact Deduplication — Conditional Migration Design (Phase B)
 
 ## Status und Auslöser
 
