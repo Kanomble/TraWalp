@@ -555,9 +555,20 @@ class DataSynchronizer:
         if self.alpaca is None:
             raise ValueError("Alpaca client is required for asset synchronization")
         assets = self.alpaca.list_tradable_us_equities()
+        diagnostics = dict(getattr(self.alpaca, "last_asset_diagnostics", {}))
+        if (
+            diagnostics.get("assets_skipped_invalid", 0)
+            or diagnostics.get("asset_snapshot_qualified") is False
+            or (
+                "raw_assets_received" in diagnostics
+                and "assets_parsed" in diagnostics
+                and diagnostics["raw_assets_received"] != diagnostics["assets_parsed"]
+            )
+        ):
+            raise ValueError("ALPACA_ASSET_SNAPSHOT_INCOMPLETE")
         return {
             **self.database.reconcile_assets(assets),
-            **getattr(self.alpaca, "last_asset_diagnostics", {}),
+            **diagnostics,
             "errors": 0,
         }
 
@@ -1834,6 +1845,14 @@ class DataSynchronizer:
         started = self.timer()
         previous = self.database.sync_value("dataset", dataset)
         previous = previous if isinstance(previous, dict) else {}
+        if dataset == "asset_universe":
+            # Keep historical timestamps, not stale success/diagnostic counters
+            # presented as results of the next snapshot attempt.
+            previous = {
+                key: value
+                for key, value in previous.items()
+                if key in {"last_success_at", "last_completed_at"}
+            }
         self.database.set_sync_value(
             "dataset",
             dataset,
@@ -1847,11 +1866,18 @@ class DataSynchronizer:
             result = operation()
         except Exception as exc:
             elapsed = round(self.timer() - started, 3)
+            failure_details = {}
+            if dataset == "asset_universe":
+                failure_details = {
+                    **getattr(self.alpaca, "last_asset_diagnostics", {}),
+                    "errors": 1,
+                }
             self.database.set_sync_value(
                 "dataset",
                 dataset,
                 {
                     **previous,
+                    **failure_details,
                     "last_started_at": started_at.isoformat(),
                     "status": "failed",
                     "error": f"{type(exc).__name__}: {exc}",

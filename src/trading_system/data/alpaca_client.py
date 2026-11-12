@@ -77,14 +77,18 @@ class AlpacaDataClient:
         )
 
     def list_tradable_us_equities(self) -> list[TradableAsset]:
+        # Diagnostics belong to this attempt, even when transport/shape validation fails.
+        self.last_asset_diagnostics = {"asset_snapshot_qualified": False}
         request = GetAssetsRequest(status=AssetStatus.ACTIVE, asset_class=AssetClass.US_EQUITY)
         assets = self.trading.get_all_assets(request)
         if not isinstance(assets, list):
             raise ValueError("ALPACA_INVALID_ASSET_SNAPSHOT")
         result, unknown, parsed, invalid = [], set(), 0, 0
+        invalid_samples = []
         unknown_count = 0
         known_exchanges = {item.value for item in AssetExchange}
         for asset in assets:
+            symbol = None
             try:
                 get = (
                     asset.get
@@ -130,12 +134,21 @@ class AlpacaDataClient:
                     result.append(normalized_asset)
             except (AttributeError, KeyError, TypeError, ValueError) as exc:
                 invalid += 1
+                if len(invalid_samples) < 3:
+                    invalid_samples.append(
+                        {
+                            "symbol": symbol[:64] if isinstance(symbol, str) else None,
+                            "reason": str(exc)[:200],
+                        }
+                    )
                 LOGGER.warning("Skipped invalid Alpaca asset: %s", exc)
         result.sort(key=lambda asset: asset.symbol)
         self.last_asset_diagnostics = {
+            "asset_snapshot_qualified": False,
             "raw_assets_received": len(assets),
             "assets_parsed": parsed,
             "assets_skipped_invalid": invalid,
+            "asset_parse_error_samples": invalid_samples,
             "unknown_exchange_count": unknown_count,
             "unknown_exchange_values": sorted(unknown),
             "tradable_assets_final": len(result),
@@ -144,6 +157,11 @@ class AlpacaDataClient:
             raise ValueError("ALPACA_ASSET_PARSE_RETENTION_FAILURE")
         if len({asset.symbol for asset in result}) != len(result):
             raise ValueError("ALPACA_SYMBOL_MAPPING_COLLISION")
+        if invalid:
+            # Parse retention is only a catastrophic-loss guard, not evidence of
+            # completeness. Omitted malformed rows cannot authorize deactivation.
+            raise ValueError("ALPACA_ASSET_SNAPSHOT_INCOMPLETE")
+        self.last_asset_diagnostics["asset_snapshot_qualified"] = True
         return result
 
     def daily_bars(

@@ -96,8 +96,17 @@ def test_malformed_asset_isolated_and_safety_retention_kept(tmp_path):
     )
     db = Database(tmp_path / "market.sqlite3")
     db.initialize()
-    result = DataSynchronizer(db, client, None).sync_assets()
-    assert result["assets_skipped_invalid"] == 1
+    sync = DataSynchronizer(db, client, None)
+    with pytest.raises(ValueError, match="ASSET_SNAPSHOT_INCOMPLETE"):
+        sync.sync_assets()
+    failed = db.sync_value("dataset", "asset_universe")
+    assert failed["assets_skipped_invalid"] == 1
+    assert failed["assets_parsed"] == 2
+    assert failed["status"] == "failed" and failed["errors"] == 1
+    assert db.list_tradable_assets() == []
+    rows[:] = [asset_row("AAA"), asset_row("BBB", "TXSE")]
+    result = sync.sync_assets()
+    assert result["assets_skipped_invalid"] == 0
     assert result["assets_parsed"] == 2
     assert result["tradable_assets_final"] == 2
     rows[:] = [asset_row("AAA"), {}, {}, {}]
