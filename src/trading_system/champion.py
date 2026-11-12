@@ -54,9 +54,18 @@ def screen_champion(database: Database, config: StrategyConfig, as_of: date) -> 
 
     with LocalInputs(database.path).snapshot() as inputs:
         report = Screener(inputs, config).run(as_of, use_market_snapshots=False)
+        session = report.effective_market_session or report.as_of
+        history_coverage = inputs.history_coverage(
+            [row.symbol for row in report.records],
+            session,
+            config.data_quality.min_market_history_days,
+        )
+        report, _ = qualified_forward_screen(
+            report, session, config, history_coverage=history_coverage
+        )
         manifest = {
             **inputs.provenance,
-            "session": report.effective_market_session or report.as_of,
+            "session": session,
             "requested_as_of": as_of,
         }
         content_hash = digest(manifest)
@@ -75,9 +84,7 @@ def screen_champion(database: Database, config: StrategyConfig, as_of: date) -> 
                 "market_input_manifest_path": str(path),
             }
         )
-    return qualified_forward_screen(
-        report, report.effective_market_session or report.as_of, config
-    )[0]
+    return report
 
 
 def run_champion_backtest(

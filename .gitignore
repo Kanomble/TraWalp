@@ -222,6 +222,7 @@ reports/*
 !reports/f01_duplicate_champion_impact_audit.md
 !reports/f01_fact_deduplication_migration_plan.md
 !reports/f02_asset_universe_correctness_audit.md
+!reports/f03_champion_coverage_parity_audit.md
 
 # PyPI configuration file
 .pypirc

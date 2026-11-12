@@ -403,13 +403,27 @@ def test_champion_ranking_screen_and_ai_share_f_gates_and_order(config, tmp_path
     ]
 
 
-def test_screen_champion_disables_current_snapshots(config, monkeypatch):
+def test_screen_champion_disables_current_snapshots(config, monkeypatch, tmp_path):
+    from shadow_fixtures import seed_history
+
+    database = Database(tmp_path / "screen.sqlite3")
+    database.initialize()
+    session = date(2024, 1, 2)
+    seed_history(database, ("AAA",), session)
+    config.storage.reports_path = tmp_path / "reports"
+
     def screen(self, session, *, use_market_snapshots):
         assert use_market_snapshots is False
-        return Screens(session, (record(),)).screen(session)
+        row = record().model_copy(
+            update={
+                "current_market_observation": "OBSERVATION_PRESENT",
+                "market_history_count": 300,
+            }
+        )
+        return Screens(session, (row,)).screen(session)
 
     monkeypatch.setattr("trading_system.champion.Screener.run", screen)
-    assert screen_champion(None, config, date(2024, 1, 2)).eligible_count == 1
+    assert screen_champion(database, config, session).eligible_count == 1
 
 
 def test_registry_preserves_exact_rejected_family_ids_and_legacy_roles():
