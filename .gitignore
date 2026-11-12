@@ -219,6 +219,8 @@ reports/*
 !reports/f_shadow_execution_v1_audit.md
 !reports/shadow_fixture_recovery_audit.md
 !reports/xbrl_instant_fact_correctness_audit.md
+!reports/f01_duplicate_champion_impact_audit.md
+!reports/f01_fact_deduplication_migration_plan.md
 
 # PyPI configuration file
 .pypirc
