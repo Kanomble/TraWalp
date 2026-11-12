@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from shadow_fixtures import assert_history, history_evidence, official_history, seed_history
 from test_champion_consolidation import bar, record
 from test_champion_consolidation import offline as offline
 from test_daily_history import DailyAlpaca, _bar
@@ -201,7 +202,12 @@ def qualified_row(**changes):
 def test_causal_completeness(config, changes, incomplete):
     row = qualified_row(**changes)
     source = Screens({row.as_of: (row,)})
-    result = qualify_f_inputs(source.screen(row.as_of), row.as_of, config)
+    result = qualify_f_inputs(
+        source.screen(row.as_of),
+        row.as_of,
+        config,
+        history_coverage=history_evidence([row.symbol], row.as_of),
+    )
     assert bool(result["unresolved_rank_relevant_count"]) is incomplete
 
 
@@ -214,8 +220,16 @@ def test_complete_input_f_ranking_and_entry_unchanged(config):
     )
     raw = Screens({session: rows}).screen(session)
     before = champion_ranking(raw, config)
-    after = qualify_f_inputs(raw, session, config, ranked=before)
+    after = qualify_f_inputs(
+        raw,
+        session,
+        config,
+        ranked=before,
+        history_coverage=history_evidence([row.symbol for row in rows], session),
+    )
     assert after["unresolved_rank_relevant_count"] == 0
+    assert after["fully_evaluated_count"] == 2
+    assert after["rejected"] == {"LOW": "quality_threshold"}
     assert [r.symbol for r in before.records if r.eligible] == ["AAA", "BBB"]
     assert before == champion_ranking(raw, config)
     assert [r.symbol for r in before.records if r.eligible] == sorted(
@@ -526,3 +540,45 @@ def test_init_crossing_official_close_refuses_without_second_screen(case, tmp_pa
     with pytest.raises(ShadowError, match="SHADOW_INCEPTION_SESSION_CHANGED_RETRY"):
         runner.initialize()
     assert not runner.journal.path.exists()
+
+
+@pytest.mark.parametrize("gap", ["absent", "one_session", "zero_volume"])
+def test_synthetic_history_gaps_block_rank_relevant_candidate(case, gap):
+    runner, db, sessions, source = case
+    session = sessions[0]
+    missing = official_history(session)[0]
+    if gap == "absent":
+        with db.connect() as connection:
+            connection.execute("DELETE FROM forward_market_observations WHERE symbol='AAA'")
+    elif gap == "one_session":
+        with db.connect() as connection:
+            connection.execute(
+                "DELETE FROM forward_market_observations WHERE symbol='AAA' "
+                "AND substr(timestamp,1,10)=?",
+                (missing.isoformat(),),
+            )
+    else:
+        db.upsert_bars([bar("AAA", missing).model_copy(update={"volume": 0})])
+    gaps = (
+        [("AAA", day) for day in official_history(session)]
+        if gap == "absent"
+        else [("AAA", missing)]
+    )
+    assert_history(db, ("AAA", "BBB"), session, missing=gaps)
+    with LocalInputs(db.path).snapshot() as inputs:
+        readiness = evaluate_shadow_input_readiness(
+            inputs, runner.config, now=runner.clock(), session=session, screen_source=source
+        )
+    assert readiness.details["blocking_reasons"] == ["RANKING_UNRESOLVED"]
+    assert readiness.qualification["fully_evaluated_count"] == 1
+    assert readiness.qualification["incomplete_inputs"] == [
+        {"symbol": "AAA", "reasons": ["MARKET_HISTORY_UNPROVEN"]}
+    ]
+    before = events(runner.journal)
+    with pytest.raises(ShadowError, match="SHADOW_SESSION_DATA_NOT_READY"):
+        runner.run(session)
+    assert events(runner.journal) == before
+    seed_history(db, ("AAA",), session)
+    assert_history(db, ("AAA", "BBB"), session)
+    runner.run(session)
+    assert len(events(runner.journal, "ENTRY_INTENT_CREATED")) == 1

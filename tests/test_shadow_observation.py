@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import pytest
+from shadow_fixtures import assert_census, incomplete_candidate
 from test_champion_consolidation import offline as offline
 from test_champion_consolidation import record
 from test_shadow_execution import case as case
@@ -26,7 +27,7 @@ def observation(case, tmp_path, *, incomplete=True):
     before = datetime(2023, 12, 29, 22, tzinfo=UTC)
     ready_states(db, before)
     if incomplete:
-        missing = record("BBB", quality=None, valuation=None)
+        missing = incomplete_candidate()
         source.signals[before.date()] = (record("AAA"), missing)
         source.signals[sessions[0]] = (record("AAA"), missing)
     runner = ShadowRunner(
@@ -68,6 +69,7 @@ def test_observation_init_and_blocked_session(case, tmp_path, monkeypatch):
     )
     payload = events(runner.journal, "OBSERVATION_SESSION")[0]["payload"]
     assert payload["unresolved_count"] == 1
+    assert_census(payload, source=2, rejected=0, evaluated=1, unresolved=1)
     assert payload["economic_action_allowed"] is False
     assert payload["ranking_published"] is False
     assert runner.run(sessions[0])["status"] == "ALREADY_PROCESSED"
@@ -84,6 +86,13 @@ def test_complete_observation_does_not_automatically_trade_and_explicit_activati
     assert runner.journal.verify().shadow_mode == OBSERVATION_ONLY
     assert runner.journal.verify().state == initial_state(100)
     assert not events(runner.journal, "RANKING_BLOCKED")
+    assert_census(
+        events(runner.journal, "OBSERVATION_SESSION")[0]["payload"],
+        source=2,
+        rejected=0,
+        evaluated=2,
+        unresolved=0,
+    )
     inception_bytes = events(runner.journal)[0]
     result = runner.activate_economic()
     assert result["economic_inception_session"] == sessions[1]

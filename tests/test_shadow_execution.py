@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from shadow_fixtures import assert_history, rejected_candidate, seed_history
 from test_champion_consolidation import bar, record
 from test_champion_consolidation import offline as offline
 
@@ -28,6 +29,7 @@ from trading_system.shadow import runner as runner_module
 from trading_system.shadow.contracts import GENESIS_HASH, ShadowError, digest, fingerprints
 from trading_system.shadow.inputs import LocalInputs
 from trading_system.shadow.journal import Journal
+from trading_system.shadow.readiness import evaluate_shadow_input_readiness
 from trading_system.shadow.runner import ShadowRunner
 
 
@@ -41,7 +43,7 @@ class Screens:
         self.signals = signals or {}
 
     def screen(self, session):
-        rows = self.signals.get(session, (record(quality=50),))
+        rows = self.signals.get(session, (rejected_candidate(),))
         rows = tuple(
             row.model_copy(
                 update={
@@ -113,6 +115,9 @@ def case(tmp_path, config):
         return legacy_upsert(values)
 
     db.upsert_bars = fixture_upsert
+    seed_history(db, ("AAA", "BBB", "SPY"), date(2023, 12, 29))
+    assert_history(db, ("AAA", "BBB", "SPY"), date(2023, 12, 29))
+    assert_history(db, ("AAA", "BBB", "SPY"), sessions[0])
     ready_states(db, datetime(2023, 12, 29, 22, tzinfo=UTC))
     source = Screens({sessions[0]: (record("BBB"), record("AAA"))})
     journal = Journal(tmp_path / "shadow.sqlite3")
@@ -126,6 +131,13 @@ def case(tmp_path, config):
     runner.initialize()
     runner.clock = lambda: datetime(2024, 2, 1, tzinfo=UTC)
     ready_states(db, runner.clock())
+    with LocalInputs(db.path).snapshot() as inputs:
+        readiness = evaluate_shadow_input_readiness(
+            inputs, config, now=runner.clock(), session=sessions[0], screen_source=source
+        )
+    assert readiness.ready, readiness.as_dict()
+    assert readiness.qualification["fully_evaluated_count"] == 2
+    assert readiness.ranked_report.eligible_count == 2
     return runner, db, sessions, source
 
 
@@ -317,6 +329,12 @@ def test_strict_preflight_no_economic_commit_and_no_deferral(
     for _ in range(missing_index):
         runner.run()
     before = runner.journal.verify()
+    if missing_index == 1:
+        assert before.state["pending"] is not None
+        assert len(events(runner.journal, "ENTRY_INTENT_CREATED")) == 1
+    else:
+        assert before.state["position"] is not None
+        assert len(events(runner.journal, "ENTRY_EXECUTED")) == 1
     with db.connect() as connection:
         connection.execute(
             "DELETE FROM forward_market_observations WHERE symbol='AAA' "

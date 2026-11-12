@@ -217,6 +217,7 @@ reports/*
 !reports/champion_consolidation_audit.md
 !reports/f_shadow_execution_v1_summary.json
 !reports/f_shadow_execution_v1_audit.md
+!reports/shadow_fixture_recovery_audit.md
 
 # PyPI configuration file
 .pypirc
