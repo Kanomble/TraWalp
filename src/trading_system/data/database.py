@@ -1577,16 +1577,48 @@ def _fact_rows(facts: Iterable[FundamentalFact]) -> list[tuple[Any, ...]]:
 
 
 def _execute_fact_upsert(connection: sqlite3.Connection, rows: list[tuple[Any, ...]]) -> None:
-    connection.executemany(
-        """INSERT INTO fundamental_facts
+    if not rows:
+        return
+    # Acquire the SQLite writer lock before checking nullable identities. SEC
+    # company updates already own it; standalone fact batches need it explicitly.
+    if not connection.in_transaction:
+        connection.execute("BEGIN IMMEDIATE")
+    insert = """INSERT INTO fundamental_facts
         (cik,symbol,metric,taxonomy,tag,value,unit,period_start,period_end,filed,
          fiscal_year,fiscal_period,form,accession_number,frame)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT DO UPDATE SET value=excluded.value,
         fiscal_year=excluded.fiscal_year,fiscal_period=excluded.fiscal_period,
-        form=excluded.form""",
-        rows,
-    )
+        form=excluded.form"""
+    # Preserve duration batching AND insertion order: readers use id as a tie
+    # breaker, so moving durations ahead of instants would change legacy reads.
+    duration_rows = []
+    for row in rows:
+        if row[7] is not None:
+            duration_rows.append(row)
+            continue
+        if duration_rows:
+            connection.executemany(insert, duration_rows)
+            duration_rows.clear()
+        matches = connection.execute(
+            """SELECT id FROM fundamental_facts
+            WHERE cik=? AND metric=? AND tag=? AND unit=? AND period_start IS NULL
+            AND period_end=? AND filed=? AND accession_number=? AND frame=? LIMIT 2""",
+            tuple(row[index] for index in (0, 2, 4, 6, 8, 9, 13, 14)),
+        ).fetchall()
+        if len(matches) > 1:
+            # Choosing or rewriting legacy duplicates would be an implicit data
+            # migration. Refuse the batch instead; the caller rolls it back.
+            raise sqlite3.IntegrityError("AMBIGUOUS_FACT_IDENTITY: explicit migration required")
+        if matches:
+            connection.execute(
+                """UPDATE fundamental_facts SET value=?, fiscal_year=?, fiscal_period=?, form=?
+                WHERE id=?""",
+                (row[5], row[10], row[11], row[12], matches[0][0]),
+            )
+        else:
+            connection.execute(insert, row)
+    connection.executemany(insert, duration_rows)
 
 
 def _execute_sec_company_update(

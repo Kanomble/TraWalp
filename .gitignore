@@ -218,6 +218,7 @@ reports/*
 !reports/f_shadow_execution_v1_summary.json
 !reports/f_shadow_execution_v1_audit.md
 !reports/shadow_fixture_recovery_audit.md
+!reports/xbrl_instant_fact_correctness_audit.md
 
 # PyPI configuration file
 .pypirc
