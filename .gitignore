@@ -228,6 +228,7 @@ reports/*
 !reports/shadow_policy_b_implementation_audit.md
 !reports/f01_canonical_ingestion_implementation_audit.md
 !reports/f01_migration_executor_hardening_audit.md
+!reports/f01_real_migration_preparation_audit.md
 
 # PyPI configuration file
 .pypirc
