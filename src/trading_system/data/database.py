@@ -36,6 +36,7 @@ class Database:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         try:
+            _require_complete_migration(connection)
             yield connection
             connection.commit()
         except Exception:
@@ -46,6 +47,13 @@ class Database:
 
     def initialize(self) -> None:
         with self.connect() as connection:
+            if connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='fact_contract'"
+            ).fetchone():
+                from trading_system.data.canonical_facts import require_contract
+
+                require_contract(connection)
+                return
             connection.execute("PRAGMA journal_mode = WAL")
             connection.executescript(
                 """
@@ -1544,9 +1552,21 @@ class Database:
         connection = sqlite3.connect(uri, uri=True)
         connection.row_factory = sqlite3.Row
         try:
+            _require_complete_migration(connection)
             yield connection
         finally:
             connection.close()
+
+
+def _require_complete_migration(connection):
+    if connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE name='canonical_migration'"
+    ).fetchone():
+        row = connection.execute(
+            "SELECT state FROM canonical_migration WHERE singleton=1"
+        ).fetchone()
+        if row is None or row[0] != "COMPLETE":
+            raise ValueError("CANONICAL_MIGRATION_NOT_COMPLETE")
 
 
 def _now() -> str:
@@ -1663,9 +1683,7 @@ def _execute_sec_company_update(
 
 
 def _require_legacy_fact_writer(connection):
-    if connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE name='fact_contract'"
-    ).fetchone():
+    if connection.execute("SELECT 1 FROM sqlite_master WHERE name='fact_contract'").fetchone():
         raise ValueError("LEGACY_WRITER_ON_CANONICAL_SCHEMA")
 
 
