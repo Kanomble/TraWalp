@@ -19,10 +19,12 @@ from trading_system.data.market_sessions import (
     trading_sessions_between,
 )
 from trading_system.shadow.contracts import (
+    FULL,
     GENESIS_HASH,
     IDENTITY,
     LABEL,
     SCHEMA_VERSION,
+    SESSION_ADMISSION_CONTRACT,
     STRICT_CONTRACT_VERSION,
     ShadowError,
     canonical_json,
@@ -35,8 +37,10 @@ from trading_system.shadow.modes import (
     OBSERVATION_ONLY,
     blocked_payload,
     observation_payload,
+    validate_admission_preflight,
     validate_evidence,
     validate_mode,
+    validate_session_admission,
 )
 from trading_system.shadow.state import (
     TRANSITIONS,
@@ -327,6 +331,8 @@ class Journal:
         }
         committed, session_events = set(), []
         preflight = screened = decided = False
+        admission = None
+        purpose = FULL
         for number, row in enumerate(events, 1):
             event = dict(row)
             payload = json.loads(event["payload"])
@@ -565,15 +571,28 @@ class Journal:
                         == digest({key: inception[key] for key in payload["fingerprint_keys"]}),
                         "session fingerprint",
                     )
-                    if "shadow_mode" in inception:
+                    admission = None
+                    purpose = FULL
+                    if "shadow_mode" in inception or "readiness_evidence_hash" in payload:
                         admission_hash = payload["readiness_evidence_hash"]
                         admission = self.load_input_manifest(connection, admission_hash)
-                        validate_evidence(
-                            admission,
-                            session,
-                            lambda h: self.load_input_manifest(connection, h),
-                            economic=mode == ECONOMIC,
-                        )
+                        if admission.get("contract") == SESSION_ADMISSION_CONTRACT:
+                            require(mode == ECONOMIC, "session admission economic mode")
+                            purpose = validate_session_admission(
+                                admission,
+                                session,
+                                lambda h: self.load_input_manifest(connection, h),
+                                state=state,
+                                fingerprint=payload["fingerprints_digest"],
+                                now=timestamp,
+                            )
+                        else:
+                            validate_evidence(
+                                admission,
+                                session,
+                                lambda h: self.load_input_manifest(connection, h),
+                                economic=mode == ECONOMIC,
+                            )
                     active = session
                     session_events = []
                     preflight = screened = decided = False
@@ -592,6 +611,16 @@ class Journal:
                             == digest(payload["observed_bars"]),
                             "preflight input digest",
                         )
+                        if admission and admission.get("contract") == SESSION_ADMISSION_CONTRACT:
+                            validate_admission_preflight(
+                                admission,
+                                payload,
+                                state,
+                                session,
+                                anchor,
+                                timestamp,
+                                lambda h: self.load_input_manifest(connection, h),
+                            )
                         preflight = True
                     elif kind == "OBSERVATION_SESSION":
                         require(
@@ -672,11 +701,45 @@ class Journal:
                             "screen completeness",
                         )
                         screen = payload
+                        if admission and admission.get("contract") == SESSION_ADMISSION_CONTRACT:
+                            admitted = admission["evidence"]
+                            require(
+                                payload["qualification"] == admitted["qualification"],
+                                "screen admission qualification",
+                            )
+                            require(
+                                payload["input_readiness"] == admitted["readiness"],
+                                "screen admission readiness",
+                            )
+                            require(
+                                payload["incomplete_inputs"]
+                                == admitted["qualification"]["incomplete_inputs"],
+                                "screen admission incomplete inputs",
+                            )
+                            require(
+                                payload["data_complete"] == (purpose == FULL),
+                                "screen admission completeness",
+                            )
+                            original = self.load_input_manifest(
+                                connection, admitted["input_manifest_hash"]
+                            )
+                            for key, value in original.items():
+                                require(key in evidence, "screen source provenance missing")
+                                if isinstance(value, dict):
+                                    require(
+                                        all(evidence[key].get(k) == v for k, v in value.items()),
+                                        "screen source provenance changed",
+                                    )
+                                else:
+                                    require(
+                                        evidence[key] == value, "screen source provenance changed"
+                                    )
                         screened = True
                     elif kind in TRANSITIONS:
                         require(mode == ECONOMIC, "economic event in observation mode")
                         require(preflight, "economic transition before strict preflight")
                         if kind == "ENTRY_INTENT_CREATED":
+                            require(purpose == FULL, "new intent forbidden by session purpose")
                             require(screened and not decided, "intent order")
                             require(
                                 screen["data_complete"] and bool(screen["candidates"]),

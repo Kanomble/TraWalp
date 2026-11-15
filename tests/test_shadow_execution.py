@@ -14,6 +14,7 @@ from test_champion_consolidation import offline as offline
 
 from trading_system import cli
 from trading_system.backtest.data_integrity import DataIntegrityError, DataIntegrityMode
+from trading_system.backtest.engine import BacktestEngine
 from trading_system.backtest.research_registry import FROZEN_CHAMPION_F
 from trading_system.champion import champion_ranking, run_champion_backtest
 from trading_system.config import StrategyConfig, _read_yaml
@@ -389,17 +390,37 @@ def test_strict_api_is_mandatory(case, monkeypatch):
         ("max_hold", 100, 101, 99, "time_exit"),
     ],
 )
-def test_focused_champion_equivalence(case, scenario, opening, high, low, reason):
+def test_focused_champion_equivalence(case, monkeypatch, scenario, opening, high, low, reason):
     runner, db, sessions, source = case
     db.upsert_bars([bar("AAA", sessions[2], opening=opening, high=high, low=low)])
-    baseline = run_champion_backtest(
-        db,
-        runner.config,
-        sessions[0],
-        sessions[12],
-        screen_source=source,
-        data_integrity_mode=DataIntegrityMode.STRICT,
-    )
+    expected_intents = []
+    original_orders = BacktestEngine._entry_orders
+
+    def capture_orders(engine, *args, **kwargs):
+        orders = original_orders(engine, *args, **kwargs)
+        expected_intents.extend(
+            (
+                order.signal_date.isoformat(),
+                kwargs["execution_session"].isoformat(),
+                order.record.symbol,
+                order.variant_score,
+                order.daily_candidate_rank,
+                order.record.technical.atr14,
+            )
+            for order in orders
+        )
+        return orders
+
+    with monkeypatch.context() as patch:
+        patch.setattr(BacktestEngine, "_entry_orders", capture_orders)
+        baseline = run_champion_backtest(
+            db,
+            runner.config,
+            sessions[0],
+            sessions[12],
+            screen_source=source,
+            data_integrity_mode=DataIntegrityMode.STRICT,
+        )
     before = db.path.read_bytes()
     for day in sessions[:13]:
         runner.run(day)
@@ -408,6 +429,7 @@ def test_focused_champion_equivalence(case, scenario, opening, high, low, reason
     actual, expected = exits[0]["payload"]["trade"], baseline.trades[0].model_dump(mode="json")
     for key in (
         "symbol",
+        "position_id",
         "entry_date",
         "entry_price",
         "quantity",
@@ -421,6 +443,30 @@ def test_focused_champion_equivalence(case, scenario, opening, high, low, reason
     ):
         assert actual[key] == expected[key], (scenario, key)
     assert actual["exit_reason"] == reason
+    commits = events(runner.journal, "SESSION_COMMITTED")
+    for commit, point in zip(commits, baseline.equity_curve, strict=True):
+        actual_portfolio = commit["payload"]["portfolio_after"]
+        assert commit["session"] == point.date.isoformat()
+        assert actual_portfolio["cash"] == point.cash
+        assert actual_portfolio["equity"] == point.portfolio_equity
+        assert actual_portfolio["realized_pnl"] == point.realized_pnl
+        if actual_portfolio["position"]:
+            p = actual_portfolio["position"]
+            assert p["holding_days"] == len(
+                trading_sessions_between(date.fromisoformat(p["entry_date"]), point.date)
+            )
+    assert [
+        (
+            p["signal_session"],
+            p["expected_execution_session"],
+            p["symbol"],
+            p["f_score"],
+            p["rank"],
+            p["atr14"],
+        )
+        for event in events(runner.journal, "ENTRY_INTENT_CREATED")
+        for p in [event["payload"]]
+    ] == expected_intents
     state = runner.journal.verify().state
     assert state["position"] is None and state["pending"] is None
     assert state["cash"] == baseline.equity_curve[-1].cash
@@ -476,10 +522,12 @@ def test_partial_stale_cross_section_never_selects_fresh_candidate(case):
         record("AAA"),
         record("BBB").model_copy(update={"exclusion_reasons": ("stale_market_data",)}),
     )
-    with pytest.raises(ShadowError, match="SHADOW_SESSION_DATA_NOT_READY"):
-        runner.run()
+    runner.run()
     assert not events(runner.journal, "ENTRY_INTENT_CREATED")
-    assert not events(runner.journal, "DECISION_NO_TRADE")
+    assert events(runner.journal, "DECISION_NO_TRADE")[-1]["payload"]["reason"] == (
+        "NO_TRADE_DATA_INCOMPLETE"
+    )
+    assert runner.journal.verify().last_session == sessions[0]
 
 
 def test_source_revisions_do_not_rewrite_old_decisions(case):

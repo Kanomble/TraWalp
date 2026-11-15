@@ -22,6 +22,9 @@ from trading_system.data.forward_market import CONTRACT
 SCHEMA_VERSION = 1
 # Names the existing CC-01 API, not a second integrity implementation.
 STRICT_CONTRACT_VERSION = "CC01/validate_session_position_data/v1"
+SESSION_ADMISSION_CONTRACT = "shadow-session-admission/v1"
+FULL = "FULL"
+MANAGEMENT_WITH_BLOCKED_SIGNALS = "MANAGEMENT_WITH_BLOCKED_SIGNALS"
 GENESIS_HASH = "0" * 64
 IDENTITY = "FROZEN_CHAMPION_F"
 LABEL = "F/configured/C1"

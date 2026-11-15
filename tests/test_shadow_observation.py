@@ -163,14 +163,17 @@ def test_observation_rejects_economic_events_and_mode_rewrites(case, tmp_path):
     assert runner.journal.verify().shadow_mode == OBSERVATION_ONLY
 
 
-def test_economic_incomplete_refuses_without_economic_events(case):
+def test_economic_incomplete_commits_management_with_blocked_signals(case):
     runner, _, sessions, source = case
     source.signals[sessions[0]] = (record("AAA"), record("BBB", quality=None))
-    before = runner.journal.path.read_bytes()
-    with pytest.raises(ShadowError, match="SHADOW_SESSION_DATA_NOT_READY"):
-        runner.run(sessions[0])
-    assert runner.journal.path.read_bytes() == before
-    assert runner.journal.verify().last_session is None
+    before = runner.journal.verify().state
+    runner.run(sessions[0])
+    assert runner.journal.verify().state == before
+    assert runner.journal.verify().last_session == sessions[0]
+    assert not events(runner.journal, "ENTRY_INTENT_CREATED")
+    assert events(runner.journal, "DECISION_NO_TRADE")[-1]["payload"]["reason"] == (
+        "NO_TRADE_DATA_INCOMPLETE"
+    )
 
 
 def test_complete_economic_events_identical_to_pre_mode_runner(case, tmp_path, monkeypatch):

@@ -223,7 +223,9 @@ reports/*
 !reports/f01_fact_deduplication_migration_plan.md
 !reports/f02_asset_universe_correctness_audit.md
 !reports/f03_champion_coverage_parity_audit.md
-
+!reports/f01_alias_ingestion_resolution_design.md
+!reports/shadow_policy_b_evidence_audit.md
+!reports/shadow_policy_b_implementation_audit.md
 # PyPI configuration file
 .pypirc
 

@@ -266,10 +266,11 @@ def test_selected_atr_unknown_does_not_promote_rank_two(case):
         qualified_row(atr14=None),
         qualified_row(symbol="BBB", quality=80),
     )
-    with pytest.raises(ShadowError, match="SHADOW_SESSION_DATA_NOT_READY"):
-        runner.run()
+    runner.run()
     assert runner.journal.verify().state["pending"] is None
-    assert not events(runner.journal, "DECISION_NO_TRADE")
+    assert events(runner.journal, "DECISION_NO_TRADE")[-1]["payload"]["reason"] == (
+        "NO_TRADE_DATA_INCOMPLETE"
+    )
 
 
 @pytest.mark.parametrize(
@@ -552,7 +553,7 @@ def test_init_crossing_official_close_refuses_without_second_screen(case, tmp_pa
 
 
 @pytest.mark.parametrize("gap", ["absent", "one_session", "zero_volume"])
-def test_synthetic_history_gaps_block_rank_relevant_candidate(case, gap):
+def test_synthetic_history_gaps_block_signals_without_retrospective_repair(case, gap):
     runner, db, sessions, source = case
     session = sessions[0]
     missing = official_history(session)[0]
@@ -583,11 +584,14 @@ def test_synthetic_history_gaps_block_rank_relevant_candidate(case, gap):
     assert readiness.qualification["incomplete_inputs"] == [
         {"symbol": "AAA", "reasons": ["MARKET_HISTORY_UNPROVEN"]}
     ]
-    before = events(runner.journal)
-    with pytest.raises(ShadowError, match="SHADOW_SESSION_DATA_NOT_READY"):
-        runner.run(session)
-    assert events(runner.journal) == before
+    runner.run(session)
+    assert not events(runner.journal, "ENTRY_INTENT_CREATED")
+    assert events(runner.journal, "DECISION_NO_TRADE")[-1]["payload"]["reason"] == (
+        "NO_TRADE_DATA_INCOMPLETE"
+    )
+    committed = events(runner.journal)
     seed_history(db, ("AAA",), session)
     assert_history(db, ("AAA", "BBB"), session)
-    runner.run(session)
-    assert len(events(runner.journal, "ENTRY_INTENT_CREATED")) == 1
+    assert runner.run(session)["status"] == "ALREADY_PROCESSED"
+    assert events(runner.journal) == committed
+    assert not events(runner.journal, "ENTRY_INTENT_CREATED")

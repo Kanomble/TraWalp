@@ -13,6 +13,8 @@ from trading_system.data.forward_market import CONTRACT
 from trading_system.data.market_sessions import latest_completed_trading_session
 from trading_system.shadow.admission import evaluate_inception_admission
 from trading_system.shadow.contracts import (
+    FULL,
+    MANAGEMENT_WITH_BLOCKED_SIGNALS,
     ShadowError,
     assert_no_drift,
     digest,
@@ -28,6 +30,9 @@ from trading_system.shadow.modes import (
     blocked_payload,
     evidence_manifest,
     observation_payload,
+    session_admission_manifest,
+    validate_admission_preflight,
+    validate_session_admission,
 )
 from trading_system.shadow.readiness import evaluate_shadow_input_readiness
 from trading_system.shadow.state import portfolio
@@ -300,11 +305,53 @@ class ShadowRunner:
                         readiness.observation_ready
                         if verified.shadow_mode == OBSERVATION_ONLY
                         else readiness.ready
+                        or (
+                            readiness.observation_ready
+                            and readiness.details["blocking_reasons"] == ["RANKING_UNRESOLVED"]
+                        )
                     )
                     if not admitted:
                         raise ShadowError("SHADOW_SESSION_DATA_NOT_READY", **readiness.as_dict())
                     input_hash = self.journal.store_input_manifest(connection, inputs.provenance)
                     evidence = evidence_manifest(readiness, input_hash)
+                    preflight = {
+                        "mode": "STRICT",
+                        "contract_version": current["data_integrity_contract_version"],
+                        "observed_bars": bars,
+                        "position_management_ohlc_digest": digest(bars),
+                    }
+                    purpose = FULL if readiness.ready else MANAGEMENT_WITH_BLOCKED_SIGNALS
+                    if verified.shadow_mode == ECONOMIC:
+                        evidence = session_admission_manifest(
+                            evidence,
+                            purpose=purpose,
+                            state=state,
+                            fingerprints_digest=digest(current),
+                            bars=bars,
+                        )
+
+                        def load_manifest(content_hash):
+                            return self.journal.load_input_manifest(connection, content_hash)
+
+                        # Validate before invoking the economic adapter, then replay
+                        # the same evidence again before the one atomic commit.
+                        validate_session_admission(
+                            evidence,
+                            selected.isoformat(),
+                            load_manifest,
+                            state=state,
+                            fingerprint=digest(current),
+                            now=now,
+                        )
+                        validate_admission_preflight(
+                            evidence,
+                            preflight,
+                            state,
+                            selected.isoformat(),
+                            verified.last_session or boundary,
+                            now,
+                            load_manifest,
+                        )
                     evidence_hash = self.journal.store_input_manifest(connection, evidence)
                     terminal = self.journal.append(
                         connection,
@@ -322,20 +369,17 @@ class ShadowRunner:
 
                     def emit(kind, payload):
                         nonlocal terminal
+                        if (
+                            purpose == MANAGEMENT_WITH_BLOCKED_SIGNALS
+                            and kind == "ENTRY_INTENT_CREATED"
+                        ):
+                            raise ShadowError("SHADOW_BLOCKED_SIGNAL_INTENT")
                         terminal = self.journal.append(
                             connection, kind, payload, now=now, session=selected
                         )
                         events.append({"event_type": kind, "payload": payload})
 
-                    emit(
-                        "DATA_PREFLIGHT_PASSED",
-                        {
-                            "mode": "STRICT",
-                            "contract_version": current["data_integrity_contract_version"],
-                            "observed_bars": bars,
-                            "position_management_ohlc_digest": digest(bars),
-                        },
-                    )
+                    emit("DATA_PREFLIGHT_PASSED", preflight)
                     if verified.shadow_mode == OBSERVATION_ONLY:
                         if position or pending:
                             raise ShadowError("SHADOW_OBSERVATION_ECONOMIC_STATE")
