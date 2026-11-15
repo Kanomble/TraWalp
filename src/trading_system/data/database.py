@@ -1577,6 +1577,7 @@ def _fact_rows(facts: Iterable[FundamentalFact]) -> list[tuple[Any, ...]]:
 
 
 def _execute_fact_upsert(connection: sqlite3.Connection, rows: list[tuple[Any, ...]]) -> None:
+    _require_legacy_fact_writer(connection)
     if not rows:
         return
     # Acquire the SQLite writer lock before checking nullable identities. SEC
@@ -1628,6 +1629,7 @@ def _execute_sec_company_update(
     accessions: Iterable[str],
     now: str,
 ) -> None:
+    _require_legacy_fact_writer(connection)
     connection.execute(
         """INSERT INTO companies VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(cik) DO UPDATE SET symbol=excluded.symbol, name=excluded.name,
@@ -1658,6 +1660,13 @@ def _execute_sec_company_update(
         "DELETE FROM sync_state WHERE source='sec_companyfacts_status' AND key=?",
         (company.cik,),
     )
+
+
+def _require_legacy_fact_writer(connection):
+    if connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE name='fact_contract'"
+    ).fetchone():
+        raise ValueError("LEGACY_WRITER_ON_CANONICAL_SCHEMA")
 
 
 def _raw_sec_cleanup_plan(connection: sqlite3.Connection, endpoint: str) -> dict[str, Any]:

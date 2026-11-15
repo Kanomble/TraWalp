@@ -151,7 +151,11 @@ class LocalInputs(Database):
         self.provenance["identity_inputs"][f"fundamental_cik|{symbol}"] = cik
         facts = []
         if cik is not None:
-            query = "SELECT * FROM fundamental_facts WHERE cik=? AND filed<=?"
+            from trading_system.data.canonical_facts import forward_relation
+
+            with self.connect() as connection:
+                relation = forward_relation(connection)
+            query = f"SELECT * FROM {relation} WHERE cik=? AND filed<=?"
             parameters = [cik, as_of.isoformat()]
             if metric:
                 query += " AND metric=?"

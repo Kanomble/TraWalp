@@ -226,6 +226,8 @@ reports/*
 !reports/f01_alias_ingestion_resolution_design.md
 !reports/shadow_policy_b_evidence_audit.md
 !reports/shadow_policy_b_implementation_audit.md
+!reports/f01_canonical_ingestion_implementation_audit.md
+
 # PyPI configuration file
 .pypirc
 
