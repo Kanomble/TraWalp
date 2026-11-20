@@ -1,0 +1,47 @@
+{
+  "contract": "F01_ACCEPTANCE_SCOPES_V2",
+  "decision": "APPROVED_FOR_SCOPED_EVIDENCE",
+  "approved_by": "Repository owner, explicit user instruction in TASK 8F.2E",
+  "approval_date": "2026-11-20",
+  "authority": "TASK 8F.2E approval of section 6 of reports/f01_acceptance_contract_resolution_audit.md",
+  "dimensions": {
+    "A": "STORAGE_AND_SEMANTIC_PARITY",
+    "B": "QUALIFIED_FORWARD_RANKING_PARITY",
+    "C": "HISTORICAL_IDENTITY_EVIDENCE",
+    "D": "OPERATIONAL_CHAMPION_READINESS"
+  },
+  "synthetic_identity_scope": "A_ONLY_WITH_COMPLETE_REAL_SNAPSHOT_PARITY",
+  "legacy_gate_override": false,
+  "guard_relaxation_authorized": false,
+  "operational_release_authorized": false,
+  "production_cutover_authorized": false,
+  "bindings": {
+    "manifest_sha256": "722d53aa7e64e1db389c2b88ed727961a416b1334b8b0fbf8a296f2d452c9b00",
+    "g3_result_fingerprint": "c512967c774e84f60cc85f2cbb7fac496aa4b9c2b994f68a1e8bfcdd804d7deb",
+    "g4_report_fingerprint": "a10c4b3ae512c5763d298e0eade73b790aa63530745f27e276ca1d3e3e988263",
+    "ranking_report_fingerprint": "556deadced38e7287e7658415c0d10d058c6af4cc5675234468cc3af170d4de4",
+    "identity_report_fingerprint": "8de04da946c7389620ff6a7b02889aec65e39f24a540644f93c8966ba3916680",
+    "work_sha256": "8eda288cbb94f9461e15360517ea27a0f66dab6c7578c6155ca0c0e814c2228c",
+    "original_code_fingerprint": "1271b3f88fb0898ec55750b4dd2b695c70dcf5d8591ed7594391b1417c23ddbe",
+    "seal_sha256": {
+      "preparation": "7e576b5cad25c894e6750fd44f357226b792fff7ce2783bedd1095760dfa6538",
+      "g3": "654b59afe7710d1004fe8dd7eb7470dc5d1284f52ee28e00fda282e7bf2106af",
+      "g4": "0c96b56a02894f82ba9a142b15dc398b654132afefcdb6da3e302aa2096318ca",
+      "ranking": "3aaf3c8824492e9e6f3a41cbabcf3c50fe47483564697b81777e1108547b4f1a",
+      "identity": "5e83585da3efb76494b83d94d3284865022536ca0a64d4fca6a0ca26cca6607c"
+    },
+    "historical_reviews_sha256": {
+      "g3": "90f733c3793fc51a4c2f38c87a4c9001bea2b3db6034de4b4e23a1e065a1951c",
+      "g4": "cc4180df1417204af79da5ad95beb1ddc49cbe095d1cf340f1da47ba9e9a4907",
+      "supplement": "71c4f1bb7a9e4ba4964a7d3f279925da88c14248255f20a5f75e8230bb29fc46"
+    }
+  },
+  "coverage": {
+    "occurrences": 18698090,
+    "pit_accounting_comparisons": 2618,
+    "non_fact_tables": 12,
+    "ranking_companies": 5913,
+    "identity_symbols": 6483,
+    "unresolved_forward_candidates": 334
+  }
+}
