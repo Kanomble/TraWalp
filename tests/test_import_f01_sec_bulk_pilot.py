@@ -5,6 +5,7 @@ import os
 import socket
 import sys
 import zipfile
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,34 @@ from trading_system.data.sec_persistence import CanonicalSecPersistence  # noqa:
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows canonical path pins")
 CODE = {"head": "fixture", "fingerprint": "a" * 64}
 BOOTSTRAP_CODE = "b" * 64
+
+
+def test_nonoperating_interest_keeps_same_key_conflict_quarantined():
+    accession = "0000001234-24-000001"
+    original = {
+        "start": "2024-04-01",
+        "end": "2024-06-30",
+        "val": 100,
+        "accn": accession,
+        "filed": "2024-08-08",
+        "form": "10-Q",
+        "frame": "CY2024Q2",
+    }
+    tag = "InterestExpenseNonoperating"
+    payload = {
+        "cik": "0000001234",
+        "facts": {"us-gaap": {tag: {"units": {"USD": [original, original | {"val": 101}]}}}},
+    }
+    rules = {"us-gaap": pilot.Admission(True, True, "synthetic evidence")}
+    filings = {accession: (date(2024, 8, 8), "10-Q", None)}
+
+    facts, counts, reasons, exceptions = pilot.classify_facts(payload, "X", rules, filings, set())
+
+    assert facts == []
+    assert counts["same_key_conflict_groups"] == 1
+    assert reasons["UNORDERED_SAME_KEY_CONFLICT"] == 2
+    assert exceptions[0]["key"]["tag"] == tag
+    assert {row["value"] for row in exceptions[0]["observations"]} == {"100", "101"}
 
 
 def sql(target, statement, args=()):

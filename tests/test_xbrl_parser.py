@@ -1,6 +1,8 @@
+from datetime import date
 from decimal import Decimal
 
 from trading_system.data.xbrl_parser import parse_company_facts
+from trading_system.fundamentals.metrics import discrete_quarters
 
 
 def _payload() -> dict:
@@ -183,3 +185,85 @@ def test_combined_and_component_debt_tags_are_mapped_semantically() -> None:
     assert by_metric["total_debt"] == Decimal("100")
     assert by_metric["debt_current"] == Decimal("20")
     assert by_metric["debt_noncurrent"] == Decimal("80")
+
+
+def test_nonoperating_interest_maps_exact_tag_with_original_identity() -> None:
+    payload = _payload()
+    observation = {
+        "start": "2024-04-01",
+        "end": "2024-06-30",
+        "val": "183600000",
+        "accn": "0000001234-24-000001",
+        "fy": 2024,
+        "fp": "Q2",
+        "form": "10-Q",
+        "filed": "2024-08-08",
+        "frame": "CY2024Q2",
+    }
+    concept = {"units": {"USD": [observation]}}
+    payload["facts"]["us-gaap"]["InterestExpenseNonoperating"] = concept
+    payload["facts"]["us-gaap"]["InterestExpenseNONOPERATING"] = concept
+    payload["facts"]["ifrs-full"] = {"InterestExpenseNonoperating": concept}
+
+    facts = [
+        fact for fact in parse_company_facts(payload, "x") if fact.metric == "interest_expense"
+    ]
+    assert [fact.model_dump(mode="json") for fact in facts] == [
+        {
+            "cik": "0000001234",
+            "symbol": "X",
+            "metric": "interest_expense",
+            "taxonomy": "us-gaap",
+            "tag": "InterestExpenseNonoperating",
+            "unit": "USD",
+            "value": "183600000",
+            "period_start": observation["start"],
+            "period_end": observation["end"],
+            "filed": observation["filed"],
+            "accession_number": observation["accn"],
+            "fiscal_year": observation["fy"],
+            "fiscal_period": observation["fp"],
+            "form": observation["form"],
+            "frame": observation["frame"],
+        }
+    ]
+
+
+def test_interest_aliases_preserve_legacy_precedence_and_count_each_quarter_once() -> None:
+    tags = (
+        "InterestExpenseNonOperating",
+        "InterestAndDebtExpense",
+        "InterestExpense",
+        "InterestExpenseNonoperating",
+    )
+    payload = _payload()
+    gaap = payload["facts"]["us-gaap"]
+    quarter = gaap["RevenueFromContractWithCustomerExcludingAssessedTax"]["units"]["USD"][0]
+    for tag in tags:
+        gaap[tag] = {"units": {"USD": [quarter]}}
+    gaap[tags[-1]]["units"]["USD"] += [quarter]
+
+    for tag in tags:
+        facts = parse_company_facts({"cik": 1234, "facts": {"us-gaap": {tag: gaap[tag]}}}, "X")
+        assert [(fact.metric, fact.tag) for fact in facts] == [("interest_expense", tag)]
+    assert [
+        fact.tag for fact in parse_company_facts(payload, "X") if fact.metric == "interest_expense"
+    ] == [tags[0]]
+
+    next_quarter = quarter | {
+        "start": "2024-04-01",
+        "end": "2024-06-30",
+        "filed": "2024-08-08",
+        "accn": "0002",
+        "val": 200,
+    }
+    cumulative = next_quarter | {"start": "2024-01-01", "val": 323}
+    gaap[tags[-1]]["units"]["USD"] += [next_quarter, cumulative]
+    preserved = parse_company_facts(payload, "X", preserve_observations=True)
+    assert {fact.tag for fact in preserved if fact.metric == "interest_expense"} == set(tags)
+    assert discrete_quarters(preserved, "interest_expense", date(2024, 5, 4)) == []
+    quarters = discrete_quarters(preserved, "interest_expense", date(2024, 8, 8))
+    assert [(item.period_end, item.value) for item in quarters] == [
+        (date(2024, 3, 31), Decimal("123")),
+        (date(2024, 6, 30), Decimal("200")),
+    ]

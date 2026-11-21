@@ -68,6 +68,7 @@ TAG_ALIASES: dict[str, tuple[tuple[str, str], ...]] = {
         ("us-gaap", "InterestExpenseNonOperating"),
         ("us-gaap", "InterestAndDebtExpense"),
         ("us-gaap", "InterestExpense"),
+        ("us-gaap", "InterestExpenseNonoperating"),
     ),
     "tax_expense": (("us-gaap", "IncomeTaxExpenseBenefit"),),
     "depreciation_amortization": (
