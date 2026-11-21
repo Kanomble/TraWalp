@@ -1,0 +1,135 @@
+{
+  "contract": "F01_SEC_BULK_PILOT_SPEC_V1",
+  "purpose": "Offline-Datenqualitaets- und Speichertest fuer eine isolierte Research-Lineage",
+  "source_quality": "CURRENT_PROVIDER_RECONSTRUCTION",
+  "selection_rule": "Fixed list sorted by symbol. Keep the two G5 comparison issuers, add six locally corroborated candidates, and keep the JSM negative case apart.",
+  "core_count": 8,
+  "required_per_core_candidate": {
+    "companyfacts": "Preserve the complete ZIP member and retain all relevant normalized observations initially.",
+    "submissions": "Primary member plus all older same-CIK submissions files referenced by filings.files; verify links and Accessions.",
+    "coverage": "Check 10-K and 10-Q, at least one useful Instant and Duration Fact, multiple Accessions, fiscal-period and unit coverage. Record gaps explicitly.",
+    "identity_admission": "Pending per Security, CIK, symbol, source membership and taxonomy. Review dated identity evidence independently. No automatic merge or admission.",
+    "original_filings": "From Submissions and dated indexes, select the original 10-K and 10-Q at the earliest warm-up edge and a first eligible 2020 decision; add originals for any missing context, chosen amendment or correction. Bind the exact Accession, document bytes, context and availability separately."
+  },
+  "history": {
+    "research_start": "2020-01-01",
+    "research_end": "Last independently qualified 2026 session",
+    "reader_warmup_floor_hint": "2015-12-29",
+    "preserve_older_relevant_observations": true,
+    "allow_retrieval_backdating": false
+  },
+  "evidence_catalog": {
+    "local_census": "../reports/f_2022_data_gap_audit_v1_symbol_coverage.csv",
+    "current_identity_catalog": "../reports/f_universe_policy_design_2026-10-23_current_universe.csv",
+    "g5_comparison": "../reports/f01_g5_input_evidence_preparation_audit.md",
+    "g4_identity": "../reports/f01_acceptance_contract_resolution_audit.md"
+  },
+  "issuers": [
+    {
+      "symbol": "AAPL",
+      "cik": "0000320193",
+      "sector_probe": "Consumer hardware and digital services",
+      "fiscal_calendar_probe": "52/53-week year ending around September",
+      "companyfacts_member": "CIK0000320193.json",
+      "submissions_member": "CIK0000320193.json",
+      "submissions_history_members": "CIK0000320193-submissions-*.json as referenced",
+      "available_evidence": ["local_census", "current_identity_catalog"],
+      "open_evidence": "Fiscal-year and security continuity, class/equity, dated membership; compare 52/53-week boundaries across 10-K and 10-Q."
+    },
+    {
+      "symbol": "ACN",
+      "cik": "0001467373",
+      "sector_probe": "IT and professional services",
+      "fiscal_calendar_probe": "August year-end indicated by local Submissions",
+      "companyfacts_member": "CIK0001467373.json",
+      "submissions_member": "CIK0001467373.json",
+      "submissions_history_members": "CIK0001467373-submissions-*.json as referenced; 001 and 002 seen in August cache",
+      "available_evidence": ["local_census", "current_identity_catalog", "g5_comparison", "../reports/f01-g5-inputs-manual/observed/ACN-archive-companyfacts.json", "../reports/f01-g5-inputs-manual/observed/ACN-cache-submissions.json"],
+      "open_evidence": "Verify specific class and dated membership; compare raw and normalized contexts with the local November Companyfacts body."
+    },
+    {
+      "symbol": "BAC",
+      "cik": "0000070858",
+      "sector_probe": "Banking and financial services",
+      "fiscal_calendar_probe": "Calendar-year candidate",
+      "companyfacts_member": "CIK0000070858.json",
+      "submissions_member": "CIK0000070858.json",
+      "submissions_history_members": "CIK0000070858-submissions-*.json as referenced",
+      "available_evidence": ["local_census", "current_identity_catalog"],
+      "open_evidence": "Check entity-wide balance tags and common-share identity. Existing strategy exclusion remains in force."
+    },
+    {
+      "symbol": "CAT",
+      "cik": "0000018230",
+      "sector_probe": "Industrial equipment",
+      "fiscal_calendar_probe": "Calendar-year candidate",
+      "companyfacts_member": "CIK0000018230.json",
+      "submissions_member": "CIK0000018230.json",
+      "submissions_history_members": "CIK0000018230-submissions-*.json as referenced",
+      "available_evidence": ["local_census", "current_identity_catalog"],
+      "open_evidence": "Verify issuer identity and dates; compare Instant debt and Duration cash-flow contexts."
+    },
+    {
+      "symbol": "COST",
+      "cik": "0000909832",
+      "sector_probe": "Retail",
+      "fiscal_calendar_probe": "52/53-week year ending around August/September",
+      "companyfacts_member": "CIK0000909832.json",
+      "submissions_member": "CIK0000909832.json",
+      "submissions_history_members": "CIK0000909832-submissions-*.json as referenced",
+      "available_evidence": ["local_census", "current_identity_catalog"],
+      "open_evidence": "Check 52/53-week and nonuniform quarters from actual filings, plus security identity and memberships."
+    },
+    {
+      "symbol": "LLY",
+      "cik": "0000059478",
+      "sector_probe": "Pharmaceuticals",
+      "fiscal_calendar_probe": "December year-end indicated by local Submissions",
+      "companyfacts_member": "CIK0000059478.json",
+      "submissions_member": "CIK0000059478.json",
+      "submissions_history_members": "CIK0000059478-submissions-*.json as referenced; 001 and 002 seen in August cache",
+      "available_evidence": ["local_census", "current_identity_catalog", "g5_comparison", "../reports/f01-g5-inputs-manual/observed/LLY-archive-companyfacts.json", "../reports/f01-g5-inputs-manual/observed/LLY-cache-submissions.json"],
+      "open_evidence": "Bind class and memberships. Local Companyfacts contains the amendment Accession below; find its paired original filing and a target-window amendment if evidenced."
+    },
+    {
+      "symbol": "MSFT",
+      "cik": "0000789019",
+      "sector_probe": "Software and cloud services",
+      "fiscal_calendar_probe": "June year-end candidate",
+      "companyfacts_member": "CIK0000789019.json",
+      "submissions_member": "CIK0000789019.json",
+      "submissions_history_members": "CIK0000789019-submissions-*.json as referenced",
+      "available_evidence": ["local_census", "current_identity_catalog"],
+      "open_evidence": "Review reporting history and class continuity; large local Fact coverage is a storage stress example, not provenance."
+    },
+    {
+      "symbol": "NVDA",
+      "cik": "0001045810",
+      "sector_probe": "Semiconductors",
+      "fiscal_calendar_probe": "52/53-week year ending around January",
+      "companyfacts_member": "CIK0001045810.json",
+      "submissions_member": "CIK0001045810.json",
+      "submissions_history_members": "CIK0001045810-submissions-*.json as referenced",
+      "available_evidence": ["local_census", "current_identity_catalog"],
+      "open_evidence": "Verify class and corporate actions independently. Check per-share facts and comparative periods without changing EPS semantics."
+    }
+  ],
+  "amendment_probe": {
+    "symbol": "LLY",
+    "cik": "0000059478",
+    "form": "10-Q/A",
+    "accession": "0000950123-10-070596",
+    "filed": "2010-08-02",
+    "evidence": "../reports/f01-g5-inputs-manual/observed/LLY-archive-companyfacts.json",
+    "scope": "Known out-of-window archive witness; acquire original and amendment only with separate authorization. In-window amendment and Same-Key correction remain independently open."
+  },
+  "identity_negative_probe": {
+    "symbol": "JSM",
+    "ciks": ["0001593538", "0002152623"],
+    "companyfacts_members_if_present": ["CIK0001593538.json", "CIK0002152623.json"],
+    "submissions_members_if_present": ["CIK0001593538.json", "CIK0002152623.json"],
+    "evidence": "g4_identity",
+    "disposition": "BLOCKED_NO_MEMBERSHIP_OR_WRITER_ADMISSION",
+    "original_filings": "Separately authorize dated lifecycle and Original-Filing evidence for both CIKs. Never merge on JSM or use the filed-date gap to infer an epoch."
+  }
+}
