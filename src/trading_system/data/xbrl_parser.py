@@ -99,11 +99,15 @@ def _unit_items(units: Mapping[str, Any], metric: str) -> Iterable[tuple[str, di
                     yield unit, observation
 
 
-def parse_company_facts(payload: Mapping[str, Any], symbol: str) -> list[FundamentalFact]:
+def parse_company_facts(
+    payload: Mapping[str, Any], symbol: str, *, preserve_observations: bool = False
+) -> list[FundamentalFact]:
     """Return normalized facts without merging distinct filing observations.
 
     Keeping amendments and duplicate periods is intentional: point-in-time selection
     happens using ``filed`` and accession number in the database layer.
+    The isolated bulk pilot can inspect every mapped observation before the
+    Canonical writer applies its own identity and occurrence contract.
     """
 
     cik = str(payload.get("cik", "")).zfill(10)
@@ -144,9 +148,10 @@ def parse_company_facts(payload: Mapping[str, Any], symbol: str) -> list[Fundame
                     str(accession),
                     unit,
                 )
-                if key in seen:
-                    continue
-                seen.add(key)
+                if not preserve_observations:
+                    if key in seen:
+                        continue
+                    seen.add(key)
                 parsed.append(
                     FundamentalFact(
                         cik=cik,
