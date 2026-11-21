@@ -170,6 +170,39 @@ Save-F01JsonNew (Join-Path $f01Paths.import_artifacts "f01-pilot-handoff-$f01Gen
 
 Exitcodes `0` erfolgreiche Prüfung oder Veröffentlichung, `2` ungültige Flags/Autorisierung, `3` fehlende Größe, unzureichende Kapazität oder abgewiesene Evidenz, `4` I/O- oder Transportfehler, `130` Tastaturabbruch.
 
+## Vollständiger Offline-Struktur-Census
+
+Der Diagnosemodus liest beide ZIPs aus `temporary/<generation>.incomplete/publish/` und die dazugehörigen Download-Checkpoints. Er berechnet SHA-256, prüft die Länge und liest jeden sicher lesbaren Member bis zur CRC-Prüfung. Er extrahiert keine Dateien und sammelt fachliche Befunde über beide Endpoints hinweg. Beschädigte oder vom Größenlimit betroffene Member werden im Integritätsteil ausgewiesen. Ist ein Zentralverzeichnis unlesbar, bleibt die Memberliste für dieses Archiv unbelegt. Der Agent hat den Census nur an kleinen synthetischen ZIPs erprobt.
+
+Die Variablen aus dem Runbook weiterverwenden. Nach einem Neustart `$f01Generation` auf den bestehenden Namen ohne `.incomplete` setzen.
+
+```powershell
+$f01CensusResult = & $f01Python -B $f01Script --layout $f01Layout --structure-census --generation $f01Generation
+$f01CensusExit = $LASTEXITCODE
+if (!$f01CensusResult -or $f01CensusExit -notin @(0, 3)) { throw 'Census-Bericht nicht erstellt' }
+$f01Census = ($f01CensusResult -join "`n") | ConvertFrom-Json
+$f01Census.report
+```
+
+Der Bericht `f01_sec_bulk_structure_census.json` liegt unter `import_artifacts/<generation>-structure-census/`. Exitcode 0 meldet `CENSUS_COMPLETE`. Exitcode 3 mit Bericht meldet `CENSUS_BLOCKED` und enthält die beobachteten Befunde. Ein bereits vorhandenes Berichtsverzeichnis wird geschützt. Die Optionen für Download, Netzwerk und Publikation werden mit dem Census nicht kombiniert.
+
+| Berichtsteil | Bedeutung |
+| --- | --- |
+| `archives.<endpoint>.integrity` | Erwartete und beobachtete Bytegröße und SHA-256, erfasste ZIP-Members, CRC-geprüfte Members und Integritätsbefunde. Link-, Pfad- und Duplikatverletzungen sowie fehlende Download-Bindung blockieren die Vertrauenswürdigkeit des Archivs. |
+| `archives.<endpoint>.categories` | Anzahl pro Kategorie und Endpoint. Unter `key_groups` stehen die sortierten JSON-Schlüssel und die Dateinamen mit genau dieser Schlüsselmenge. `null` bedeutet, dass keine Objektschlüssel festgestellt werden konnten. Bei mehreren Auffälligkeiten erscheint derselbe Member in mehreren Kategorien. |
+| `pilot.issuers` | Separater Befund je Companyfacts- und Submissions-Endpoint für alle acht Pilot-CIKs, einschließlich zugehöriger älterer Submissions-Chunks. `AFFECTED` zeigt einen konkreten Befund oder fehlenden Hauptmember an. `UNDETERMINED` zeigt fehlende Integrität ohne isolierten Pilotbefund an. |
+
+`VALID` steht für die geprüfte Struktur. Das Feld `import_eligible` ist dafür nur bei belegter Archivintegrität wahr. Die eigentliche Identity-/Membership- und Importfreigabe ist davon unabhängig. Alle anderen Kategorien führen zu Quarantäne. `EMPTY_COMPANYFACTS` bezeichnet exakt `{}`; `EMPTY_FACTS` ein leeres `facts`-Objekt. `MISSING_INTERNAL_CIK` erfasst fehlende CIK-Felder bei Hauptpayloads. In diesem Fall wird der Dateiname als Fundort protokolliert. Er liefert keinen Ersatz für die interne Identität. `CIK_MISMATCH` erfasst auch intern gesetzte ungültige Werte wie `null`. `MISSING_FACTS`, `INVALID_PAYLOAD`, `INVALID_SUBMISSIONS` und `UNKNOWN_STRUCTURE` erfassen fehlende Pflichtstruktur, fehlerhafte JSON-/Taxonomie-Struktur, inkonsistente Submissions oder unerwartete ZIP-Member.
+
+### Kriterien für eine spätere Publikationsentscheidung
+
+Der Census selbst publiziert keine Archive. Der bestehende Finalisierer toleriert bereits `EMPTY_COMPANYFACTS` mit explizitem Importausschluss. Eine spätere Erweiterung um weitere Quarantänefälle bedarf einer separat geprüften, an Archiv-SHA-256 und Census-Hash gebundenen Regel. Dafür gelten folgende enge Kriterien.
+
+1. Beide Originalarchive sind vollständig und unverändert. Checkpoints, Größe, SHA-256, ZIP- und alle CRC-Prüfungen bestehen. Archivpfade und Membernamen sind sicher und eindeutig.
+2. Eine Allowlist kann ausschließlich bekannte Companyfacts-Formen aufnehmen. Neben `{}` kommen ein leeres `facts`-Objekt und ansonsten strukturell stimmige Payloads mit fehlendem internem CIK infrage. Regeln und konkrete Dateinamen, Schlüssel und Counts müssen im Review gebunden sein. Eine Ausnahme erteilt keine Importzulassung und ergänzt keinen CIK.
+3. `CIK_MISMATCH`, `MISSING_FACTS`, `INVALID_PAYLOAD`, `INVALID_SUBMISSIONS`, `UNKNOWN_STRUCTURE` sowie jede Abweichung außerhalb der Allowlist bleiben blockiert. Ein fehlender interner CIK in Submissions bleibt blockiert.
+4. Der Pilot besteht nur bei belegter Integrität beider Archive und soweit alle acht CIKs im vorgesehenen Scope ohne Struktur- oder Coverage-Befund bleiben. Eine Abweichung braucht eine separate fachliche Entscheidung. Der später verwendete Importer muss das gebundene Quarantäneinventar ausschließen.
+
 ## Pilot und historische Evidenz
 
 Die [Pilot-Spec](f01_sec_bulk_pilot_spec.json) enthält acht deterministische Emittenten aus mehreren Sektoren und Fiskalkalendern. ACN/LLY haben lokale Vergleichs-Payloads. Die LLY-Accession `0000950123-10-070596` vom 02.08.2010 ist ein belegter 10-Q/A-Fall außerhalb des angestrebten Zeitfensters. JSM ist eine getrennte gesperrte Identity-Negativprobe mit zwei CIKs. Eine historische Security-Epoche oder Membership muss unabhängig geprüft werden. Je Emittent die primären Members und alle referenzierten historischen Submissions-Members direkt aus dem ZIP lesen. Für die spätere DB den genauen Scope erst nach Fact-/Accession- und Kapazitätsprüfung festlegen. [Lokale G5-Evidenz](../reports/f01_g5_input_evidence_preparation_audit.md) · [G4-Identity-Census](../reports/f01_acceptance_contract_resolution_audit.md)

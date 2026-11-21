@@ -399,6 +399,147 @@ def test_offline_finalization_uses_completed_checkpoints_without_http(
         assert "ORIGINAL_GENERATION_ALREADY_EXISTS" in capsys.readouterr().err
 
 
+def staged_census_inputs(layout, monkeypatch, archives):
+    remote = SecDouble()
+    remote.archives = archives
+
+    def stop_before_publication(*_):
+        raise bulk.Blocked("keep synthetic ZIPs staged")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(bulk, "publish_generation", stop_before_publication)
+        with pytest.raises(bulk.Blocked, match="keep synthetic ZIPs staged"):
+            acquire(layout, remote)
+    monkeypatch.setattr(bulk, "SecHttp", lambda *_: pytest.fail("Census constructed HTTP"))
+    return layout.paths["temporary"] / f"{SLUG}.incomplete"
+
+
+@pytest.mark.parametrize("blocked", [False, True])
+def test_structure_census_collects_payload_findings_and_checks_pilot(
+    plan, monkeypatch, capsys, blocked
+):
+    layout_path, layout = plan
+    spec = json.loads((bulk.REPO / "docs/f01_sec_bulk_pilot_spec.json").read_bytes())
+    facts, submissions = [], []
+    for issuer in spec["issuers"]:
+        cik = issuer["cik"]
+        bad_facts = blocked and issuer["symbol"] == "AAPL"
+        bad_submissions = blocked and issuer["symbol"] == "ACN"
+        facts.append(
+            (
+                issuer["companyfacts_member"],
+                {
+                    "cik": cik,
+                    "facts": {} if bad_facts else {"us-gaap": {}},
+                },
+            )
+        )
+        ref = [{"name": f"CIK{cik}-submissions-001.json"}] if bad_submissions else []
+        submissions.append(
+            (
+                issuer["submissions_member"],
+                {
+                    "cik": cik,
+                    "filings": {"recent": {}, "files": ref},
+                },
+            )
+        )
+    missing_cik = "CIK0000741313.json"
+    facts.extend(
+        [
+            ("CIK0000003521.json", {}),
+            (missing_cik, {"entityName": "Synthetic", "facts": {"us-gaap": {}}}),
+        ]
+    )
+    if blocked:
+        facts.extend(
+            [
+                ("CIK0000007777.json", {"cik": 9999, "facts": {"dei": {}}}),
+                ("CIK0000007778.json", {"entityName": "Missing both"}),
+                ("CIK0000007779.json", []),
+            ]
+        )
+    archives = {"companyfacts": zipped(facts), "submissions": zipped(submissions)}
+    stage = staged_census_inputs(layout, monkeypatch, archives)
+    args = ["--layout", str(layout_path), "--structure-census", "--generation", SLUG]
+    assert bulk.main(args) == (3 if blocked else 0)
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == ("CENSUS_BLOCKED" if blocked else "CENSUS_COMPLETE")
+    report_path = Path(output["report"])
+    assert report_path.name == bulk.CENSUS_NAME
+    report = json.loads(report_path.read_bytes())
+    assert report["publication_authorized"] is False and report["import_authorized"] is False
+    company = report["archives"]["companyfacts"]
+    assert company["integrity"]["status"] == "VERIFIED"
+    assert company["integrity"]["members_crc_verified"] == len(facts)
+    categories = company["categories"]
+    assert categories["VALID"]["count"] == 8 - int(blocked)
+    assert categories["EMPTY_COMPANYFACTS"]["key_groups"] == [
+        {"keys": [], "members": ["CIK0000003521.json"]},
+    ]
+    missing = categories["MISSING_INTERNAL_CIK"]
+    assert missing["disposition"] == "QUARANTINED" and not missing["import_eligible"]
+    assert {"keys": ["entityName", "facts"], "members": [missing_cik]} in missing["key_groups"]
+    results = {issuer["symbol"]: issuer["endpoints"] for issuer in report["pilot"]["issuers"]}
+    assert len(results) == 8 and results["LLY"]["companyfacts"]["status"] == "CLEAR"
+    if blocked:
+        for category in ("CIK_MISMATCH", "EMPTY_FACTS", "MISSING_FACTS", "INVALID_PAYLOAD"):
+            assert categories[category]["count"] == 1
+        assert results["AAPL"]["companyfacts"]["status"] == "AFFECTED"
+        assert results["ACN"]["submissions"]["status"] == "AFFECTED"
+        assert report["archives"]["submissions"]["categories"]["INVALID_SUBMISSIONS"]["count"] == 1
+    else:
+        assert not report["review_blockers"]
+        with pytest.raises(bulk.Blocked, match="ZIP_MEMBER_CIK_REQUIRED"):
+            bulk.finalize_offline(layout, SLUG, progress=lambda _: None)
+    before = report_path.read_bytes()
+    assert bulk.main(args) == 3 and report_path.read_bytes() == before
+    assert not list(layout.paths["originals"].iterdir())
+    for endpoint, archive in archives.items():
+        assert (stage / "publish" / f"{endpoint}.zip").read_bytes() == archive
+
+
+def test_census_reports_archive_damage_and_keeps_scanning_other_members(plan, monkeypatch):
+    _, layout = plan
+    valid = {"cik": 1234, "facts": {"dei": {}}}
+    filename = f"CIK{CIK}.json"
+    with pytest.warns(UserWarning, match="Duplicate name"):
+        companyfacts = zipped(
+            [
+                (filename, valid),
+                (filename, valid),
+                ("../" + filename, valid),
+                (
+                    "CIK0000005678.json",
+                    {"cik": 5678, "facts": {"test": {"marker": "crc-original"}}},
+                ),
+                ("CIK0000005679.json", {}),
+            ]
+        )
+    stage = staged_census_inputs(
+        layout, monkeypatch, small_archives() | {"companyfacts": companyfacts}
+    )
+    damaged = stage / "publish/companyfacts.zip"
+    damaged.write_bytes(companyfacts.replace(b"crc-original", b"crc-modified"))
+    output = bulk.structure_census(layout, SLUG, progress=lambda _: None)
+    assert output["status"] == "CENSUS_BLOCKED"
+    report = json.loads(Path(output["report"]).read_bytes())
+    company = report["archives"]["companyfacts"]
+    assert company["integrity"]["status"] == "BLOCKED"
+    assert company["integrity"]["members_crc_verified"] == 4
+    reasons = {issue["reason"] for issue in company["integrity"]["issues"]}
+    assert reasons == {
+        "ARCHIVE_SHA256_MISMATCH",
+        "DUPLICATE_MEMBER",
+        "UNSAFE_OR_UNEXPECTED_MEMBER",
+        "MEMBER_INTEGRITY_FAILED",
+    }
+    assert company["categories"]["UNKNOWN_STRUCTURE"]["count"] == 3
+    assert company["categories"]["EMPTY_COMPANYFACTS"]["count"] == 1
+    assert not company["categories"]["VALID"]["import_eligible"]
+    assert report["archives"]["submissions"]["integrity"]["members_crc_verified"] == 2
+
+
 def test_manifest_is_stable_and_records_distinct_upstream_observations(tmp_path):
     validations = dict.fromkeys(bulk.URLS, {"status": "VERIFIED"})
     states = {

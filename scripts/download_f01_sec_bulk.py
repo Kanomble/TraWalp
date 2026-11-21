@@ -17,6 +17,7 @@ import urllib.error
 import urllib.request
 import zipfile
 import zlib
+from collections import Counter
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -36,6 +37,20 @@ URLS = {
 }
 MANIFEST_NAME = "f01_sec_bulk_source_manifest.json"
 MANIFEST_CONTRACT = "F01_SEC_BULK_SOURCE_MANIFEST_V1"
+CENSUS_NAME = "f01_sec_bulk_structure_census.json"
+CENSUS_CONTRACT = "F01_SEC_BULK_STRUCTURE_CENSUS_V1"
+CENSUS_CATEGORIES = (
+    "VALID",
+    "EMPTY_COMPANYFACTS",
+    "MISSING_INTERNAL_CIK",
+    "CIK_MISMATCH",
+    "MISSING_FACTS",
+    "EMPTY_FACTS",
+    "INVALID_PAYLOAD",
+    "INVALID_SUBMISSIONS",
+    "UNKNOWN_STRUCTURE",
+)
+COMPANYFACTS_REVIEWABLE = {"EMPTY_COMPANYFACTS", "MISSING_INTERNAL_CIK", "EMPTY_FACTS"}
 PLAN_CONTRACT = "F01_SEC_BULK_CAPACITY_V1"
 CHECKPOINT_CONTRACT = "F01_SEC_BULK_PARTIAL_V1"
 QUALITY = "CURRENT_PROVIDER_RECONSTRUCTION"
@@ -379,37 +394,72 @@ def validate_archive(path, name, expected_size, expected_sha):
     return {"status": "VERIFIED", **result}
 
 
+def member_name(member, endpoint):
+    match = MEMBER_NAME.fullmatch(member.orig_filename)
+    return match if match and (not match[2] or endpoint == "submissions") else None
+
+
+def readable_member(member):
+    return (
+        stat.S_IFMT(member.external_attr >> 16) in (0, stat.S_IFREG)
+        and not member.flag_bits & 1
+        and 0 < member.file_size <= MAX_MEMBER_BYTES
+    )
+
+
+def read_zip_member(archive, member):
+    with archive.open(member) as stream:
+        # Reading to EOF verifies the CRC without extracting any file.
+        raw = stream.read(member.file_size + 1)
+    require(len(raw) == member.file_size, f"ZIP_MEMBER_SIZE_MISMATCH: {member.orig_filename}")
+    return raw
+
+
+def matches_cik(value, cik):
+    value = str(value)
+    return bool(re.fullmatch(r"[0-9]{1,10}", value)) and value.zfill(10) == cik
+
+
+def submissions_filing_index(record):
+    filings = record.get("filings")
+    if (
+        isinstance(filings, dict)
+        and isinstance(filings.get("recent"), dict)
+        and isinstance(filings.get("files"), list)
+    ):
+        return filings["files"]
+    return None
+
+
+def submission_reference(item, cik):
+    ref = item.get("name") if isinstance(item, dict) else None
+    if isinstance(ref, str) and re.fullmatch(rf"CIK{cik}-submissions-[0-9]{{3,}}\.json", ref):
+        return ref
+    return None
+
+
 def validate_members(archive, name):
     unique, supplement_files, supplement_refs = set(), set(), set()
     empty_companyfacts = []
     issuers = 0
     for member in archive.infolist():
         filename = member.orig_filename
-        match = MEMBER_NAME.fullmatch(filename)
         require(
-            match
-            and filename not in unique
-            and stat.S_IFMT(member.external_attr >> 16) in (0, stat.S_IFREG)
-            and not member.flag_bits & 1
-            and 0 < member.file_size <= MAX_MEMBER_BYTES,
+            MEMBER_NAME.fullmatch(filename) and filename not in unique and readable_member(member),
             f"UNSAFE_UNEXPECTED_OR_DUPLICATE_MEMBER: {filename!r}",
         )
+        match = member_name(member, name)
+        require(match, f"UNEXPECTED_MEMBER: {filename!r}")
         cik, historical = match.groups()
-        require(not historical or name == "submissions", f"UNEXPECTED_MEMBER: {filename!r}")
         unique.add(filename)
-        with archive.open(member) as stream:
-            # Reading to EOF verifies the ZIP member CRC. Only one JSON is decoded at a time.
-            raw = stream.read(MAX_MEMBER_BYTES + 1)
-            require(len(raw) == member.file_size, f"ZIP_MEMBER_SIZE_MISMATCH: {filename}")
-            record = json.loads(raw)
+        record = json.loads(read_zip_member(archive, member))
         require(isinstance(record, dict), f"ZIP_MEMBER_OBJECT_REQUIRED: {filename}")
         if name == "companyfacts" and not record:
             empty_companyfacts.append(filename)
             continue
         if "cik" in record:
-            value = str(record["cik"])
             require(
-                bool(re.fullmatch(r"[0-9]{1,10}", value)) and value.zfill(10) == cik,
+                matches_cik(record["cik"], cik),
                 f"ZIP_MEMBER_CIK_MISMATCH: {filename}",
             )
         else:
@@ -425,23 +475,19 @@ def validate_members(archive, name):
             if name == "companyfacts":
                 require(isinstance(record.get("facts"), dict), f"INVALID_COMPANYFACTS: {filename}")
             else:
-                filings = record.get("filings")
+                files = submissions_filing_index(record)
                 require(
-                    isinstance(filings, dict)
-                    and isinstance(filings.get("recent"), dict)
-                    and isinstance(filings.get("files"), list),
+                    files is not None,
                     f"INVALID_SUBMISSIONS: {filename}",
                 )
-                for item in filings["files"]:
-                    ref = item.get("name") if isinstance(item, dict) else None
+                for item in files:
+                    ref = submission_reference(item, cik)
                     require(
-                        isinstance(ref, str)
-                        and re.fullmatch(rf"CIK{cik}-submissions-[0-9]{{3,}}\.json", ref)
-                        and ref not in supplement_refs,
+                        ref is not None and ref not in supplement_refs,
                         f"INVALID_SUBMISSION_CHUNK_REFERENCE: {filename}",
                     )
                     supplement_refs.add(ref)
-        del record, raw
+        del record
     require(
         issuers + len(empty_companyfacts) > 0 and supplement_files == supplement_refs,
         "ARCHIVE_LAYOUT_OR_CHUNKS_INCOMPLETE",
@@ -478,7 +524,7 @@ def save_checkpoint(path, checkpoint):
     next_path.replace(path)
 
 
-def read_checkpoint(path, checkpoint_path, name):
+def read_checkpoint(path, checkpoint_path, name, *, check_file_size=True):
     require(exists(path) and exists(checkpoint_path), f"PARTIAL_STATE_AMBIGUOUS: {name}")
     _, state = read_metadata(checkpoint_path)
     require(isinstance(state, dict), f"PARTIAL_STATE_INVALID: {name}")
@@ -492,7 +538,7 @@ def read_checkpoint(path, checkpoint_path, name):
         and total > 0
         and type(count) is int
         and 0 <= count <= total
-        and plain(path).st_size == count
+        and (not check_file_size or plain(path).st_size == count)
         and type(state.get("complete")) is bool
         and isinstance(state.get("http"), dict)
         and isinstance(state.get("segments"), list)
@@ -687,8 +733,8 @@ def publish_generation(generation, final, publish, paths, states, progress):
     }
 
 
-def complete_download_state(path, checkpoint, name):
-    state = read_checkpoint(path, checkpoint, name)
+def complete_download_state(path, checkpoint, name, *, check_file_size=True):
+    state = read_checkpoint(path, checkpoint, name, check_file_size=check_file_size)
     total = state["archive_bytes"]
     require(
         state["complete"] and state["received_bytes"] == total and state["segments"],
@@ -718,6 +764,290 @@ def complete_download_state(path, checkpoint, name):
         f"DOWNLOAD_SEGMENTS_NOT_BOUND_TO_CHECKPOINT: {name}",
     )
     return state
+
+
+@dataclass(slots=True)
+class CensusMember:
+    name: str
+    keys: tuple | None = None
+    findings: tuple = ()
+
+    def flag(self, category):
+        if category not in self.findings:
+            self.findings += (category,)
+
+
+def census_payload(record, match, entry, endpoint, chunks, references):
+    if not isinstance(record, dict):
+        entry.flag("INVALID_PAYLOAD")
+        return
+    if match is None:
+        return
+    cik, historical = match.groups()
+    if endpoint == "companyfacts" and not record:
+        entry.flag("EMPTY_COMPANYFACTS")
+        return
+    if "cik" in record:
+        if not matches_cik(record["cik"], cik):
+            entry.flag("CIK_MISMATCH")
+    elif not historical:
+        entry.flag("MISSING_INTERNAL_CIK")
+
+    if endpoint == "companyfacts":
+        facts = record.get("facts")
+        if "facts" not in record:
+            entry.flag("MISSING_FACTS")
+        elif not isinstance(facts, dict) or any(
+            not isinstance(taxonomy, dict) for taxonomy in facts.values()
+        ):
+            entry.flag("INVALID_PAYLOAD")
+        elif not facts:
+            entry.flag("EMPTY_FACTS")
+    elif historical:
+        if not isinstance(record.get("accessionNumber"), list):
+            entry.flag("INVALID_SUBMISSIONS")
+        chunks[entry.name] = entry
+    else:
+        files = submissions_filing_index(record)
+        if files is None:
+            entry.flag("INVALID_SUBMISSIONS")
+            return
+        for item in files:
+            ref = submission_reference(item, cik)
+            if ref is None or ref in references:
+                entry.flag("INVALID_SUBMISSIONS")
+            else:
+                references[ref] = entry
+
+
+def census_zip(archive, endpoint, integrity_issues):
+    infos = archive.infolist()
+    names = Counter(info.orig_filename for info in infos)
+    entries, key_sets, chunks, references = [], {}, {}, {}
+    crc_verified = 0
+    has_primary = False
+    for info in infos:
+        entry = CensusMember(info.orig_filename)
+        entries.append(entry)
+        match = member_name(info, endpoint)
+        has_primary |= match is not None and match[2] is None
+        if match is None or names[entry.name] > 1:
+            reason = "UNSAFE_OR_UNEXPECTED_MEMBER" if match is None else "DUPLICATE_MEMBER"
+            integrity_issues.append({"reason": reason, "member": entry.name})
+            entry.flag("UNKNOWN_STRUCTURE")
+        if not readable_member(info):
+            integrity_issues.append(
+                {"reason": "UNSUPPORTED_OR_OVERSIZE_MEMBER", "member": entry.name}
+            )
+            entry.flag("UNKNOWN_STRUCTURE")
+            continue
+        try:
+            raw = read_zip_member(archive, info)
+        except (
+            Blocked,
+            zipfile.BadZipFile,
+            zlib.error,
+            EOFError,
+            OSError,
+            NotImplementedError,
+            RuntimeError,
+        ) as error:
+            integrity_issues.append(
+                {"reason": "MEMBER_INTEGRITY_FAILED", "member": entry.name, "detail": str(error)}
+            )
+            entry.flag("INVALID_PAYLOAD")
+            continue
+        crc_verified += 1
+        try:
+            record = json.loads(raw)
+        except (ValueError, UnicodeError, RecursionError):
+            entry.flag("INVALID_PAYLOAD")
+        else:
+            if isinstance(record, dict):
+                keys = tuple(sorted(record))
+                entry.keys = key_sets.setdefault(keys, keys)
+            census_payload(record, match, entry, endpoint, chunks, references)
+            del record
+        finally:
+            del raw
+    if not has_primary:
+        integrity_issues.append({"reason": "ARCHIVE_PRIMARY_MEMBERS_MISSING"})
+    for ref, owner in references.items():
+        if ref not in chunks or chunks[ref].findings:
+            owner.flag("INVALID_SUBMISSIONS")
+    for ref, chunk in chunks.items():
+        if ref not in references or references[ref].findings:
+            chunk.flag("INVALID_SUBMISSIONS")
+    return entries, crc_verified
+
+
+def census_categories(endpoint, entries, verified):
+    groups = {category: {} for category in CENSUS_CATEGORIES}
+    for entry in entries:
+        for category in entry.findings or ("VALID",):
+            groups[category].setdefault(entry.keys, []).append(entry.name)
+    return {
+        category: {
+            "endpoint": endpoint,
+            "count": sum(map(len, by_keys.values())),
+            "import_eligible": category == "VALID" and verified,
+            "disposition": (
+                "QUARANTINED"
+                if category != "VALID"
+                else "STRUCTURALLY_ELIGIBLE"
+                if verified
+                else "BLOCKED_ARCHIVE_INTEGRITY"
+            ),
+            "key_groups": [{"keys": keys, "members": names} for keys, names in by_keys.items()],
+        }
+        for category, by_keys in groups.items()
+    }
+
+
+def census_archive(endpoint, path, checkpoint):
+    issues = []
+    integrity = {"issues": issues, "members_scanned": 0, "members_crc_verified": 0}
+    entries = []
+    if exists(checkpoint.with_suffix(".next")):
+        issues.append({"reason": "INCOMPLETE_CHECKPOINT_UPDATE_REQUIRES_REVIEW"})
+    try:
+        state = complete_download_state(path, checkpoint, endpoint, check_file_size=False)
+    except (Blocked, OSError, ValueError) as error:
+        issues.append({"reason": "CHECKPOINT_BINDING_FAILED", "detail": str(error)})
+        state = None
+    try:
+        info = plain(path)
+        with pinned_files({endpoint: path}), path.open("rb") as stream:
+            require(os.path.samestat(info, os.fstat(stream.fileno())), "ARCHIVE_REPLACED")
+            integrity["observed_bytes"] = info.st_size
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            integrity["observed_sha256"] = digest
+            if state:
+                integrity["expected_bytes"] = state["archive_bytes"]
+                integrity["expected_sha256"] = state["prefix_sha256"]
+                if info.st_size != state["archive_bytes"]:
+                    issues.append({"reason": "ARCHIVE_SIZE_MISMATCH"})
+                if digest != state["prefix_sha256"]:
+                    issues.append({"reason": "ARCHIVE_SHA256_MISMATCH"})
+            stream.seek(0)
+            with zipfile.ZipFile(stream) as archive:
+                integrity["members_scanned"] = len(archive.infolist())
+                entries, integrity["members_crc_verified"] = census_zip(archive, endpoint, issues)
+            after = os.fstat(stream.fileno())
+            require(
+                os.path.samestat(info, plain(path))
+                and (after.st_size, after.st_mtime_ns) == (info.st_size, info.st_mtime_ns),
+                "ARCHIVE_CHANGED_DURING_CENSUS",
+            )
+    except (ValueError, OSError, zipfile.BadZipFile, zipfile.LargeZipFile, EOFError) as error:
+        issues.append({"reason": "ARCHIVE_UNREADABLE_OR_UNSAFE", "detail": str(error)})
+    integrity["status"] = "BLOCKED" if issues else "VERIFIED"
+    return {
+        "path": str(path),
+        "integrity": integrity,
+        "categories": census_categories(endpoint, entries, not issues),
+    }, entries
+
+
+def census_pilot(archives, entries):
+    spec_path = REPO / "docs" / "f01_sec_bulk_pilot_spec.json"
+    raw, spec = read_metadata(spec_path)
+    issuers = spec["issuers"]
+    ciks = {issuer["cik"] for issuer in issuers}
+    require(
+        spec["contract"] == "F01_SEC_BULK_PILOT_SPEC_V1"
+        and spec["core_count"] == len(issuers) == len(ciks) == 8,
+        "CENSUS_PILOT_SPEC_INVALID",
+    )
+    by_cik = {endpoint: {cik: [] for cik in ciks} for endpoint in URLS}
+    for endpoint in URLS:
+        for entry in entries[endpoint]:
+            match = MEMBER_NAME.fullmatch(entry.name)
+            if match and match[1] in ciks:
+                by_cik[endpoint][match[1]].append(entry)
+    results = []
+    for issuer in issuers:
+        cik = issuer["cik"]
+        members = {}
+        for endpoint in URLS:
+            expected = issuer[f"{endpoint}_member"]
+            require(expected == f"CIK{cik}.json", "CENSUS_PILOT_MEMBER_BINDING_INVALID")
+            observed = by_cik[endpoint][cik]
+            findings = [
+                {"member": entry.name, "categories": entry.findings}
+                for entry in observed
+                if entry.findings
+            ]
+            primary_present = any(entry.name == expected for entry in observed)
+            verified = archives[endpoint]["integrity"]["status"] == "VERIFIED"
+            if findings or verified and not primary_present:
+                status = "AFFECTED"
+            elif not verified:
+                status = "UNDETERMINED"
+            else:
+                status = "CLEAR"
+            members[endpoint] = {
+                "expected_primary": expected,
+                "primary_present": primary_present,
+                "status": status,
+                "findings": findings,
+            }
+        results.append({"symbol": issuer["symbol"], "cik": cik, "endpoints": members})
+    return {"spec_sha256": hashlib.sha256(raw).hexdigest(), "issuers": results}
+
+
+def structure_census(layout, generation, *, progress):
+    stage = layout.paths["temporary"] / f"{generation}.incomplete"
+    report_dir = layout.paths["import_artifacts"] / f"{generation}-structure-census"
+    output = report_dir / CENSUS_NAME
+    require(not exists(report_dir), f"CENSUS_REPORT_DIRECTORY_ALREADY_EXISTS: {report_dir}")
+    directory(stage)
+    publish = directory(stage / "publish")
+    lock_path = stage / "download.lock"
+    plain(lock_path)
+    with (
+        pinned_files({}, directories=(stage, publish, layout.paths["import_artifacts"])),
+        stage_lock(lock_path),
+    ):
+        archives, entries = {}, {}
+        for endpoint in URLS:
+            progress(f"Scanning staged ZIP structure and checkpoints: {endpoint}")
+            archives[endpoint], entries[endpoint] = census_archive(
+                endpoint, publish / f"{endpoint}.zip", stage / f"{endpoint}.checkpoint.json"
+            )
+        pilot = census_pilot(archives, entries)
+        blockers = []
+        for endpoint, archive in archives.items():
+            if archive["integrity"]["status"] != "VERIFIED":
+                blockers.append(f"{endpoint}:ARCHIVE_INTEGRITY")
+            for category, summary in archive["categories"].items():
+                reviewable = endpoint == "companyfacts" and category in COMPANYFACTS_REVIEWABLE
+                if summary["count"] and category != "VALID" and not reviewable:
+                    blockers.append(f"{endpoint}:{category}")
+        for issuer in pilot["issuers"]:
+            for endpoint, result in issuer["endpoints"].items():
+                if result["status"] != "CLEAR":
+                    blockers.append(f"pilot:{issuer['symbol']}:{endpoint}:{result['status']}")
+        status = "CENSUS_BLOCKED" if blockers else "CENSUS_COMPLETE"
+        report = {
+            "contract": CENSUS_CONTRACT,
+            "status": status,
+            "generation": generation,
+            "archives": archives,
+            "pilot": pilot,
+            "review_blockers": blockers,
+            "publication_authorized": False,
+            "import_authorized": False,
+        }
+        report_dir.mkdir()
+        staged_report = output.with_suffix(".incomplete")
+        with staged_report.open("x", encoding="utf-8", newline="\n") as stream:
+            json.dump(report, stream, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        staged_report.rename(output)
+    return {"status": status, "report": str(output)}
 
 
 def finalize_offline(layout, generation, *, progress):
@@ -840,6 +1170,9 @@ def main(argv=None):
     modes.add_argument("--network-preflight", action="store_true")
     modes.add_argument("--download", action="store_true")
     modes.add_argument("--finalize-offline", action="store_true", help="Verify and publish staging")
+    modes.add_argument(
+        "--structure-census", action="store_true", help="Scan staged ZIPs and write a diagnosis"
+    )
     modes.add_argument("--verify", action="store_true")
     modes.add_argument("--verify-archive", type=Path)
     parser.add_argument("--authorize-network", action="store_true")
@@ -863,9 +1196,16 @@ def main(argv=None):
         or (network and not args.user_agent)
         or (
             args.sizes_from
-            and (network or args.finalize_offline or args.verify or args.verify_archive)
+            and (
+                network
+                or args.finalize_offline
+                or args.structure_census
+                or args.verify
+                or args.verify_archive
+            )
         )
-        or bool(args.generation) != (args.download or args.finalize_offline or args.verify)
+        or bool(args.generation)
+        != (args.download or args.finalize_offline or args.structure_census or args.verify)
         or (args.generation and not GENERATION.fullmatch(args.generation))
         or (args.verify and not SHA256.fullmatch(args.manifest_sha256 or ""))
         or (
@@ -887,6 +1227,8 @@ def main(argv=None):
         layout = Layout.load(args.layout)
         if args.verify:
             result = verify_generation(layout, args.generation, args.manifest_sha256)
+        elif args.structure_census:
+            result = structure_census(layout, args.generation, progress=progress)
         elif args.finalize_offline:
             result = finalize_offline(layout, args.generation, progress=progress)
         elif args.verify_archive:
@@ -916,7 +1258,16 @@ def main(argv=None):
         else:
             result = capacity(layout, load_observations(args.sizes_from))
         print(json_bytes(result).decode(), end="")
-        return 3 if result["status"] in {"CAPACITY_BLOCKED", "CAPACITY_UNDETERMINED"} else 0
+        return (
+            3
+            if result["status"]
+            in {
+                "CAPACITY_BLOCKED",
+                "CAPACITY_UNDETERMINED",
+                "CENSUS_BLOCKED",
+            }
+            else 0
+        )
     except (Blocked, json.JSONDecodeError, KeyError, TypeError) as error:
         print(f"SEC Bulk blocked: {error}", file=sys.stderr)
         return 3
