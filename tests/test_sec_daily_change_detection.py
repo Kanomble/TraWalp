@@ -80,6 +80,7 @@ class DailyIndexSec:
             }
         )
         return {
+            "cik": cik,
             "name": f"Company {int(cik)}",
             "sic": "3571",
             "sicDescription": "Computers",

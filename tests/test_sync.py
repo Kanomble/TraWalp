@@ -82,7 +82,7 @@ class Sec:
 
     def submissions(self, _cik: str) -> dict:
         self.submission_calls += 1
-        return {"name": "Test Corp", "sic": "3571", "sicDescription": "Computers"}
+        return {"cik": _cik, "name": "Test Corp", "sic": "3571", "sicDescription": "Computers"}
 
     def company_facts(self, _cik: str) -> dict:
         self.fact_calls += 1
@@ -125,7 +125,7 @@ class BatchSec(Sec):
 
     def submissions(self, cik: str) -> dict:
         self.submission_calls += 1
-        return {"name": f"Company {cik}", "sic": "3571", "sicDescription": "Computers"}
+        return {"cik": cik, "name": f"Company {cik}", "sic": "3571", "sicDescription": "Computers"}
 
     def company_facts(self, cik: str) -> dict:
         self.fact_calls += 1
@@ -298,7 +298,7 @@ class IncrementalSec:
             raise SecResourceNotFound("submissions", cik, f"submissions/{cik}")
         if cik in self.fail_symbols:
             raise RuntimeError("SEC unavailable")
-        return _submission(self.accession)
+        return {**_submission(self.accession), "cik": cik}
 
     def company_facts(self, cik: str) -> dict:
         self.fact_calls += 1
@@ -577,7 +577,9 @@ def test_structured_upsert_failure_does_not_advance_state_or_cache_payload(
     def fail_upsert(*_args, **_kwargs):
         raise RuntimeError("disk write failed")
 
-    monkeypatch.setattr(database, "upsert_sec_company_update", fail_upsert)
+    monkeypatch.setattr(
+        "trading_system.data.sec_persistence._execute_sec_company_update", fail_upsert
+    )
     result = sync.sync_sec_incremental()
 
     assert result["errors"] == 1

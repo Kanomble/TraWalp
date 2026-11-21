@@ -11,10 +11,12 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Any
+from uuid import uuid4
 
 import requests
 
 from trading_system.data.alpaca_client import AlpacaDataClient
+from trading_system.data.canonical_facts import RequestIdentity
 from trading_system.data.daily_history import boundary_integrity_check
 from trading_system.data.database import Database
 from trading_system.data.market_sessions import (
@@ -29,6 +31,12 @@ from trading_system.data.sec_identity import (
     SecIdentityResolution,
     identity_conflict_is_resolved,
     resolve_sec_identities,
+)
+from trading_system.data.sec_persistence import SecRequestEnvelope, provider_cik
+from trading_system.data.sec_sync_persistence import (
+    PENDING,
+    IsolatedCanonicalSec,
+    SecSyncPersistence,
 )
 from trading_system.data.universe import is_financial_or_reit, is_reit
 from trading_system.data.xbrl_parser import VALID_FORMS, parse_company_facts
@@ -478,6 +486,8 @@ class DataSynchronizer:
         daily_overlap_bars: int = 2,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         timer: Callable[[], float] = time.perf_counter,
+        isolated_canonical_sec: IsolatedCanonicalSec | None = None,
+        sec_force_evidence: Callable[[str, dict], None] | None = None,
     ) -> None:
         if market_data_batch_size <= 0:
             raise ValueError("market_data_batch_size must be positive")
@@ -505,6 +515,8 @@ class DataSynchronizer:
         self.daily_overlap_bars = daily_overlap_bars
         self.clock = clock
         self.timer = timer
+        self.isolated_canonical_sec = isolated_canonical_sec
+        self.sec_force_evidence = sec_force_evidence
 
     def sync(self, requested_symbols: list[str] | None = None) -> dict[str, Any]:
         """Backwards-compatible complete synchronization."""
@@ -512,6 +524,11 @@ class DataSynchronizer:
         return self.sync_full(requested_symbols)
 
     def sync_full(self, requested_symbols: list[str] | None = None) -> dict[str, Any]:
+        with self.database.read_only() as connection:
+            if connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='fact_contract'"
+            ).fetchone():
+                raise ValueError("SEC_CANONICAL_COMPOSITE_SYNC_FORBIDDEN")
         started = self.timer()
         assets = self.sync_assets()
         available = set(self.database.list_tradable_asset_symbols())
@@ -583,18 +600,35 @@ class DataSynchronizer:
         The explicit bounded mode never requests ticker maps or submissions. It
         keeps local company/SIC metadata and the ordinary parser/upsert semantics.
         """
-        local = None
-        if companyfacts_only:
-            from trading_system.data.sec_force import resolve_local_companies
-
-            local = resolve_local_companies(self.database.path, requested_symbols or [])
-        return self._run_stage(
-            "sec_force_companyfacts" if companyfacts_only else "sec",
-            lambda: self._sync_sec(requested_symbols, full=True, local_companies=local),
-        )
+        return self._run_sec(requested_symbols, full=True, force=companyfacts_only)
 
     def sync_sec_incremental(self, requested_symbols: list[str] | None = None) -> dict[str, Any]:
-        return self._run_stage("sec", lambda: self._sync_sec(requested_symbols, full=False))
+        return self._run_sec(requested_symbols, full=False, force=False)
+
+    def _run_sec(self, requested_symbols, *, full, force):
+        persistence = SecSyncPersistence(self.database, self.isolated_canonical_sec, force=force)
+        with persistence.lock():
+            persistence.require_target()
+            local = None
+            dataset = "sec"
+            if force:
+                from trading_system.data.sec_force import SecWriteDatabase, resolve_local_companies
+
+                if not isinstance(self.database, SecWriteDatabase):
+                    raise ValueError("SEC_FORCE_WRITE_GUARD_REQUIRED")
+                local = resolve_local_companies(self.database.path, requested_symbols or [])
+                dataset = "sec_force_companyfacts"
+            elif requested_symbols and not set(self.database.list_tradable_asset_symbols()) <= {
+                symbol.upper() for symbol in requested_symbols
+            }:
+                dataset = "sec_scoped"
+            return self._run_stage(
+                dataset,
+                lambda: self._sync_sec(
+                    requested_symbols, full=full, local_companies=local, persistence=persistence
+                ),
+                sec_persistence=persistence,
+            )
 
     def _sync_sec(
         self,
@@ -602,6 +636,7 @@ class DataSynchronizer:
         *,
         full: bool,
         local_companies: dict[str, CompanyIdentity] | None = None,
+        persistence: SecSyncPersistence,
     ) -> dict[str, Any]:
         if self.sec is None:
             raise ValueError("SEC client is required for SEC synchronization")
@@ -677,6 +712,18 @@ class DataSynchronizer:
             }
             candidate_ciks -= suppressed
             negative_cache_hits = len(suppressed)
+        pending = self.database.sync_values(PENDING)
+        if persistence.candidate is not None and set(pending) - canonical_symbols.keys():
+            raise ValueError("SEC_CANONICAL_PENDING_OUTSIDE_SCOPE")
+        candidate_ciks |= set(pending) & canonical_symbols.keys()
+        # A full-universe refresh cannot attest success while a pending request
+        # has lost its fresh identity association.
+        unmatched = (
+            set(pending) - canonical_symbols.keys()
+            if not local_only and len(selected_assets) == len(assets)
+            else set()
+        )
+        completed = []
         counts = {
             "mode": "full" if full else "incremental",
             "universe_symbols": len(selected_assets),
@@ -731,9 +778,12 @@ class DataSynchronizer:
             "connection_failures": 0,
             "json_failures": 0,
             "parse_failures": 0,
-            "database_failures": 0,
+            "database_failures": len(unmatched),
             "other_failures": 0,
-            "errors": 0,
+            "errors": len(unmatched),
+            "replayed_receipts": 0,
+            "resumed_requests": 0,
+            "reconciled_commits": 0,
         }
         if local_only:
             counts["symbol_results"] = []
@@ -758,14 +808,44 @@ class DataSynchronizer:
                 conflict.source,
             )
         with self.database.connect() as write_connection:
-            for cik in sorted(candidate_ciks):
+            for cik in sorted(candidate_ciks, key=lambda cik: (cik not in pending, cik)):
                 symbol = canonical_symbols[cik]
                 detected = change_accessions.get(cik, set())
                 unavailable_status = companyfacts_statuses.get(cik)
                 submissions_status = submissions_statuses.get(cik)
                 counts["companies_checked"] += 1
-                logical_requests["submissions"] += not local_only
+                logical_requests["submissions"] += not local_only and cik not in pending
                 try:
+                    if cik in pending:
+                        try:
+                            receipt = persistence.resume(
+                                pending[cik],
+                                symbol,
+                                cik,
+                                evidence_callback=self.sec_force_evidence if local_only else None,
+                            )
+                        except Exception as exc:
+                            raise SecCompanySyncError("database", "receipt_replay", 0, exc) from exc
+                        completed.append(cik)
+                        counts["resumed_requests"] += 1
+                        counts["replayed_receipts"] += int(receipt.replayed)
+                        counts["reconciled_commits"] += int(receipt.commit_reconciled)
+                        if not receipt.replayed:
+                            counts["companies_updated"] += 1
+                            counts["facts_processed"] += receipt.facts_processed
+                        if local_only:
+                            counts["symbol_results"].append(
+                                {
+                                    "symbol": symbol,
+                                    "cik": cik,
+                                    "status": "success",
+                                    "facts_processed": (
+                                        0 if receipt.replayed else receipt.facts_processed
+                                    ),
+                                    "error": None,
+                                }
+                            )
+                        continue
                     outcome = self._sync_sec_company(
                         symbol,
                         cik,
@@ -778,8 +858,13 @@ class DataSynchronizer:
                         ),
                         write_connection=write_connection,
                         local_company=local_companies[symbol] if local_only else None,
+                        persistence=persistence,
                     )
                     write_connection.commit()
+                    receipt = outcome.get("receipt")
+                    if receipt is not None:
+                        completed.append(cik)
+                        counts["reconciled_commits"] += int(receipt.commit_reconciled)
                     counts["facts_processed"] += outcome["facts_processed"]
                     counts["companies_updated"] += outcome["companies_updated"]
                     counts["companyfacts_unavailable"] += outcome["companyfacts_unavailable"]
@@ -833,16 +918,10 @@ class DataSynchronizer:
                         exc.resource,
                         exc_info=exc.cause,
                     )
-            if not full and counts["errors"] == 0 and cursor_after is not None:
-                self.database.set_sync_value(
-                    SEC_CHANGE_DETECTION_SOURCE,
-                    DAILY_MASTER_INDEX_CURSOR_KEY,
-                    {"last_processed_date": cursor_after.isoformat()},
-                    connection=write_connection,
-                )
-                write_connection.commit()
-            elif not full and counts["errors"]:
-                counts["cursor_after"] = counts["cursor_before"]
+                    # Preserve the expected version of an unresolved Canonical request.
+                    if persistence.candidate is not None:
+                        break
+        counts["_sec_completed"] = completed
         counts["submissions_seconds"] = round(submissions_seconds, 3)
         counts["companyfacts_seconds"] = round(companyfacts_seconds, 3)
         counts["change_detection_seconds"] = round(change_detection_seconds, 3)
@@ -916,6 +995,7 @@ class DataSynchronizer:
         retry_unavailable: bool,
         write_connection: Any,
         local_company: CompanyIdentity | None = None,
+        persistence: SecSyncPersistence,
     ) -> dict[str, Any]:
         if self.sec is None:  # Narrowed by _sync_sec; retained for direct testability.
             raise ValueError("SEC client is required for SEC synchronization")
@@ -923,6 +1003,7 @@ class DataSynchronizer:
         try:
             submissions = (
                 {
+                    "cik": cik,
                     "name": local_company.name,
                     "sic": local_company.sic,
                     "sicDescription": local_company.sic_description,
@@ -951,6 +1032,11 @@ class DataSynchronizer:
                 "request", "submissions", self.timer() - request_started, exc
             ) from exc
         submissions_seconds = self.timer() - request_started
+        try:
+            if provider_cik(submissions) != cik:
+                raise ValueError("SEC_PROVIDER_CIK_MISMATCH")
+        except ValueError as exc:
+            raise SecCompanySyncError("parse", "submissions", submissions_seconds, exc) from exc
         current_accessions = _recent_accessions(submissions)
         initializing_state = stored_accessions is None
         cached_submissions = (
@@ -974,6 +1060,7 @@ class DataSynchronizer:
         )
         new_state = sorted(previous_accessions | current_accessions | detected_accessions)
         facts_processed = 0
+        receipt = None
         companyfacts_seconds = 0.0
         if needs_facts:
             company = CompanyIdentity(
@@ -986,6 +1073,8 @@ class DataSynchronizer:
             request_started = self.timer()
             try:
                 payload = self.sec.company_facts(cik)
+                if local_company is not None and self.sec_force_evidence is not None:
+                    self.sec_force_evidence(cik, payload)
             except SecResourceNotFound:
                 companyfacts_seconds = self.timer() - request_started
                 self._record_unavailable(
@@ -1013,27 +1102,51 @@ class DataSynchronizer:
             companyfacts_seconds = self.timer() - request_started
             processing_started = self.timer()
             try:
-                if local_company is not None and str(payload.get("cik", "")).zfill(10) != cik:
-                    raise ValueError("SEC_FORCE_RESPONSE_CIK_MISMATCH")
-                facts = parse_company_facts(payload, symbol)
-                if local_company is not None:
-                    new_state = sorted(
-                        set(new_state) | {f.accession_number for f in facts if f.accession_number}
+                if provider_cik(payload) != cik:
+                    raise ValueError(
+                        "SEC_FORCE_RESPONSE_CIK_MISMATCH"
+                        if local_company
+                        else "SEC_PROVIDER_CIK_MISMATCH"
                     )
+                facts = parse_company_facts(payload, symbol)
+                new_state = sorted(
+                    set(new_state) | {f.accession_number for f in facts if f.accession_number}
+                )
             except Exception as exc:
                 raise SecCompanySyncError(
                     "parse", "companyfacts", self.timer() - processing_started, exc
                 ) from exc
             try:
-                self.database.delete_sync_value(
-                    "sec_submissions_status", cik, connection=write_connection
+                origin = "verified_local" if local_company else "provider"
+                candidate = persistence.candidate
+                request = SecRequestEnvelope.capture(
+                    observation_id=uuid4().hex,
+                    company=company,
+                    identity=RequestIdentity(
+                        symbol, cik, f"SEC sync identity resolution: {origin}"
+                    ),
+                    retrieved_at=self.clock(),
+                    submissions=submissions,
+                    companyfacts=payload,
+                    facts=facts,
+                    accessions=new_state,
+                    parser_version="xbrl-companyfacts-v1",
+                    policy_version=candidate.policy_version if candidate else "legacy-sec-sync-v1",
+                    submissions_origin=origin,
                 )
-                facts_processed = self.database.upsert_sec_company_update(
-                    company,
-                    facts,
-                    new_state,
-                    connection=write_connection,
-                )
+                if candidate is not None:
+                    admissions = candidate.admissions(request)
+                    request = SecRequestEnvelope.model_validate(
+                        {
+                            **request.model_dump(),
+                            "admissions": tuple(
+                                (symbol, taxonomy, rule)
+                                for (symbol, taxonomy), rule in sorted(admissions.items())
+                            ),
+                        }
+                    )
+                receipt = persistence.submit(request)
+                facts_processed = receipt.facts_processed
             except Exception as exc:
                 raise SecCompanySyncError(
                     "database", "structured_facts", self.timer() - processing_started, exc
@@ -1053,6 +1166,7 @@ class DataSynchronizer:
             "parse_and_persist_seconds": parse_and_persist_seconds if needs_facts else 0.0,
             "companyfacts_requests": int(needs_facts),
             "accessions": new_state if needs_facts or initializing_state else None,
+            "receipt": receipt,
         }
 
     def _daily_master_index_snapshots(self) -> DailyMasterIndexDiscovery:
@@ -1840,10 +1954,17 @@ class DataSynchronizer:
             symbols = sorted(set(symbols) & {symbol.upper() for symbol in requested_symbols})
         return symbols
 
-    def _run_stage(self, dataset: str, operation: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    def _run_stage(
+        self,
+        dataset: str,
+        operation: Callable[[], dict[str, Any]],
+        *,
+        sec_persistence: SecSyncPersistence | None = None,
+    ) -> dict[str, Any]:
         started_at = self.clock()
         started = self.timer()
-        previous = self.database.sync_value("dataset", dataset)
+        stored = self.database.sync_value("dataset", dataset)
+        previous = stored
         previous = previous if isinstance(previous, dict) else {}
         if dataset == "asset_universe":
             # Keep historical timestamps, not stale success/diagnostic counters
@@ -1886,10 +2007,20 @@ class DataSynchronizer:
             )
             raise
         elapsed = round(self.timer() - started, 3)
+        completed = result.pop("_sec_completed", ())
+        sec_resumed = sec_persistence is not None and result["resumed_requests"] > 0
+        sec_replay_only = (
+            sec_resumed
+            and result["resumed_requests"] == result["companies_checked"]
+            and not result["errors"]
+            and not result["identity_conflicts"]
+        )
+        if sec_persistence is not None and (result["errors"] or dataset != "sec" or sec_resumed):
+            result["cursor_after"] = result["cursor_before"]
         result = {**result, "elapsed_seconds": elapsed}
         status = (
             "partial"
-            if result.get("errors", 0) or result.get("identity_conflicts", 0)
+            if result.get("errors", 0) or result.get("identity_conflicts", 0) or sec_resumed
             else "success"
         )
         state = {
@@ -1903,6 +2034,30 @@ class DataSynchronizer:
             **result,
         }
         state.pop("error", None)
-        self.database.set_sync_value("dataset", dataset, state)
+        if sec_persistence is None:
+            self.database.set_sync_value("dataset", dataset, state)
+        else:
+            sec_persistence.require_target()
+            with self.database.connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                if not result["errors"]:
+                    for cik in completed:
+                        self.database.delete_sync_value(PENDING, cik, connection=connection)
+                    if dataset == "sec" and not sec_resumed and result["cursor_after"]:
+                        self.database.set_sync_value(
+                            SEC_CHANGE_DETECTION_SOURCE,
+                            DAILY_MASTER_INDEX_CURSOR_KEY,
+                            {"last_processed_date": result["cursor_after"]},
+                            connection=connection,
+                        )
+                if sec_replay_only and stored is None:
+                    self.database.delete_sync_value("dataset", dataset, connection=connection)
+                else:
+                    self.database.set_sync_value(
+                        "dataset",
+                        dataset,
+                        stored if sec_replay_only else state,
+                        connection=connection,
+                    )
         LOGGER.info("Stage %s completed status=%s elapsed=%.3fs", dataset, status, elapsed)
         return result

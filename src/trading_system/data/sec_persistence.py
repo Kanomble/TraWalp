@@ -68,6 +68,7 @@ class SecRequestEnvelope(BaseModel):
     parser_version: str = Field(min_length=1)
     policy_version: str = Field(min_length=1)
     payload_json: str
+    submissions_origin: str = "provider"
     facts: tuple[FundamentalFact, ...]
     accessions: tuple[str, ...]
     admissions: tuple[tuple[str, str, Admission], ...]
@@ -90,6 +91,8 @@ class SecRequestEnvelope(BaseModel):
             raise ValueError("SEC_PAYLOAD_ENVELOPE_INVALID")
         if any(provider_cik(payload) != self.company.cik for payload in payloads.values()):
             raise ValueError("SEC_PROVIDER_CIK_MISMATCH")
+        if self.submissions_origin not in {"provider", "verified_local"}:
+            raise ValueError("INVALID_SEC_SUBMISSIONS_ORIGIN")
         if not isinstance(payloads["companyfacts"].get("facts"), dict):
             raise ValueError("SEC_COMPANYFACTS_INVALID")
         if (
@@ -134,6 +137,7 @@ class SecRequestEnvelope(BaseModel):
         parser_version: str,
         policy_version: str,
         admissions: Mapping[tuple[str, str], Admission] | None = None,
+        submissions_origin: str = "provider",
     ) -> Self:
         return cls(
             observation_id=observation_id,
@@ -142,6 +146,7 @@ class SecRequestEnvelope(BaseModel):
             retrieved_at=retrieved_at,
             parser_version=parser_version,
             policy_version=policy_version,
+            submissions_origin=submissions_origin,
             payload_json=json_bytes(
                 {"submissions": submissions, "companyfacts": companyfacts}
             ).decode(),
@@ -165,7 +170,11 @@ class SecRequestEnvelope(BaseModel):
 
     @property
     def input_hash(self) -> str:
-        return digest(json_bytes(self.model_dump(mode="json")))
+        return digest(json_bytes(self._archive_envelope()))
+
+    def _archive_envelope(self) -> dict:
+        exclude = {"submissions_origin"} if self.submissions_origin == "provider" else set()
+        return self.model_dump(mode="json", exclude=exclude)
 
     def archive_bytes(self) -> bytes:
         return json_bytes(
@@ -174,7 +183,7 @@ class SecRequestEnvelope(BaseModel):
                 "request_id": self.request_id,
                 "input_hash": self.input_hash,
                 "payload_hash": self.payload_hash,
-                "envelope": self.model_dump(mode="json"),
+                "envelope": self._archive_envelope(),
             }
         )
 
@@ -187,6 +196,12 @@ class SecRequestArchive:
 
     def __init__(self, directory: str | Path):
         self.directory = Path(directory).absolute()
+        if os.name == "nt":
+            # Namespace and request digests can exceed the Win32 MAX_PATH limit.
+            name = str(self.directory)
+            if not name.startswith("\\\\?\\"):
+                prefix = "\\\\?\\UNC\\" if name.startswith("\\\\") else "\\\\?\\"
+                self.directory = Path(prefix + (name[2:] if name.startswith("\\\\") else name))
 
     def _path(self, request_id: str) -> Path:
         if not re.fullmatch(r"[0-9a-f]{64}", request_id):
@@ -286,9 +301,10 @@ def require_current_identity(connection: sqlite3.Connection, envelope: SecReques
 class SecCompanyPersistence(ABC):
     """Own one write transaction on a dedicated connection to an existing file."""
 
-    def __init__(self, path: str | Path, archive: SecRequestArchive):
+    def __init__(self, path: str | Path, archive: SecRequestArchive, *, connection_guard=None):
         self.path = Path(path).absolute()
         self.archive = archive
+        self.connection_guard = connection_guard
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path.as_uri() + "?mode=rw", uri=True, isolation_level=None)
@@ -326,6 +342,8 @@ class SecCompanyPersistence(ABC):
         try:
             with closing(self._connect()) as connection:
                 connection.execute("PRAGMA foreign_keys=ON")
+                if self.connection_guard is not None:
+                    self.connection_guard(connection)
                 connection.execute("BEGIN IMMEDIATE")
                 try:
                     self._guard(connection)
@@ -380,6 +398,8 @@ class SecCompanyPersistence(ABC):
                 raise ValueError("SEC_PERSISTENCE_TARGET_REPLACED")
             with closing(self._connect()) as connection:
                 connection.execute("PRAGMA foreign_keys=ON")
+                if self.connection_guard is not None:
+                    self.connection_guard(connection)
                 self._guard(connection)
                 return self._receipt(connection, envelope)
         except ReceiptConflict:
@@ -444,6 +464,8 @@ class CanonicalSecPersistence(SecCompanyPersistence):
     def _validate_request(self, envelope, expected_version):
         if type(expected_version) is not int or expected_version < 1:
             raise ValueError("EXPECTED_DATASET_VERSION_REQUIRED")
+        if envelope.submissions_origin != "provider":
+            raise ValueError("CANONICAL_SEC_REQUIRES_PROVIDER_SUBMISSIONS")
         if set(envelope.admission_map()) != {(f.symbol, f.taxonomy) for f in envelope.facts}:
             raise ValueError("SOURCE_MEMBERSHIP_ADMISSION_REQUIRED")
 

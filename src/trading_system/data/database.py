@@ -1493,6 +1493,8 @@ class Database:
             raise FileNotFoundError(f"Database does not exist: {self.path}")
         manager = self.read_only() if dry_run else self.connect()
         with manager as connection:
+            if not dry_run:
+                _require_legacy_fact_writer(connection)
             plan = _raw_sec_cleanup_plan(connection, endpoint)
             deleted_rows = 0
             if not dry_run and plan["safe_rows"]:

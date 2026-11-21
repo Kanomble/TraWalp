@@ -43,7 +43,17 @@ class SecWriteDatabase(ReadOnlyDatabase):
         connection = sqlite3.connect(self.path.resolve().as_uri() + "?mode=rw", uri=True)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
+        self.authorize_sec_connection(connection)
+        try:
+            yield connection
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
+    def authorize_sec_connection(self, connection):
         def authorize(action, table, column, database, trigger):
             if action in {sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE}:
                 allowed = table in SEC_TABLES and (
@@ -67,14 +77,6 @@ class SecWriteDatabase(ReadOnlyDatabase):
             return sqlite3.SQLITE_OK
 
         connection.set_authorizer(authorize)
-        try:
-            yield connection
-            connection.commit()
-        except BaseException:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
 
 
 def resolve_local_companies(path, symbols):
@@ -392,16 +394,9 @@ def execute_force(path, symbols, user_agent, *, evidence_callback=None):
             session, [company.cik for company in companies.values()]
         ) as counts:
             client = SecClient(user_agent, session=session)
-            if evidence_callback is not None:
-                original = client.company_facts
-
-                def capture(cik):
-                    payload = original(cik)
-                    evidence_callback(cik, payload)
-                    return payload
-
-                client.company_facts = capture
-            result = DataSynchronizer(database, None, client).sync_sec_full(
+            result = DataSynchronizer(
+                database, None, client, sec_force_evidence=evidence_callback
+            ).sync_sec_full(
                 symbols, companyfacts_only=True
             )
             counts["client_request_counts"] = client.request_counts
