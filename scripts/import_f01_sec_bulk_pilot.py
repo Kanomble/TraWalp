@@ -51,9 +51,10 @@ from trading_system.models.fundamentals import CompanyIdentity  # noqa: E402
 RESEARCH_ROOT = Path("G:/TraWalpResearch")
 GENERATION = "pilot01-20261121-175840"
 SOURCE_SHA = "d0392ebbba463b4da8485e786c9986d163e02a57532197fb84c33491b27dbc20"
-PILOT_SHA = "9e7fa2b90c1b302228d4c0b12bfa75b7b910630971bd6a690dd00d134d7b6e37"
-IMPORT_CONTRACT = "F01_SEC_BULK_PILOT_IMPORT_V1"
-ADMISSION_CONTRACT = "F01_SEC_BULK_PILOT_ADMISSION_V1"
+SOURCE_PILOT_SHA = "9e7fa2b90c1b302228d4c0b12bfa75b7b910630971bd6a690dd00d134d7b6e37"
+PILOT_SHA = "74f9e4119008d99b21a9aaf69e4693da14edaf9ec135a6605622048ab0696d07"
+IMPORT_CONTRACT = "F01_SEC_BULK_PILOT_IMPORT_V2"
+ADMISSION_CONTRACT = "F01_SEC_BULK_PILOT_ADMISSION_V2"
 IMPORTED = "SEC_BULK_PILOT_IMPORTED"
 REPORT = "f01_sec_bulk_pilot_report.json"
 STATS = "f01_sec_bulk_pilot_issuer_stats.csv"
@@ -94,22 +95,59 @@ def code_binding():
     return {"head": evidence["git_head"], "fingerprint": evidence["code_fingerprint"]}
 
 
+@dataclass(frozen=True)
+class PilotScope:
+    source_issuers: list[dict]
+    active: list[dict]
+    excluded: list[dict]
+
+
 def pilot_spec():
-    raw, spec = bulk.read_metadata(REPO / "docs" / "f01_sec_bulk_pilot_spec.json")
+    source_path = "docs/f01_sec_bulk_pilot_spec.json"
+    raw, source = bulk.read_metadata(REPO / source_path)
+    v2_raw, spec = bulk.read_metadata(REPO / "docs/f01_sec_bulk_pilot_spec_v2.json")
     require(
-        sha(raw) == PILOT_SHA
-        and spec["core_count"] == len(spec["issuers"]) == 8
-        and spec["identity_negative_probe"]["symbol"] == "JSM",
+        sha(raw) == SOURCE_PILOT_SHA
+        and source["core_count"] == len(source["issuers"]) == 8
+        and sha(v2_raw) == PILOT_SHA
+        and spec["contract"] == "F01_SEC_BULK_PILOT_SPEC_V2"
+        and spec["scope"] == "RESEARCH_ONLY"
+        and spec["source_spec"] == {"path": source_path, "sha256": SOURCE_PILOT_SHA},
         "PILOT_SPEC_BINDING_MISMATCH",
     )
-    return sorted(spec["issuers"], key=lambda issuer: issuer["cik"])
+    source_issuers = source["issuers"]
+    by_symbol = {item["symbol"]: item for item in source_issuers}
+    active = spec["active_issuers"]
+    excluded = spec["excluded_issuers"]
+    exclusions = {item["symbol"]: item for item in excluded}
+    expected_exclusions = {
+        "BAC": ([by_symbol["BAC"]["cik"]], "BLOCKED_UNRESOLVED_REPORTING_ENTITY"),
+        "JSM": (source["identity_negative_probe"]["ciks"], "BLOCKED_IDENTITY_CONFLICT"),
+    }
+    require(
+        len(excluded) == len(expected_exclusions)
+        and set(exclusions) == set(expected_exclusions)
+        and all(
+            (item["ciks"], item["status"]) == expected_exclusions[symbol]
+            and item["disposition"] == "EXCLUDE_FROM_PILOT_IMPORT"
+            for symbol, item in exclusions.items()
+        )
+        and len(active) == len(by_symbol) - 1
+        and {item["symbol"] for item in active} == set(by_symbol) - set(exclusions)
+        and all(item["cik"] == by_symbol[item["symbol"]]["cik"] for item in active),
+        "PILOT_SCOPE_PARTITION_MISMATCH",
+    )
+    selected = [by_symbol[item["symbol"]] for item in sorted(active, key=lambda x: x["cik"])]
+    return PilotScope(source_issuers, selected, excluded)
 
 
-def admission_template(issuers):
+def admission_template(scope):
     return {
         "contract": ADMISSION_CONTRACT,
         "manifest_sha256": SOURCE_SHA,
         "pilot_spec_sha256": PILOT_SHA,
+        "source_pilot_spec_sha256": SOURCE_PILOT_SHA,
+        "excluded_issuers": scope.excluded,
         "reviewer": "",
         "scope": "RESEARCH_ONLY",
         "issuers": {
@@ -126,7 +164,7 @@ def admission_template(issuers):
                     for t in TAXONOMIES
                 },
             }
-            for item in issuers
+            for item in scope.active
         },
     }
 
@@ -154,7 +192,7 @@ def reviewed_evidence(record, root, cik, symbol, taxonomy=None):
     return f"{path}#sha256={record['sha256']}"
 
 
-def load_admission(path, expected_sha, issuers, layout):
+def load_admission(path, expected_sha, scope, layout):
     require(path is not None and expected_sha, "INDEPENDENT_REVIEWED_ADMISSION_REQUIRED")
     raw, plan = bulk.read_metadata(path)
     require(
@@ -163,14 +201,16 @@ def load_admission(path, expected_sha, issuers, layout):
         and plan["scope"] == "RESEARCH_ONLY"
         and plan["manifest_sha256"] == SOURCE_SHA
         and plan["pilot_spec_sha256"] == PILOT_SHA
+        and plan["source_pilot_spec_sha256"] == SOURCE_PILOT_SHA
+        and plan["excluded_issuers"] == scope.excluded
         and isinstance(plan["reviewer"], str)
         and bool(plan["reviewer"].strip())
-        and set(plan["issuers"]) == {item["cik"] for item in issuers},
+        and set(plan["issuers"]) == {item["cik"] for item in scope.active},
         "ADMISSION_PLAN_BINDING_MISMATCH",
     )
     evidence_root = layout.paths["import_artifacts"]
     result = {}
-    for item in issuers:
+    for item in scope.active:
         cik, symbol = item["cik"], item["symbol"]
         reviewed = plan["issuers"][cik]
         require(
@@ -197,7 +237,7 @@ def load_admission(path, expected_sha, issuers, layout):
     return result
 
 
-def source_inputs(layout, issuers):
+def source_inputs(layout, scope):
     final = bulk.directory(layout.paths["originals"] / GENERATION)
     raw, manifest = bulk.read_metadata(
         final / bulk.MANIFEST_NAME, max_bytes=bulk.MAX_MANIFEST_BYTES
@@ -207,14 +247,14 @@ def source_inputs(layout, issuers):
         and manifest["contract"] == bulk.MANIFEST_CONTRACT
         and manifest["generation"] == GENERATION
         and manifest["quality"] == bulk.QUALITY
-        and manifest["reviewed_census"]["pilot_spec_sha256"] == PILOT_SHA
+        and manifest["reviewed_census"]["pilot_spec_sha256"] == SOURCE_PILOT_SHA
         and manifest["trading_universe_qualified"] is False
         and manifest["qualified_research_issuers"] == [],
         "SOURCE_MANIFEST_BINDING_MISMATCH",
     )
     status = manifest["pilot_structure"]
-    require(len(status) == len(issuers), "SOURCE_PILOT_SCOPE_MISMATCH")
-    expected = {(item["cik"], item["symbol"]) for item in issuers}
+    require(len(status) == len(scope.source_issuers), "SOURCE_PILOT_SCOPE_MISMATCH")
+    expected = {(item["cik"], item["symbol"]) for item in scope.source_issuers}
     require(
         {(item["cik"], item["symbol"]) for item in status} == expected,
         "SOURCE_PILOT_SCOPE_MISMATCH",
@@ -857,6 +897,7 @@ def publish_results(run, binding, plans, stats, source, db, resources, elapsed):
         "# F01 SEC-Bulk-Pilotimport\n\n"
         f"**{IMPORTED}**\n\n"
         f"Dataset {binding['dataset_id']}, Version {len(plans) + 1}. "
+        f"{len(plans)} bestätigte Receipts für den aktiven Pilot-Scope. "
         f"{sums['canonical_facts']} Canonical-Facts, "
         f"{sums['imported_occurrences']} Occurrences, "
         f"{sums['excluded_facts']} ausgeschlossene Facts.\n\n"
@@ -865,7 +906,10 @@ def publish_results(run, binding, plans, stats, source, db, resources, elapsed):
         "G5, PIT, historisches Universe und Produktivbetrieb bleiben ohne Freigabe.\n\n"
         "Ungeordnete Same-Key-Konflikte bleiben in den gebundenen Originalen, "
         "Request-Archiven und der Quarantänedatei erhalten. Ressourcen und "
-        "Hochrechnung stehen im JSON-Bericht.\n"
+        "Hochrechnung stehen im JSON-Bericht.\n\n"
+        "Aus dem Import ausgeschlossen: "
+        + ", ".join(f"{item['symbol']} ({item['status']})" for item in binding["excluded_issuers"])
+        + ".\n"
     )
     bulk.write_new(stage / AUDIT, text.encode())
     bulk.write_new(
@@ -881,6 +925,9 @@ def publish_results(run, binding, plans, stats, source, db, resources, elapsed):
                 "g5_qualified": False,
                 "trading_universe_qualified": False,
                 "dataset_version": len(plans) + 1,
+                "expected_receipts": len(binding["active_issuers"]),
+                "confirmed_receipts": len(plans),
+                "excluded_issuers": binding["excluded_issuers"],
                 "totals": sums,
                 "issuers": stats,
                 "resource_samples": resources,
@@ -892,7 +939,7 @@ def publish_results(run, binding, plans, stats, source, db, resources, elapsed):
                 )
                 / max(elapsed, 0.001),
                 "pilot_storage_estimate": {
-                    "scope": "linear scenario from eight nonrepresentative issuers",
+                    "scope": f"linear scenario from {len(plans)} nonrepresentative issuers",
                     "structurally_valid_companyfacts_members_basis": universe,
                     "database_growth_including_indexes_and_metadata_bytes": round(
                         growth * universe / len(plans)
@@ -1018,7 +1065,7 @@ def run_import(
         )
 
 
-def execute_or_preflight(args, issuers, code, progress):
+def execute_or_preflight(args, scope, code, progress):
     started = time.monotonic()
     layout_raw, _ = bulk.read_metadata(args.layout)
     layout = bulk.Layout.load(args.layout)
@@ -1034,9 +1081,9 @@ def execute_or_preflight(args, issuers, code, progress):
         ),
         "ISOLATED_RESEARCH_LAYOUT_REQUIRED",
     )
-    admissions = load_admission(args.admission, args.admission_sha256, issuers, layout)
+    admissions = load_admission(args.admission, args.admission_sha256, scope, layout)
     external, bootstrap_manifest = bootstrap_target(layout, args.target)
-    source, paths, exclusions = source_inputs(layout, issuers)
+    source, paths, exclusions = source_inputs(layout, scope)
     db = Database(args.target)
     lineage = external["lineage"]
     run = layout.paths["import_artifacts"] / f"f01-pilot-{lineage['dataset_id']}"
@@ -1049,7 +1096,7 @@ def execute_or_preflight(args, issuers, code, progress):
         verified = bulk.verify_generation(layout, GENERATION, SOURCE_SHA)
         require(verified["status"] == bulk.REVIEWED_STATUS, "VERIFIED_BULK_ARCHIVES_REQUIRED")
         plans = issuer_plans(
-            paths, exclusions, source, issuers, admissions, args.admission_sha256, code
+            paths, exclusions, source, scope.active, admissions, args.admission_sha256, code
         )
         requests = [plan.request for plan in plans]
         target_info = os.fstat(pins["work"].fileno())
@@ -1061,11 +1108,17 @@ def execute_or_preflight(args, issuers, code, progress):
             "target": str(db.path),
             "target_file_identity": [target_info.st_dev, target_info.st_ino],
             "bootstrap_manifest_sha256": sha(bootstrap_manifest),
+            "bootstrap_code_fingerprint": lineage["code_fingerprint"],
             "bootstrap_database_sha256": external["database_sha256_at_bootstrap"],
             "schema_fingerprint": external["schema_fingerprint"],
             "candidate": code,
             "manifest_sha256": SOURCE_SHA,
             "pilot_spec_sha256": PILOT_SHA,
+            "source_pilot_spec_sha256": SOURCE_PILOT_SHA,
+            "active_issuers": [
+                {"symbol": item["symbol"], "cik": item["cik"]} for item in scope.active
+            ],
+            "excluded_issuers": scope.excluded,
             "layout_sha256": sha(layout_raw),
             "admission_sha256": args.admission_sha256,
             "requests": [[request.request_id, request.input_hash] for request in requests],
@@ -1105,6 +1158,8 @@ def execute_or_preflight(args, issuers, code, progress):
             "binding": binding,
             "volumes": capacities,
             "already_committed": previous,
+            "expected_receipts": len(requests),
+            "excluded_issuers": scope.excluded,
             "requires_resume": bulk.exists(run),
             "issuers": [item.stats | {"excluded_by_reason": item.exclusions} for item in plans],
             "historical_pit_qualified": False,
@@ -1142,16 +1197,16 @@ def main(argv=None):
         print(line, file=sys.stderr, flush=True)
 
     try:
-        issuers = pilot_spec()
+        scope = pilot_spec()
         if args.admission_template:
-            print(bulk.json_bytes(admission_template(issuers)).decode(), end="")
+            print(bulk.json_bytes(admission_template(scope)).decode(), end="")
             return 0
         code = code_binding()
         require(
             not args.expect_code_fingerprint or args.expect_code_fingerprint == code["fingerprint"],
             "CANDIDATE_CODE_FINGERPRINT_MISMATCH",
         )
-        report = execute_or_preflight(args, issuers, code, progress)
+        report = execute_or_preflight(args, scope, code, progress)
         print(bulk.json_bytes(report).decode(), end="")
         return 0
     except (ValueError, KeyError, StopIteration, TypeError, zipfile.BadZipFile) as error:

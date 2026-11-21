@@ -16,6 +16,7 @@ from trading_system.data.sec_persistence import CanonicalSecPersistence  # noqa:
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows canonical path pins")
 CODE = {"head": "fixture", "fingerprint": "a" * 64}
+BOOTSTRAP_CODE = "b" * 64
 
 
 def sql(target, statement, args=()):
@@ -54,11 +55,12 @@ def fixture(tmp_path, monkeypatch):
         target,
         manifest=manifest,
         manifest_sha256=pilot.sha(manifest),
-        expected_code_fingerprint=CODE["fingerprint"],
-        verify_code=lambda: CODE["fingerprint"],
+        expected_code_fingerprint=BOOTSTRAP_CODE,
+        verify_code=lambda: BOOTSTRAP_CODE,
         authorized=True,
     )
-    issuers = pilot.pilot_spec()
+    scope = pilot.pilot_spec()
+    issuers = scope.active
     originals = roots["originals"] / pilot.GENERATION
     originals.mkdir()
     payloads = {"companyfacts": {}, "submissions": {}}
@@ -118,11 +120,15 @@ def fixture(tmp_path, monkeypatch):
         }
     # Archive contains extra issuers/members; selected-name reads must leave them untouched.
     payloads["companyfacts"]["CIK0000000001.json"] = {}
+    for exclusion in scope.excluded:
+        for cik in exclusion["ciks"]:
+            for members in payloads.values():
+                members[f"CIK{cik}.json"] = {"excluded_fixture": True}
     source = {
         "contract": pilot.bulk.MANIFEST_CONTRACT,
         "generation": pilot.GENERATION,
         "quality": pilot.bulk.QUALITY,
-        "reviewed_census": {"pilot_spec_sha256": pilot.PILOT_SHA},
+        "reviewed_census": {"pilot_spec_sha256": pilot.SOURCE_PILOT_SHA},
         "qualified_research_issuers": [],
         "trading_universe_qualified": False,
         "archives": {},
@@ -135,7 +141,7 @@ def fixture(tmp_path, monkeypatch):
                     for n in pilot.bulk.URLS
                 },
             }
-            for item in issuers
+            for item in scope.source_issuers
         ],
     }
     for name, members in payloads.items():
@@ -182,7 +188,7 @@ def fixture(tmp_path, monkeypatch):
         return {"status": pilot.bulk.REVIEWED_STATUS}
 
     monkeypatch.setattr(pilot.bulk, "verify_generation", verify)
-    admission = pilot.admission_template(issuers)
+    admission = pilot.admission_template(scope)
     admission["reviewer"] = "synthetic independent reviewer"
     for cik, entry in admission["issuers"].items():
         entry["identity_decision"] = "ADMIT_RESEARCH"
@@ -228,22 +234,46 @@ def fixture(tmp_path, monkeypatch):
     return target, roots, issuers, boot, source, bind_source, admission, args
 
 
-def test_zip_pilot_import_and_idempotent_replay(fixture, capsys):
+def test_zip_pilot_import_and_idempotent_replay(fixture, capsys, monkeypatch):
     target, _, issuers, boot, _, _, _, args = fixture
+    seen = []
+    read_member = pilot.zip_member
+
+    def track(archive, name, endpoint, excluded):
+        seen.append(name)
+        return read_member(archive, name, endpoint, excluded)
+
+    monkeypatch.setattr(pilot, "zip_member", track)
     launch = args()
     assert pilot.main(launch) == 0
     preview = json.loads(capsys.readouterr().out)
     assert preview["status"] == "PREFLIGHT_ONLY" and preview["already_committed"] == 0
+    assert preview["expected_receipts"] == 7
+    assert preview["binding"]["bootstrap_code_fingerprint"] == BOOTSTRAP_CODE
     assert pilot.file_sha(target) == boot["database_sha256_at_bootstrap"]
     flags = ["--execute", "--authorize-research-import"]
     assert pilot.main([*launch, *flags]) == 0
     result = json.loads(capsys.readouterr().out)
     report_path = Path(result["report"])
     report = json.loads(report_path.read_bytes())
-    assert result["status"] == pilot.IMPORTED and report["dataset_version"] == 9
+    assert result["status"] == pilot.IMPORTED and report["dataset_version"] == 8
+    assert report["expected_receipts"] == report["confirmed_receipts"] == 7
+    assert {item["symbol"]: item["status"] for item in report["excluded_issuers"]} == {
+        "BAC": "BLOCKED_UNRESOLVED_REPORTING_ENTITY",
+        "JSM": "BLOCKED_IDENTITY_CONFLICT",
+    }
     assert not report["historical_pit_qualified"] and not report["trading_universe_qualified"]
     assert sorted(report["artifact_sha256"]) == sorted([pilot.STATS, pilot.AUDIT, pilot.QUARANTINE])
-    assert sql(target, "SELECT COUNT(*) FROM companies") == [(8,)]
+    assert set(sql(target, "SELECT symbol,cik FROM companies")) == {
+        (item["symbol"], item["cik"]) for item in issuers
+    }
+    assert sql(target, "SELECT COUNT(*) FROM ingestion_receipt") == [(7,)]
+    assert sql(target, "SELECT DISTINCT cik FROM canonical_fact ORDER BY cik") == [
+        (item["cik"],) for item in issuers
+    ]
+    assert set(sql(target, "SELECT DISTINCT symbol FROM source_occurrence")) == {
+        (item["symbol"],) for item in issuers
+    }
     assert sql(target, "SELECT COUNT(*) FROM sync_state WHERE source='dataset'") == [(0,)]
     first = issuers[0]["cik"]
     cash = sql(target, "SELECT value FROM canonical_fact WHERE cik=? AND metric='cash'", (first,))
@@ -264,10 +294,11 @@ def test_zip_pilot_import_and_idempotent_replay(fixture, capsys):
     assert pilot.main([*launch, *flags, "--resume"]) == 0
     assert json.loads(capsys.readouterr().out)["existing_result"] is True
     assert pilot.file_sha(target) == before and report_path.read_bytes() == original_report
+    assert not {"CIK0000070858.json", "CIK0001593538.json", "CIK0002152623.json"}.intersection(seen)
 
 
 def test_receipt_resume_after_commit_before_success_report(fixture, monkeypatch, capsys):
-    target, _, _, _, _, _, _, args = fixture
+    target, roots, _, _, _, _, _, args = fixture
     launch = [*args(), "--execute", "--authorize-research-import"]
     commit = CanonicalSecPersistence.persist
 
@@ -281,22 +312,39 @@ def test_receipt_resume_after_commit_before_success_report(fixture, monkeypatch,
         assert pilot.main(launch) == 130
     assert sql(target, "SELECT COUNT(*) FROM ingestion_receipt") == [(1,)]
     capsys.readouterr()
+    intent = next(roots["import_artifacts"].glob("f01-pilot-*/binding.json"))
+    valid_intent = intent.read_bytes()
+    bound = json.loads(valid_intent)
+    intent.write_bytes(pilot.bulk.json_bytes(bound | {"pilot_spec_sha256": pilot.SOURCE_PILOT_SHA}))
+    before = pilot.file_sha(target)
+    assert pilot.main([*launch, "--resume"]) == 3
+    assert "PILOT_RESUME_BINDING_MISMATCH" in capsys.readouterr().err
+    assert pilot.file_sha(target) == before
+    intent.write_bytes(valid_intent)
     assert pilot.main([*launch, "--resume"]) == 0
     result = json.loads(capsys.readouterr().out)
     report = json.loads(Path(result["report"]).read_bytes())
     assert report["issuers"][0]["replayed"] is True
     assert report["resource_samples"]["retained_incomplete_request_archive_bytes"] == 18
-    assert sql(target, "SELECT COUNT(*) FROM ingestion_receipt") == [(8,)]
-    assert sql(target, "SELECT current_version FROM fact_contract") == [(9,)]
+    assert sql(target, "SELECT COUNT(*) FROM ingestion_receipt") == [(7,)]
+    assert sql(target, "SELECT current_version FROM fact_contract") == [(8,)]
 
 
-@pytest.mark.parametrize("fault", ["admission", "quarantine", "cik"])
+@pytest.mark.parametrize("fault", ["admission", "membership", "scope", "quarantine", "cik"])
 def test_source_scope_and_admission_fail_before_writes(fixture, capsys, fault):
     target, _, issuers, boot, source, bind_source, admission, args = fixture
     item = issuers[0]
     expected = "RESEARCH_IDENTITY"
     if fault == "admission":
         admission["issuers"][item["cik"]]["identity_decision"] = "PENDING"
+    elif fault == "membership":
+        admission["issuers"][item["cik"]]["memberships"]["us-gaap"].update(
+            decision="PENDING", canonical_anchor=False
+        )
+        expected = "EXPLICIT_RESEARCH_CANONICAL_ANCHOR_REQUIRED"
+    elif fault == "scope":
+        admission["issuers"]["0000070858"] = {"symbol": "BAC"}
+        expected = "ADMISSION_PLAN_BINDING_MISMATCH"
     elif fault == "quarantine":
         entry = source["archives"]["companyfacts"]["integrity"]
         entry["excluded_members"].append(

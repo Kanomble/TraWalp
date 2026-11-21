@@ -1,0 +1,39 @@
+{
+  "contract": "F01_SEC_BULK_PILOT_SPEC_V2",
+  "scope": "RESEARCH_ONLY",
+  "source_spec": {
+    "path": "docs/f01_sec_bulk_pilot_spec.json",
+    "sha256": "9e7fa2b90c1b302228d4c0b12bfa75b7b910630971bd6a690dd00d134d7b6e37"
+  },
+  "active_issuers": [
+    {"symbol": "AAPL", "cik": "0000320193"},
+    {"symbol": "ACN", "cik": "0001467373"},
+    {"symbol": "CAT", "cik": "0000018230"},
+    {"symbol": "COST", "cik": "0000909832"},
+    {"symbol": "LLY", "cik": "0000059478"},
+    {"symbol": "MSFT", "cik": "0000789019"},
+    {"symbol": "NVDA", "cik": "0001045810"}
+  ],
+  "excluded_issuers": [
+    {
+      "symbol": "BAC",
+      "ciks": ["0000070858"],
+      "status": "BLOCKED_UNRESOLVED_REPORTING_ENTITY",
+      "disposition": "EXCLUDE_FROM_PILOT_IMPORT",
+      "evidence": {
+        "path": "reports/f01_bac_reporting_entity_resolution_audit.md",
+        "sha256": "3627f9f1fa8de33e2caac9b44784daddfaeaf9370faf9c27f66b3417244758b4"
+      }
+    },
+    {
+      "symbol": "JSM",
+      "ciks": ["0001593538", "0002152623"],
+      "status": "BLOCKED_IDENTITY_CONFLICT",
+      "disposition": "EXCLUDE_FROM_PILOT_IMPORT",
+      "evidence": {
+        "path": "reports/f01_acceptance_contract_resolution_audit.md",
+        "sha256": "213cc8d3fc0ee3d594074790f4525c3ddf4cf0ad566d2eefa9dc366baa591053"
+      }
+    }
+  ]
+}
