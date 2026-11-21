@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
@@ -241,6 +242,13 @@ def ttm_value(
     quarters = discrete_quarters(facts, metric, as_of)
     if end_on_or_before:
         quarters = [quarter for quarter in quarters if quarter.period_end <= end_on_or_before]
+    return ttm_from_quarters(quarters)
+
+
+def ttm_from_quarters(
+    quarters: list[QuarterlyValue],
+) -> tuple[Decimal | None, date | None, date | None]:
+    """Apply the four-quarter and gap checks to an economically ordered series."""
     if not quarters:
         return None, None, None
     # Never mix units; use the unit of the most recent observation.
@@ -268,12 +276,13 @@ def build_ttm(
     *,
     end_on_or_before: date | None = None,
     end_by_metric: dict[str, date] | None = None,
+    flow_ttm: Callable[..., tuple[Decimal | None, date | None, date | None]] = ttm_value,
 ) -> TTMFundamentals:
     values: dict[str, Decimal | None] = {}
     ends: dict[str, date] = {}
     filed_dates: dict[str, date] = {}
     for metric in FLOW_METRICS:
-        value, period_end, filed = ttm_value(
+        value, period_end, filed = flow_ttm(
             facts,
             metric,
             as_of,
