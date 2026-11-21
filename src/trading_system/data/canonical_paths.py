@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 @contextmanager
-def pinned_files(paths):
+def pinned_files(paths, *, directories=()):
     if os.name != "nt":
         raise RuntimeError("MANDATORY_PATH_PINNING_UNSUPPORTED_PLATFORM")
     import ctypes
@@ -47,6 +47,9 @@ def pinned_files(paths):
     initial = {k: (p.stat().st_dev, p.stat().st_ino) for k, p in absolute.items()}
     with ExitStack() as stack:
         parents = {p for f in absolute.values() for p in f.parents}
+        for directory in map(Path, directories):
+            parents.add(directory)
+            parents.update(directory.parents)
         for parent in sorted(parents, key=lambda p: len(p.parts)):
             # FILE_FLAG_BACKUP_SEMANTICS; share read/write, never delete.
             h = handle(parent, 0, 3, 0x02000000)

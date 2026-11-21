@@ -315,8 +315,8 @@ def import_snapshot_rows(c, rows, *, source_hash):
         raise ValueError("UNRESOLVED_CONTENT_CONFLICT:" + json.dumps(conflicts))
 
 
-def publish_snapshot(c, *, dataset_id, source_hash):
-    """Called only after complete import; reader indexes and views publish atomically."""
+def _publish_readers(c):
+    """Publish the V1 Reader schema inside the caller's transaction."""
     c.execute("CREATE INDEX occurrence_membership ON source_occurrence(fact_id,symbol,taxonomy)")
     c.execute(
         "CREATE INDEX occurrence_legacy_reader ON source_occurrence(symbol,fact_id) "
@@ -349,6 +349,11 @@ def publish_snapshot(c, *, dataset_id, source_hash):
         )
     c.execute("CREATE VIEW fundamental_facts AS SELECT * FROM legacy_occ_v1")
     c.execute("UPDATE fact_contract SET schema_hash=?", (schema_fingerprint(c),))
+
+
+def publish_snapshot(c, *, dataset_id, source_hash):
+    """Called only after complete import; reader indexes and views publish atomically."""
+    _publish_readers(c)
     _insert(
         c,
         "ingestion_receipt",

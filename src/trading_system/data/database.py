@@ -24,39 +24,8 @@ from trading_system.models.market_data import (
     validate_market_bar,
 )
 
-
-class Database:
-    def __init__(self, path: str | Path) -> None:
-        self.path = Path(path)
-
-    @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(self.path)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        try:
-            _require_complete_migration(connection)
-            yield connection
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
-
-    def initialize(self) -> None:
-        with self.connect() as connection:
-            if connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE name='fact_contract'"
-            ).fetchone():
-                from trading_system.data.canonical_facts import require_contract
-
-                require_contract(connection)
-                return
-            connection.execute("PRAGMA journal_mode = WAL")
-            connection.executescript(
-                """
+# Both empty schemas share these declarations. Keep the Legacy declaration order.
+_INITIAL_SCHEMA_START = """
                 CREATE TABLE IF NOT EXISTS assets (
                     symbol TEXT PRIMARY KEY, name TEXT NOT NULL, exchange TEXT,
                     tradable INTEGER NOT NULL, fractionable INTEGER NOT NULL,
@@ -67,6 +36,8 @@ class Database:
                     cik TEXT PRIMARY KEY, symbol TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
                     sic TEXT, sic_description TEXT, updated_at TEXT NOT NULL
                 );
+"""
+_LEGACY_FACT_SCHEMA = """
                 CREATE TABLE IF NOT EXISTS fundamental_facts (
                     id INTEGER PRIMARY KEY,
                     cik TEXT NOT NULL, symbol TEXT NOT NULL, metric TEXT NOT NULL,
@@ -80,6 +51,8 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS ix_facts_pit
                     ON fundamental_facts(symbol, metric, filed, period_end);
+"""
+_INITIAL_SCHEMA_END = """
                 CREATE TABLE IF NOT EXISTS bars (
                     symbol TEXT NOT NULL, timeframe TEXT NOT NULL, timestamp TEXT NOT NULL,
                     open TEXT NOT NULL, high TEXT NOT NULL, low TEXT NOT NULL,
@@ -141,7 +114,44 @@ class Database:
                     PRIMARY KEY(provider,event_key)
                 );
                 """
-            )
+
+
+def _initial_schema(*, legacy_facts: bool) -> str:
+    facts = _LEGACY_FACT_SCHEMA if legacy_facts else ""
+    return _INITIAL_SCHEMA_START + facts + _INITIAL_SCHEMA_END
+
+
+class Database:
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+
+    @contextmanager
+    def connect(self) -> Iterator[sqlite3.Connection]:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self.path)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        try:
+            _require_complete_migration(connection)
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def initialize(self) -> None:
+        with self.connect() as connection:
+            if connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='fact_contract'"
+            ).fetchone():
+                from trading_system.data.canonical_facts import require_contract
+
+                require_contract(connection)
+                return
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.executescript(_initial_schema(legacy_facts=True))
             if "asset_class" not in {
                 row["name"] for row in connection.execute("PRAGMA table_info(assets)")
             }:
