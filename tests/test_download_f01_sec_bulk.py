@@ -36,7 +36,7 @@ def zipped(entries):
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, "w", zipfile.ZIP_STORED) as archive:
         for name, obj in entries:
-            archive.writestr(name, bulk.json_bytes(obj))
+            archive.writestr(name, obj if isinstance(obj, bytes) else bulk.json_bytes(obj))
     return stream.getvalue()
 
 
@@ -538,6 +538,147 @@ def test_census_reports_archive_damage_and_keeps_scanning_other_members(plan, mo
     assert company["categories"]["EMPTY_COMPANYFACTS"]["count"] == 1
     assert not company["categories"]["VALID"]["import_eligible"]
     assert report["archives"]["submissions"]["integrity"]["members_crc_verified"] == 2
+
+
+@pytest.mark.parametrize(
+    ("fault", "reason"),
+    [
+        ("none", None),
+        ("census", "REVIEWED_CENSUS_BINDING_MISMATCH"),
+        ("checkpoint", "CHECKPOINT_SHA256_MISMATCH"),
+        ("zip", "ARCHIVE_SHA256_MISMATCH"),
+        ("placeholder", "REVIEWED_NON_DATA_MEMBER_CONTENT_MISMATCH"),
+        ("extra-txt", "CENSUS_ARCHIVE_INTEGRITY_UNPROVEN"),
+        ("pilot", "CENSUS_PILOT_VALID_PRIMARY_REQUIRED"),
+    ],
+)
+def test_reviewed_finalization_only_publishes_bound_quarantine(
+    plan, monkeypatch, capsys, fault, reason
+):
+    layout_path, layout = plan
+    raw_spec = (bulk.REPO / "docs/f01_sec_bulk_pilot_spec.json").read_bytes()
+    issuers = json.loads(raw_spec)["issuers"]
+    facts, submissions = [], []
+    for issuer in issuers:
+        empty = fault == "pilot" and issuer["symbol"] == "AAPL"
+        facts.append(
+            (
+                issuer["companyfacts_member"],
+                {
+                    "cik": issuer["cik"],
+                    "facts": {} if empty else {"us-gaap": {}},
+                },
+            )
+        )
+        submissions.append(
+            (
+                issuer["submissions_member"],
+                {
+                    "cik": issuer["cik"],
+                    "filings": {"recent": {}, "files": []},
+                },
+            )
+        )
+    facts.extend(
+        [
+            ("CIK0000003521.json", {}),
+            ("CIK0000003522.json", {"cik": 3522, "facts": {}}),
+            ("CIK0000741313.json", {"entityName": "No CIK", "facts": {"dei": {}}}),
+        ]
+    )
+    placeholder = b"Different string" if fault == "placeholder" else bulk.NON_DATA_BYTES
+    submissions.append((bulk.NON_DATA_MEMBER, placeholder))
+    if fault == "extra-txt":
+        submissions.append(("extra.txt", b"Unknown"))
+    data = {"companyfacts": zipped(facts), "submissions": zipped(submissions)}
+    stage = staged_census_inputs(layout, monkeypatch, data)
+    census_path = Path(bulk.structure_census(layout, SLUG, progress=lambda _: None)["report"])
+    raw_census = census_path.read_bytes()
+    census_sha = hashlib.sha256(raw_census).hexdigest()
+    review = {
+        "contract": bulk.REVIEW_CONTRACT,
+        "generation": SLUG,
+        "census_sha256": census_sha,
+        "pilot_spec_sha256": hashlib.sha256(raw_spec).hexdigest(),
+        "archives": {
+            name: {
+                "bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "members": len(facts if name == "companyfacts" else submissions),
+                "checkpoint_sha256": hashlib.sha256(
+                    (stage / f"{name}.checkpoint.json").read_bytes()
+                ).hexdigest(),
+            }
+            for name, raw in data.items()
+        },
+        "companyfacts_quarantine_counts": {
+            "EMPTY_COMPANYFACTS": 1,
+            "EMPTY_FACTS": 1 + int(fault == "pilot"),
+            "MISSING_INTERNAL_CIK": 1,
+        },
+        "submissions_non_data_member": {
+            "member": bulk.NON_DATA_MEMBER,
+            "bytes": len(placeholder),
+            "sha256": hashlib.sha256(placeholder).hexdigest(),
+        },
+    }
+    policy = layout_path.with_name("review.json")
+    policy.write_bytes(bulk.json_bytes(review))
+    monkeypatch.setattr(bulk, "REVIEW_PATH", policy)
+    if fault == "census":
+        census_path.write_bytes(raw_census + b"\n")
+    elif fault == "checkpoint":
+        checkpoint = stage / "submissions.checkpoint.json"
+        checkpoint.write_bytes(checkpoint.read_bytes() + b"\n")
+    elif fault == "zip":
+        (stage / "publish/companyfacts.zip").write_bytes(b"x" + data["companyfacts"][1:])
+    args = [
+        "--layout",
+        str(layout_path),
+        "--finalize-offline",
+        "--generation",
+        SLUG,
+        "--reviewed-census",
+        str(census_path),
+        "--census-sha256",
+        census_sha,
+    ]
+    if reason:
+        assert bulk.main([*args, "--authorize-reviewed-publication"]) == 3
+        assert reason in capsys.readouterr().err
+        assert not list(layout.paths["originals"].iterdir())
+        return
+    with pytest.raises(SystemExit) as blocked:
+        bulk.main(args)
+    assert blocked.value.code == 2
+    capsys.readouterr()
+    assert bulk.main([*args, "--authorize-reviewed-publication"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "SEC_BULK_ARCHIVES_VERIFIED"
+    manifest = json.loads(Path(result["manifest"]).read_bytes())
+    assert (
+        manifest["qualified_research_issuers"] == [] and not manifest["trading_universe_qualified"]
+    )
+    assert all(
+        state["status"] == "STRUCTURE_CLEAR"
+        for issuer in manifest["pilot_structure"]
+        for state in issuer["endpoints"].values()
+    )
+    assert manifest["archives"]["submissions"]["integrity"]["excluded_members"] == [
+        {
+            "member": "placeholder.txt",
+            "classification": "NON_DATA_ARCHIVE_MEMBER",
+            "import_eligible": False,
+        },
+    ]
+    assert manifest["archives"]["companyfacts"]["integrity"]["excluded_member_count"] == 3
+    for name, raw in data.items():
+        assert (layout.paths["originals"] / SLUG / f"{name}.zip").read_bytes() == raw
+    assert bulk.verify_generation(layout, SLUG, result["manifest_sha256"])["status"] == (
+        "SEC_BULK_ARCHIVES_VERIFIED"
+    )
+    assert bulk.main([*args, "--authorize-reviewed-publication"]) == 3
+    assert "ORIGINAL_GENERATION_ALREADY_EXISTS" in capsys.readouterr().err
 
 
 def test_manifest_is_stable_and_records_distinct_upstream_observations(tmp_path):

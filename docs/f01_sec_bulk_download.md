@@ -203,6 +203,27 @@ Der Census selbst publiziert keine Archive. Der bestehende Finalisierer tolerier
 3. `CIK_MISMATCH`, `MISSING_FACTS`, `INVALID_PAYLOAD`, `INVALID_SUBMISSIONS`, `UNKNOWN_STRUCTURE` sowie jede Abweichung außerhalb der Allowlist bleiben blockiert. Ein fehlender interner CIK in Submissions bleibt blockiert.
 4. Der Pilot besteht nur bei belegter Integrität beider Archive und soweit alle acht CIKs im vorgesehenen Scope ohne Struktur- oder Coverage-Befund bleiben. Eine Abweichung braucht eine separate fachliche Entscheidung. Der später verwendete Importer muss das gebundene Quarantäneinventar ausschließen.
 
+### Geprüfte Generation pilot01-20261121-175840 offline finalisieren
+
+Für diese Generation bindet das [Review](f01_sec_bulk_finalization_review.json) den vorhandenen Census, beide abgeschlossenen Checkpoints, beide ZIPs und die Pilot-Spec. Die einzige Submissions-Ausnahme ist das exakte Root-Mitglied `placeholder.txt`. Es enthält 16 Bytes, den Text `Placeholder file`. Der Finalisierer liest und prüft diesen Member erneut. Die vollständigen CRC- und Strukturprüfungen des Census gelten über die erneut berechneten ZIP-SHA-256 für dieselben Archivbytes. Die drei geprüften Companyfacts-Quarantäneklassen und der Platzhalter bleiben in den ZIPs und sind einzeln im Manifest vom Import ausgeschlossen. Andere Generationen und abweichende Bytes werden mit dieser Review-Regel abgewiesen.
+
+```powershell
+Set-Location 'G:\GitHub\TraWalp'
+if ((git branch --show-current) -ne 'SEC-integration') { throw 'Falscher Branch' }
+$f01FinalizeArgs = @(
+    '--layout', 'G:\TraWalpResearch\import-artifacts\f01-sec-bulk-layout-v1.json'
+    '--finalize-offline'
+    '--generation', 'pilot01-20261121-175840'
+    '--reviewed-census', 'G:\TraWalpResearch\import-artifacts\pilot01-20261121-175840-structure-census\f01_sec_bulk_structure_census.json'
+    '--census-sha256', '22b78de7a32103149e159bb9452039f3c7e8f07ceb4ab01fd93b4726b1dd7011'
+    '--authorize-reviewed-publication'
+)
+& .\.venv\Scripts\python.exe -B .\scripts\download_f01_sec_bulk.py @f01FinalizeArgs
+if ($LASTEXITCODE -ne 0) { throw 'Geprüfte Offline-Finalisierung blockiert' }
+```
+
+Erfolg wird als `SEC_BULK_ARCHIVES_VERIFIED` zusammen mit dem Manifestpfad und Manifest-SHA-256 ausgegeben. Die Veröffentlichung in `G:\TraWalpResearch\sec-originals\pilot01-20261121-175840` erfolgt atomar. Census, Checkpoints und Review für eine spätere `--verify`-Prüfung aufbewahren. Der Ergebnisstatus trägt keine Research-, PIT- oder Trading-Universe-Freigabe. [Finalisierungs-Audit](../reports/f01_sec_bulk_finalization_audit.md)
+
 ## Pilot und historische Evidenz
 
 Die [Pilot-Spec](f01_sec_bulk_pilot_spec.json) enthält acht deterministische Emittenten aus mehreren Sektoren und Fiskalkalendern. ACN/LLY haben lokale Vergleichs-Payloads. Die LLY-Accession `0000950123-10-070596` vom 02.08.2010 ist ein belegter 10-Q/A-Fall außerhalb des angestrebten Zeitfensters. JSM ist eine getrennte gesperrte Identity-Negativprobe mit zwei CIKs. Eine historische Security-Epoche oder Membership muss unabhängig geprüft werden. Je Emittent die primären Members und alle referenzierten historischen Submissions-Members direkt aus dem ZIP lesen. Für die spätere DB den genauen Scope erst nach Fact-/Accession- und Kapazitätsprüfung festlegen. [Lokale G5-Evidenz](../reports/f01_g5_input_evidence_preparation_audit.md) · [G4-Identity-Census](../reports/f01_acceptance_contract_resolution_audit.md)

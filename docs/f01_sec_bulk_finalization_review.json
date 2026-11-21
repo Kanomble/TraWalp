@@ -1,0 +1,30 @@
+{
+  "contract": "F01_SEC_BULK_FINALIZATION_REVIEW_V1",
+  "generation": "pilot01-20261121-175840",
+  "census_sha256": "22b78de7a32103149e159bb9452039f3c7e8f07ceb4ab01fd93b4726b1dd7011",
+  "pilot_spec_sha256": "9e7fa2b90c1b302228d4c0b12bfa75b7b910630971bd6a690dd00d134d7b6e37",
+  "archives": {
+    "companyfacts": {
+      "bytes": 1428910853,
+      "sha256": "5b060af51a78ed1d91837a39b296232f0377a013d879fdf7567a9156571e44b5",
+      "checkpoint_sha256": "c203ce6523ece5efcb37dd716e167901ee794b45e65fe2eeed138116c5b8b6d3",
+      "members": 20609
+    },
+    "submissions": {
+      "bytes": 1577451757,
+      "sha256": "399ad6356833045b3687152e80a87055131a65addbb91099a66bec926fb5e044",
+      "checkpoint_sha256": "c0c9c6a2bf087c31ebbf275bfecc358c05a0230ac270a8f6b43ea0cd47b8cfbd",
+      "members": 999458
+    }
+  },
+  "companyfacts_quarantine_counts": {
+    "EMPTY_COMPANYFACTS": 62,
+    "EMPTY_FACTS": 2403,
+    "MISSING_INTERNAL_CIK": 8
+  },
+  "submissions_non_data_member": {
+    "member": "placeholder.txt",
+    "bytes": 16,
+    "sha256": "34ce53d7a045adf69febfc1b1e864ca1fb0733b7230d35ef84c5f310f77d46fd"
+  }
+}

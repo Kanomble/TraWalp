@@ -39,6 +39,11 @@ MANIFEST_NAME = "f01_sec_bulk_source_manifest.json"
 MANIFEST_CONTRACT = "F01_SEC_BULK_SOURCE_MANIFEST_V1"
 CENSUS_NAME = "f01_sec_bulk_structure_census.json"
 CENSUS_CONTRACT = "F01_SEC_BULK_STRUCTURE_CENSUS_V1"
+REVIEW_CONTRACT = "F01_SEC_BULK_FINALIZATION_REVIEW_V1"
+REVIEW_PATH = REPO / "docs" / "f01_sec_bulk_finalization_review.json"
+REVIEWED_STATUS = "SEC_BULK_ARCHIVES_VERIFIED"
+NON_DATA_MEMBER = "placeholder.txt"
+NON_DATA_BYTES = b"Placeholder file"
 CENSUS_CATEGORIES = (
     "VALID",
     "EMPTY_COMPANYFACTS",
@@ -68,6 +73,7 @@ BLOCK_SIZE = 1024**2
 MAX_MEMBER_BYTES = 128 * 1024**2
 MAX_METADATA_BYTES = 256 * 1024
 MAX_MANIFEST_BYTES = 8 * 1024**2
+MAX_REVIEWED_CENSUS_BYTES = 64 * 1024**2
 SHA256 = re.compile(r"[0-9a-f]{64}")
 GENERATION = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 MEMBER_NAME = re.compile(r"CIK([0-9]{10})(?:-submissions-([0-9]{3,}))?\.json")
@@ -524,9 +530,13 @@ def save_checkpoint(path, checkpoint):
     next_path.replace(path)
 
 
-def read_checkpoint(path, checkpoint_path, name, *, check_file_size=True):
+def read_checkpoint(path, checkpoint_path, name, *, check_file_size=True, expected_sha=None):
     require(exists(path) and exists(checkpoint_path), f"PARTIAL_STATE_AMBIGUOUS: {name}")
-    _, state = read_metadata(checkpoint_path)
+    raw, state = read_metadata(checkpoint_path)
+    if expected_sha is not None:
+        require(
+            hashlib.sha256(raw).hexdigest() == expected_sha, f"CHECKPOINT_SHA256_MISMATCH: {name}"
+        )
     require(isinstance(state, dict), f"PARTIAL_STATE_INVALID: {name}")
     count = state.get("received_bytes")
     total = state.get("archive_bytes")
@@ -710,7 +720,12 @@ def publish_generation(generation, final, publish, paths, states, progress):
         validations[name] = validate_archive(
             path, name, states[name]["archive_bytes"], states[name]["prefix_sha256"]
         )
-    manifest = json_bytes(source_manifest(generation, final, states, validations))
+    manifest = source_manifest(generation, final, states, validations)
+    return publish_source_manifest(final, publish, paths, manifest, status="PUBLISHED")
+
+
+def publish_source_manifest(final, publish, paths, source, *, status):
+    manifest = json_bytes(source)
     require(len(manifest) <= MAX_MANIFEST_BYTES, "SOURCE_MANIFEST_TOO_LARGE")
     manifest_path = publish / MANIFEST_NAME
     if exists(manifest_path):
@@ -727,14 +742,16 @@ def publish_generation(generation, final, publish, paths, states, progress):
     # Windows same-volume rename fails if a competing process created the destination.
     publish.rename(final)
     return {
-        "status": "PUBLISHED",
+        "status": status,
         "manifest": str(final / MANIFEST_NAME),
         "manifest_sha256": hashlib.sha256(manifest).hexdigest(),
     }
 
 
-def complete_download_state(path, checkpoint, name, *, check_file_size=True):
-    state = read_checkpoint(path, checkpoint, name, check_file_size=check_file_size)
+def complete_download_state(path, checkpoint, name, *, check_file_size=True, expected_sha=None):
+    state = read_checkpoint(
+        path, checkpoint, name, check_file_size=check_file_size, expected_sha=expected_sha
+    )
     total = state["archive_bytes"]
     require(
         state["complete"] and state["received_bytes"] == total and state["segments"],
@@ -1050,7 +1067,265 @@ def structure_census(layout, generation, *, progress):
     return {"status": status, "report": str(output)}
 
 
-def finalize_offline(layout, generation, *, progress):
+def category_names(category):
+    return (member for group in category["key_groups"] for member in group["members"])
+
+
+def reviewed_exclusions(name, census, review):
+    binding = review["archives"][name]
+    integrity = census["integrity"]
+    expected_issues = (
+        [{"member": NON_DATA_MEMBER, "reason": "UNSAFE_OR_UNEXPECTED_MEMBER"}]
+        if name == "submissions"
+        else []
+    )
+    require(
+        integrity["issues"] == expected_issues
+        and integrity["status"] == ("BLOCKED" if expected_issues else "VERIFIED")
+        and integrity["members_scanned"] == integrity["members_crc_verified"] == binding["members"]
+        and integrity["observed_bytes"] == integrity["expected_bytes"] == binding["bytes"]
+        and integrity["observed_sha256"] == integrity["expected_sha256"] == binding["sha256"],
+        f"CENSUS_ARCHIVE_INTEGRITY_UNPROVEN: {name}",
+    )
+    categories = census["categories"]
+    counts = (
+        review["companyfacts_quarantine_counts"]
+        if name == "companyfacts"
+        else {"INVALID_PAYLOAD": 1, "UNKNOWN_STRUCTURE": 1}
+    )
+    require(
+        set(categories) == set(CENSUS_CATEGORIES)
+        and (name != "companyfacts" or set(counts) == COMPANYFACTS_REVIEWABLE),
+        f"CENSUS_CATEGORY_CONTRACT: {name}",
+    )
+    excluded = {}
+    for category, summary in categories.items():
+        count = sum(len(group["members"]) for group in summary["key_groups"])
+        require(
+            summary["endpoint"] == name and summary["count"] == count,
+            f"CENSUS_CATEGORY_COUNT_MISMATCH: {name}:{category}",
+        )
+        if category == "VALID":
+            continue
+        require(
+            count == counts.get(category, 0) and summary["import_eligible"] is False,
+            f"CENSUS_UNAPPROVED_FINDING: {name}:{category}",
+        )
+        if name == "submissions":
+            if count:
+                require(
+                    summary["key_groups"] == [{"keys": None, "members": [NON_DATA_MEMBER]}],
+                    "SUBMISSIONS_EXCEPTION_MUST_BE_EXACT_PLACEHOLDER",
+                )
+                excluded[NON_DATA_MEMBER] = "NON_DATA_ARCHIVE_MEMBER"
+            continue
+        for group in summary["key_groups"]:
+            keys = group["keys"]
+            expected_keys = (
+                keys == []
+                if category == "EMPTY_COMPANYFACTS"
+                else isinstance(keys, list)
+                and "facts" in keys
+                and ("cik" in keys) == (category == "EMPTY_FACTS")
+            )
+            require(expected_keys, f"CENSUS_QUARANTINE_KEYS_MISMATCH: {category}")
+            for member in group["members"]:
+                require(
+                    re.fullmatch(r"CIK[0-9]{10}\.json", member) and member not in excluded,
+                    f"CENSUS_UNSAFE_OR_DUPLICATE_EXCLUSION: {member}",
+                )
+                excluded[member] = category
+    valid = categories["VALID"]["count"]
+    require(
+        valid > 0 and valid + len(excluded) == binding["members"],
+        f"CENSUS_MEMBER_PARTITION_MISMATCH: {name}",
+    )
+    summary = {
+        "status": "VERIFIED",
+        "members": binding["members"],
+        "structurally_valid_members": valid,
+        "excluded_member_count": len(excluded),
+        "exclusion_counts": dict(sorted(Counter(excluded.values()).items())),
+        "excluded_members": [
+            {"member": member, "classification": category, "import_eligible": False}
+            for member, category in sorted(excluded.items())
+        ],
+    }
+    if name == "companyfacts":
+        summary["empty_companyfacts"] = {
+            "classification": "EMPTY_COMPANYFACTS",
+            "count": counts["EMPTY_COMPANYFACTS"],
+            "members": [
+                member for member, c in sorted(excluded.items()) if c == "EMPTY_COMPANYFACTS"
+            ],
+            "import_eligible": False,
+        }
+    return summary
+
+
+def reviewed_pilot(census, spec_sha):
+    raw, spec = read_metadata(REPO / "docs" / "f01_sec_bulk_pilot_spec.json")
+    require(
+        hashlib.sha256(raw).hexdigest() == census["pilot"]["spec_sha256"] == spec_sha
+        and spec["contract"] == "F01_SEC_BULK_PILOT_SPEC_V1"
+        and len(spec["issuers"]) == spec["core_count"] == len(census["pilot"]["issuers"]) == 8
+        and len({issuer["cik"] for issuer in spec["issuers"]}) == 8,
+        "CENSUS_PILOT_SPEC_MISMATCH",
+    )
+    primary = {f"CIK{issuer['cik']}.json" for issuer in spec["issuers"]}
+    for endpoint in URLS:
+        categories = census["archives"][endpoint]["categories"]
+        valid = Counter(
+            member for member in category_names(categories["VALID"]) if member in primary
+        )
+        require(
+            set(valid) == primary and all(n == 1 for n in valid.values()),
+            f"CENSUS_PILOT_VALID_PRIMARY_REQUIRED: {endpoint}",
+        )
+        require(
+            not any(
+                primary.intersection(category_names(item))
+                for cat, item in categories.items()
+                if cat != "VALID"
+            ),
+            f"CENSUS_PILOT_QUARANTINE: {endpoint}",
+        )
+    pilot = []
+    for expected, actual in zip(spec["issuers"], census["pilot"]["issuers"], strict=True):
+        require(
+            actual["symbol"] == expected["symbol"]
+            and actual["cik"] == expected["cik"]
+            and set(actual["endpoints"]) == set(URLS),
+            "CENSUS_PILOT_IDENTITY_MISMATCH",
+        )
+        members = {}
+        for endpoint, record in actual["endpoints"].items():
+            filename = f"CIK{expected['cik']}.json"
+            require(
+                record["expected_primary"] == expected[f"{endpoint}_member"] == filename
+                and record["primary_present"] is True
+                and record["findings"] == []
+                and record["status"] == ("CLEAR" if endpoint == "companyfacts" else "UNDETERMINED"),
+                f"CENSUS_PILOT_BLOCKER: {expected['symbol']}:{endpoint}",
+            )
+            members[endpoint] = {"member": filename, "status": "STRUCTURE_CLEAR"}
+        pilot.append({"symbol": expected["symbol"], "cik": expected["cik"], "endpoints": members})
+    return pilot
+
+
+def rehash_reviewed_zip(name, path, source, non_data):
+    info = plain(path)
+    with pinned_files({name: path}) as pins:
+        stream = pins[name]
+        require(
+            os.path.samestat(info, os.fstat(stream.fileno())) and info.st_size == source["bytes"],
+            f"REVIEWED_ARCHIVE_SIZE_OR_IDENTITY_MISMATCH: {name}",
+        )
+        require(
+            hashlib.file_digest(stream, "sha256").hexdigest() == source["sha256"],
+            f"ARCHIVE_SHA256_MISMATCH: {name}",
+        )
+        if name == "submissions":
+            stream.seek(0)
+            try:
+                with zipfile.ZipFile(stream) as archive:
+                    member = archive.getinfo(NON_DATA_MEMBER)
+                    require(
+                        sum(item.orig_filename == NON_DATA_MEMBER for item in archive.infolist())
+                        == 1
+                        and member.orig_filename == NON_DATA_MEMBER
+                        and readable_member(member)
+                        and member.file_size == non_data["bytes"] == len(NON_DATA_BYTES),
+                        "REVIEWED_NON_DATA_MEMBER_STRUCTURE_MISMATCH",
+                    )
+                    content = read_zip_member(archive, member)
+            except (zipfile.BadZipFile, zlib.error, EOFError) as error:
+                raise Blocked("REVIEWED_NON_DATA_MEMBER_INTEGRITY_FAILED") from error
+            require(
+                content == NON_DATA_BYTES
+                and hashlib.sha256(content).hexdigest() == non_data["sha256"],
+                "REVIEWED_NON_DATA_MEMBER_CONTENT_MISMATCH",
+            )
+        final_info = os.fstat(stream.fileno())
+    require(
+        os.path.samestat(info, plain(path))
+        and (final_info.st_size, final_info.st_mtime_ns) == (info.st_size, info.st_mtime_ns),
+        f"ARCHIVE_CHANGED_DURING_REVIEWED_FINALIZATION: {name}",
+    )
+    return info
+
+
+def reviewed_source(layout, generation, final, paths, checkpoints, census_input, progress):
+    census_path, expected_sha = census_input
+    canonical_census_path = (
+        layout.paths["import_artifacts"] / f"{generation}-structure-census" / CENSUS_NAME
+    )
+    require(census_path == canonical_census_path, "REVIEWED_CENSUS_PATH_MISMATCH")
+    review_raw, review = read_metadata(REVIEW_PATH)
+    require(
+        review["contract"] == REVIEW_CONTRACT
+        and review["generation"] == generation
+        and review["census_sha256"] == expected_sha
+        and set(review["archives"]) == set(URLS)
+        and review["submissions_non_data_member"]["member"] == NON_DATA_MEMBER,
+        "REVIEWED_FINALIZATION_NOT_AUTHORIZED_FOR_EVIDENCE",
+    )
+    raw, census = read_metadata(census_path, max_bytes=MAX_REVIEWED_CENSUS_BYTES)
+    require(
+        hashlib.sha256(raw).hexdigest() == expected_sha
+        and census["contract"] == CENSUS_CONTRACT
+        and census["generation"] == generation
+        and census["publication_authorized"] is False
+        and census["import_authorized"] is False
+        and set(census["archives"]) == set(URLS),
+        "REVIEWED_CENSUS_BINDING_MISMATCH",
+    )
+    del raw
+    states, validations, identities = {}, {}, {}
+    for name, binding in review["archives"].items():
+        prior_path = checkpoints[name].parent / "publish" / f"{name}.zip"
+        require(
+            census["archives"][name]["path"] == str(prior_path)
+            and not exists(checkpoints[name].with_suffix(".next")),
+            f"CENSUS_STAGED_PATH_OR_CHECKPOINT_MISMATCH: {name}",
+        )
+        states[name] = complete_download_state(
+            paths[name], checkpoints[name], name, expected_sha=binding["checkpoint_sha256"]
+        )
+        require(
+            states[name]["archive_bytes"] == binding["bytes"]
+            and states[name]["prefix_sha256"] == binding["sha256"],
+            f"REVIEWED_CHECKPOINT_ARCHIVE_BINDING: {name}",
+        )
+        validations[name] = reviewed_exclusions(name, census["archives"][name], review)
+    pilot = reviewed_pilot(census, review["pilot_spec_sha256"])
+    del census
+    for name, binding in review["archives"].items():
+        progress(f"Verifying actual staged/archive SHA-256 against reviewed CRC census: {name}")
+        identities[name] = rehash_reviewed_zip(
+            name, paths[name], binding, review["submissions_non_data_member"]
+        )
+    manifest = source_manifest(generation, final, states, validations)
+    manifest.update(
+        reviewed_census={
+            "contract": REVIEW_CONTRACT,
+            "path": str(census_path),
+            "sha256": expected_sha,
+            "review_sha256": hashlib.sha256(review_raw).hexdigest(),
+            "pilot_spec_sha256": review["pilot_spec_sha256"],
+            "checkpoints_sha256": {
+                name: item["checkpoint_sha256"] for name, item in review["archives"].items()
+            },
+            "submissions_non_data_member": review["submissions_non_data_member"],
+        },
+        pilot_structure=pilot,
+        qualified_research_issuers=[],
+        trading_universe_qualified=False,
+    )
+    return manifest, identities
+
+
+def finalize_offline(layout, generation, *, progress, reviewed_census=None):
     require(os.name == "nt", "DOWNLOAD_PUBLICATION_REQUIRES_WINDOWS")
     final = layout.paths["originals"] / generation
     stage = layout.paths["temporary"] / f"{generation}.incomplete"
@@ -1062,6 +1337,21 @@ def finalize_offline(layout, generation, *, progress):
             plain(lock_path)
         with stage_lock(lock_path):
             publish, paths, checkpoints = staging_files(stage)
+            if reviewed_census is not None:
+                manifest, identities = reviewed_source(
+                    layout, generation, final, paths, checkpoints, reviewed_census, progress
+                )
+                for name, initial in identities.items():
+                    current = plain(paths[name])
+                    require(
+                        os.path.samestat(initial, current)
+                        and (initial.st_size, initial.st_mtime_ns)
+                        == (current.st_size, current.st_mtime_ns),
+                        f"ARCHIVE_CHANGED: {name}",
+                    )
+                return publish_source_manifest(
+                    final, publish, paths, manifest, status=REVIEWED_STATUS
+                )
             states = {
                 name: complete_download_state(path, checkpoints[name], name)
                 for name, path in paths.items()
@@ -1140,6 +1430,22 @@ def verify_generation(layout, generation, expected_manifest_sha):
         == {final / name for name in (MANIFEST_NAME, *(f"{n}.zip" for n in URLS))},
         "PUBLISHED_GENERATION_LAYOUT_MISMATCH",
     )
+    if "reviewed_census" in manifest:
+        stage = directory(layout.paths["temporary"] / f"{generation}.incomplete")
+        paths = {name: final / f"{name}.zip" for name in URLS}
+        checkpoints = {name: stage / f"{name}.checkpoint.json" for name in URLS}
+        evidence = manifest["reviewed_census"]
+        expected, _ = reviewed_source(
+            layout,
+            generation,
+            final,
+            paths,
+            checkpoints,
+            (Path(evidence["path"]), evidence["sha256"]),
+            lambda _: None,
+        )
+        require(manifest == expected, "REVIEWED_SOURCE_MANIFEST_MISMATCH")
+        return {"status": REVIEWED_STATUS, "manifest_sha256": expected_manifest_sha}
     validations = {}
     for name, entry in manifest["archives"].items():
         path = final / f"{name}.zip"
@@ -1184,11 +1490,15 @@ def main(argv=None):
         "--sizes-from", type=Path, help="Saved network-preflight JSON (local mode only)"
     )
     parser.add_argument("--manifest-sha256")
+    parser.add_argument("--reviewed-census", type=Path)
+    parser.add_argument("--census-sha256")
+    parser.add_argument("--authorize-reviewed-publication", action="store_true")
     parser.add_argument("--endpoint", choices=URLS)
     parser.add_argument("--expected-bytes", type=int)
     parser.add_argument("--expected-sha256")
     args = parser.parse_args(argv)
     network = args.network_preflight or args.download
+    reviewed = args.reviewed_census or args.census_sha256 or args.authorize_reviewed_publication
     if (
         args.authorize_network != network
         or args.authorize_download != args.download
@@ -1208,6 +1518,16 @@ def main(argv=None):
         != (args.download or args.finalize_offline or args.structure_census or args.verify)
         or (args.generation and not GENERATION.fullmatch(args.generation))
         or (args.verify and not SHA256.fullmatch(args.manifest_sha256 or ""))
+        or (
+            reviewed
+            and not (
+                args.finalize_offline
+                and args.reviewed_census
+                and SHA256.fullmatch(args.census_sha256 or "")
+                and args.authorize_reviewed_publication
+                and not args.user_agent
+            )
+        )
         or (
             args.verify_archive
             and not (
@@ -1230,7 +1550,12 @@ def main(argv=None):
         elif args.structure_census:
             result = structure_census(layout, args.generation, progress=progress)
         elif args.finalize_offline:
-            result = finalize_offline(layout, args.generation, progress=progress)
+            result = finalize_offline(
+                layout,
+                args.generation,
+                progress=progress,
+                reviewed_census=(args.reviewed_census, args.census_sha256) if reviewed else None,
+            )
         elif args.verify_archive:
             path = args.verify_archive
             require(
