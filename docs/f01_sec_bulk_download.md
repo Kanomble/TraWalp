@@ -115,6 +115,14 @@ $f01Receipt = ($f01DownloadReceipt -join "`n") | ConvertFrom-Json
 
 Resume verlangt einen synchronisierten lokalen Checkpoint mit exakter Prefix-Länge und Prefix-SHA-256, denselben offiziellen Endpoint, dieselbe Gesamtgröße und denselben starken ETag. Für einen angefangenen, unvollständigen Member-Transfer muss der Server Bytes-Ranges ausweisen und mit exakt passendem HTTP 206, `Content-Range` und `Content-Length` antworten. Der Request trägt `If-Match` und `If-Range`. HTTP 200 als Antwort auf einen Range-Request, geänderte oder schwache ETags und unklare lokale Checkpoints stoppen die Fortsetzung vor dem Anhängen. Ein harter Prozessabbruch kann Bytes hinter dem letzten Checkpoint hinterlassen. In diesem Fall bleibt die Generation zur Prüfung erhalten. Eine neu autorisierte Generation erhält einen neuen Namen. Ob die SEC die notwendigen Validatoren aktuell liefert, zeigt erst der autorisierte Lauf.
 
+**Vollständig heruntergeladene ZIPs offline finalisieren.** In derselben PowerShell-Sitzung die bereits verwendete Generation angeben. Nach einem Neustart `$f01Generation` auf den Namen des vorhandenen Staging-Verzeichnisses ohne den Suffix `.incomplete` setzen. Der Modus prüft beide Complete-Checkpoints, Bytezahlen, SHA-256, CRC und ZIP-Struktur, bevor er die beiden Originale samt Manifest veröffentlicht. Er benötigt keinen User-Agent und akzeptiert keine Netzwerkfreigabe. Fehlende oder unvollständige Checkpoints und ein bereits vorhandenes Ziel blockieren die Veröffentlichung.
+
+```powershell
+$f01OfflineReceipt = & $f01Python -B $f01Script --layout $f01Layout --finalize-offline --generation $f01Generation
+if ($LASTEXITCODE -ne 0) { throw 'Offline-Finalisierung blockiert. Staging erhalten.' }
+$f01Receipt = ($f01OfflineReceipt -join "`n") | ConvertFrom-Json
+```
+
 **4. Bereits vorhandene ZIPs lokal verifizieren.** Dieser Schritt erzeugt keine Netzwerkanfragen und entpackt keine Dateien. Er hasht beide Originale und prüft den CRC aller Members, sichere flache Namen, CIK-Abgleich, ZIP-Struktur sowie Verweise auf ältere Submissions-Members. Bei einzeln archivierten Fremddownloads muss Größe und SHA-256 aus unabhängig geprüfter Evidenz stammen.
 
 ```powershell
@@ -124,6 +132,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Archivverifikation fehlgeschlagen' }
 # Einzelarchiv-Alternative unter dem Originals-Pfad
 # & $f01Python -B $f01Script --layout $f01Layout --verify-archive $f01ExternalZip --endpoint companyfacts --expected-bytes $f01ReviewedBytes --expected-sha256 $f01ReviewedSha
 ```
+
+Ein Companyfacts-Member mit exakt leerem JSON-Objekt `{}` erscheint unter `empty_companyfacts` mit Klassifikation `EMPTY_COMPANYFACTS`, Anzahl, sortierten Dateinamen und `import_eligible: false`. Der Member zählt zur ZIP-Struktur und wird weiterhin auf CRC geprüft. Der Zähler `issuers` enthält ausschließlich erfolgreich geprüfte, nicht leere Emittenten-Payloads. Nichtleere Payloads brauchen einen internen CIK, der zum Dateinamen passt. Submissions behalten ihre bestehenden Validierungsregeln. Beim späteren Import die in `archives.companyfacts.integrity.empty_companyfacts.members` erfassten Dateien ausschließen. Ein für den Pilot benötigter leerer Member ist eine Coverage-Lücke.
 
 **5. Quellenmanifest übernehmen.** Download publiziert ZIPs und `f01_sec_bulk_source_manifest.json` gemeinsam in `originals/<generation>/`. Vorhandene Generationen und deren Originale sind schreibgeschützt und werden vom Skript nie ersetzt. Unter `temporary/<generation>.incomplete/` bleiben die Checkpoints erhalten. Erfolg wird ausschließlich am publizierten Originalordner mit geprüftem Manifest festgemacht. Archive des jeweiligen Backups mitsamt Manifest und extern gespeichertem Manifest-SHA-256 sichern. Ein späterer Backup-Restore an anderem Pfad benötigt ein getrenntes Review der Pfadbindung. Importer erhalten ausschließlich Leserechte auf die Originale.
 

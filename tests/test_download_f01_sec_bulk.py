@@ -218,6 +218,8 @@ def test_interrupted_download_resumes_only_bound_bytes(plan):
     partial = stage / "publish/companyfacts.zip"
     assert partial.read_bytes() == remote.archives["companyfacts"][:19]
     assert not (layout.paths["originals"] / SLUG).exists()
+    with pytest.raises(bulk.Blocked, match="REQUIRES_COMPLETE_DOWNLOAD"):
+        bulk.finalize_offline(layout, SLUG, progress=lambda _: None)
     with pytest.raises(bulk.Blocked, match="INCOMPLETE_GENERATION_EXISTS"):
         acquire(layout, remote)
     remote.interrupt = False
@@ -264,7 +266,20 @@ def test_resume_rejects_drift_without_appending(plan, fault):
 
 
 @pytest.mark.parametrize(
-    "fault", ["invalid-zip", "size", "sha", "traversal", "duplicate", "cik", "crc", "chunk"]
+    "fault",
+    [
+        "invalid-zip",
+        "size",
+        "sha",
+        "traversal",
+        "duplicate",
+        "cik",
+        "missing-cik",
+        "null-cik",
+        "crc",
+        "chunk",
+        "empty-submissions",
+    ],
 )
 def test_archive_validation_rejects_unsafe_or_broken_data(tmp_path, fault):
     member = f"CIK{CIK}.json"
@@ -282,8 +297,15 @@ def test_archive_validation_rejects_unsafe_or_broken_data(tmp_path, fault):
         match = "UNSAFE_UNEXPECTED"
     elif fault == "cik":
         data = zipped([(member, {"cik": 9999, "facts": {}})])
+    elif fault == "missing-cik":
+        data, match = zipped([(member, {"facts": {}})]), "ZIP_MEMBER_CIK_REQUIRED"
+    elif fault == "null-cik":
+        data = zipped([(member, {"cik": None, "facts": {}})])
     elif fault == "crc":
         data, match = data.replace(CIK.encode() + b'"', b'0000009999"'), "INVALID_ZIP"
+    elif fault == "empty-submissions":
+        endpoint, match = "submissions", "ZIP_MEMBER_CIK_REQUIRED"
+        data = zipped([(member, {})])
     elif fault == "chunk":
         endpoint, match = "submissions", "CHUNKS_INCOMPLETE"
         data = zipped(
@@ -305,6 +327,76 @@ def test_archive_validation_rejects_unsafe_or_broken_data(tmp_path, fault):
     expected = "1" * 64 if fault == "sha" else hashlib.sha256(data).hexdigest()
     with pytest.raises(bulk.Blocked, match=match):
         bulk.validate_archive(archive, endpoint, len(data) + int(fault == "size"), expected)
+
+
+def test_empty_companyfacts_are_excluded_and_sorted(tmp_path):
+    archive = tmp_path / "companyfacts.zip"
+    empty_members = ["CIK0000003521.json", "CIK0000000001.json"]
+    data = zipped(
+        [
+            (empty_members[0], {}),
+            (f"CIK{CIK}.json", {"cik": CIK, "facts": {}}),
+            (empty_members[1], {}),
+        ]
+    )
+    archive.write_bytes(data)
+    result = bulk.validate_archive(
+        archive, "companyfacts", len(data), hashlib.sha256(data).hexdigest()
+    )
+    assert result["status"] == "VERIFIED" and result["members"] == 3
+    assert result["issuers"] == 1
+    assert result["empty_companyfacts"] == {
+        "classification": "EMPTY_COMPANYFACTS",
+        "count": 2,
+        "members": sorted(empty_members),
+        "import_eligible": False,
+    }
+
+
+@pytest.mark.parametrize("tamper", [False, True])
+def test_offline_finalization_uses_completed_checkpoints_without_http(
+    plan, monkeypatch, capsys, tamper
+):
+    layout_path, layout = plan
+    remote = SecDouble()
+    empty_member = "CIK0000003521.json"
+    remote.archives["companyfacts"] = zipped(
+        [(empty_member, {}), (f"CIK{CIK}.json", {"cik": 1234, "facts": {}})]
+    )
+    remote.etags["companyfacts"] = 'W/"offline-does-not-need-a-current-strong-etag"'
+
+    def interrupt_before_publication(*_):
+        raise bulk.Blocked("synthetic stop after both checkpoints")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(bulk, "publish_generation", interrupt_before_publication)
+        with pytest.raises(bulk.Blocked, match="both checkpoints"):
+            acquire(layout, remote)
+    stage = layout.paths["temporary"] / f"{SLUG}.incomplete"
+    if tamper:
+        staged_zip = stage / "publish/companyfacts.zip"
+        data = staged_zip.read_bytes()
+        staged_zip.write_bytes(bytes([data[0] ^ 1]) + data[1:])
+    monkeypatch.setattr(bulk, "SecHttp", lambda *_: pytest.fail("Offline mode constructed HTTP"))
+    args = ["--layout", str(layout_path), "--finalize-offline", "--generation", SLUG]
+    with pytest.raises(SystemExit) as exc:
+        bulk.main([*args, "--authorize-network"])
+    assert exc.value.code == 2
+    capsys.readouterr()
+    outcome = bulk.main(args)
+    output = capsys.readouterr()
+    assert len(remote.calls) == 4
+    if tamper:
+        assert outcome == 3 and "ARCHIVE_SHA256_MISMATCH" in output.err
+        assert not list(layout.paths["originals"].iterdir())
+    else:
+        assert outcome == 0
+        published = json.loads(output.out)
+        report = bulk.verify_generation(layout, SLUG, published["manifest_sha256"])
+        assert report["archives"]["companyfacts"]["empty_companyfacts"]["members"] == [empty_member]
+        assert report["archives"]["companyfacts"]["issuers"] == 1
+        assert bulk.main(args) == 3
+        assert "ORIGINAL_GENERATION_ALREADY_EXISTS" in capsys.readouterr().err
 
 
 def test_manifest_is_stable_and_records_distinct_upstream_observations(tmp_path):

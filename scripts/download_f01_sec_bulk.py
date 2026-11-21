@@ -52,6 +52,7 @@ BUDGETS = (
 BLOCK_SIZE = 1024**2
 MAX_MEMBER_BYTES = 128 * 1024**2
 MAX_METADATA_BYTES = 256 * 1024
+MAX_MANIFEST_BYTES = 8 * 1024**2
 SHA256 = re.compile(r"[0-9a-f]{64}")
 GENERATION = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 MEMBER_NAME = re.compile(r"CIK([0-9]{10})(?:-submissions-([0-9]{3,}))?\.json")
@@ -114,16 +115,16 @@ def directory(path):
     return path
 
 
-def read_metadata(path):
+def read_metadata(path, *, max_bytes=MAX_METADATA_BYTES):
     path = path.absolute()
     directory(path.parent)
     require(":" not in path.name and path.suffix.lower() == ".json", "JSON_METADATA_PATH_REQUIRED")
     info = plain(path)
-    require(info.st_size <= MAX_METADATA_BYTES, f"OVERSIZED_METADATA: {path}")
+    require(info.st_size <= max_bytes, f"OVERSIZED_METADATA: {path}")
     with path.open("rb") as stream:
         require(os.path.samestat(info, os.fstat(stream.fileno())), f"REPLACED_METADATA: {path}")
-        raw = stream.read(MAX_METADATA_BYTES + 1)
-    require(len(raw) <= MAX_METADATA_BYTES, f"OVERSIZED_METADATA: {path}")
+        raw = stream.read(max_bytes + 1)
+    require(len(raw) <= max_bytes, f"OVERSIZED_METADATA: {path}")
     return raw, json.loads(raw)
 
 
@@ -380,6 +381,7 @@ def validate_archive(path, name, expected_size, expected_sha):
 
 def validate_members(archive, name):
     unique, supplement_files, supplement_refs = set(), set(), set()
+    empty_companyfacts = []
     issuers = 0
     for member in archive.infolist():
         filename = member.orig_filename
@@ -401,6 +403,9 @@ def validate_members(archive, name):
             require(len(raw) == member.file_size, f"ZIP_MEMBER_SIZE_MISMATCH: {filename}")
             record = json.loads(raw)
         require(isinstance(record, dict), f"ZIP_MEMBER_OBJECT_REQUIRED: {filename}")
+        if name == "companyfacts" and not record:
+            empty_companyfacts.append(filename)
+            continue
         if "cik" in record:
             value = str(record["cik"])
             require(
@@ -438,13 +443,22 @@ def validate_members(archive, name):
                     supplement_refs.add(ref)
         del record, raw
     require(
-        issuers > 0 and supplement_files == supplement_refs, "ARCHIVE_LAYOUT_OR_CHUNKS_INCOMPLETE"
+        issuers + len(empty_companyfacts) > 0 and supplement_files == supplement_refs,
+        "ARCHIVE_LAYOUT_OR_CHUNKS_INCOMPLETE",
     )
-    return {
+    result = {
         "members": len(unique),
         "issuers": issuers,
         "historical_submission_chunks": len(supplement_files),
     }
+    if name == "companyfacts":
+        result["empty_companyfacts"] = {
+            "classification": "EMPTY_COMPANYFACTS",
+            "count": len(empty_companyfacts),
+            "members": sorted(empty_companyfacts),
+            "import_eligible": False,
+        }
+    return result
 
 
 def strong_etag(value):
@@ -464,21 +478,22 @@ def save_checkpoint(path, checkpoint):
     next_path.replace(path)
 
 
-def resume_state(path, checkpoint_path, name, observation, *, resume):
-    if not exists(path) and not exists(checkpoint_path):
-        return None
-    require(resume and exists(path) and exists(checkpoint_path), f"PARTIAL_STATE_AMBIGUOUS: {name}")
+def read_checkpoint(path, checkpoint_path, name):
+    require(exists(path) and exists(checkpoint_path), f"PARTIAL_STATE_AMBIGUOUS: {name}")
     _, state = read_metadata(checkpoint_path)
     require(isinstance(state, dict), f"PARTIAL_STATE_INVALID: {name}")
     count = state.get("received_bytes")
+    total = state.get("archive_bytes")
     require(
         state.get("contract") == CHECKPOINT_CONTRACT
         and state.get("url") == URLS[name]
         and state.get("endpoint") == name
-        and state.get("archive_bytes") == observation["bytes"]
+        and type(total) is int
+        and total > 0
         and type(count) is int
-        and 0 <= count <= observation["bytes"]
+        and 0 <= count <= total
         and plain(path).st_size == count
+        and type(state.get("complete")) is bool
         and isinstance(state.get("http"), dict)
         and isinstance(state.get("segments"), list)
         and isinstance(state.get("retrieval_started_at_utc"), str)
@@ -487,13 +502,22 @@ def resume_state(path, checkpoint_path, name, observation, *, resume):
         and SHA256.fullmatch(state["prefix_sha256"]),
         f"PARTIAL_STATE_INVALID: {name}",
     )
-    etag = state.get("http", {}).get("ETag")
+    return state
+
+
+def resume_state(path, checkpoint_path, name, observation, *, resume):
+    if not exists(path) and not exists(checkpoint_path):
+        return None
+    require(resume, f"PARTIAL_STATE_AMBIGUOUS: {name}")
+    state = read_checkpoint(path, checkpoint_path, name)
+    require(state["archive_bytes"] == observation["bytes"], f"REMOTE_GENERATION_CHANGED: {name}")
+    etag = state["http"].get("ETag")
     current = observation["http"]
     require(
         strong_etag(etag) and current.get("ETag") == etag,
         f"REMOTE_GENERATION_CHANGED_OR_UNPROVEN: {name}",
     )
-    if count < observation["bytes"]:
+    if state["received_bytes"] < observation["bytes"]:
         require(
             current.get("Accept-Ranges", "").lower() == "bytes",
             f"REMOTE_RANGE_SUPPORT_UNPROVEN: {name}",
@@ -622,6 +646,99 @@ def source_manifest(generation, final, states, validations):
     }
 
 
+def staging_files(stage):
+    publish = directory(stage / "publish")
+    paths = {name: publish / f"{name}.zip" for name in URLS}
+    checkpoints = {name: stage / f"{name}.checkpoint.json" for name in URLS}
+    require(
+        not any(exists(p.with_suffix(".next")) for p in checkpoints.values()),
+        "INCOMPLETE_CHECKPOINT_UPDATE_REQUIRES_REVIEW",
+    )
+    return publish, paths, checkpoints
+
+
+def publish_generation(generation, final, publish, paths, states, progress):
+    validations = {}
+    for name, path in paths.items():
+        progress(f"Verifying SHA-256, ZIP member CRC and layout: {name}")
+        validations[name] = validate_archive(
+            path, name, states[name]["archive_bytes"], states[name]["prefix_sha256"]
+        )
+    manifest = json_bytes(source_manifest(generation, final, states, validations))
+    require(len(manifest) <= MAX_MANIFEST_BYTES, "SOURCE_MANIFEST_TOO_LARGE")
+    manifest_path = publish / MANIFEST_NAME
+    if exists(manifest_path):
+        require(
+            read_metadata(manifest_path, max_bytes=MAX_MANIFEST_BYTES)[0] == manifest,
+            "STAGED_MANIFEST_CONFLICT",
+        )
+    else:
+        write_new(manifest_path, manifest)
+    require(set(publish.iterdir()) == {*paths.values(), manifest_path}, "UNEXPECTED_STAGING_FILE")
+    for path in (*paths.values(), manifest_path):
+        path.chmod(stat.S_IREAD)
+    require(not exists(final), f"ORIGINAL_GENERATION_ALREADY_EXISTS: {final}")
+    # Windows same-volume rename fails if a competing process created the destination.
+    publish.rename(final)
+    return {
+        "status": "PUBLISHED",
+        "manifest": str(final / MANIFEST_NAME),
+        "manifest_sha256": hashlib.sha256(manifest).hexdigest(),
+    }
+
+
+def complete_download_state(path, checkpoint, name):
+    state = read_checkpoint(path, checkpoint, name)
+    total = state["archive_bytes"]
+    require(
+        state["complete"] and state["received_bytes"] == total and state["segments"],
+        f"OFFLINE_FINALIZATION_REQUIRES_COMPLETE_DOWNLOAD: {name}",
+    )
+    offset = 0
+    for segment in state["segments"]:
+        require(isinstance(segment, dict), f"INVALID_DOWNLOAD_SEGMENT: {name}")
+        size = segment.get("bytes")
+        require(
+            type(segment.get("offset")) is int
+            and segment["offset"] == offset
+            and type(size) is int
+            and 0 <= size <= total - offset
+            and isinstance(segment.get("start_utc"), str)
+            and isinstance(segment.get("end_utc"), str)
+            and isinstance(segment.get("http"), dict),
+            f"INVALID_DOWNLOAD_SEGMENT: {name}",
+        )
+        offset += size
+    first, last = state["segments"][0], state["segments"][-1]
+    require(
+        offset == total
+        and first["start_utc"] == state["retrieval_started_at_utc"]
+        and last["end_utc"] == state["retrieval_ended_at_utc"]
+        and first["http"] == state["http"],
+        f"DOWNLOAD_SEGMENTS_NOT_BOUND_TO_CHECKPOINT: {name}",
+    )
+    return state
+
+
+def finalize_offline(layout, generation, *, progress):
+    require(os.name == "nt", "DOWNLOAD_PUBLICATION_REQUIRES_WINDOWS")
+    final = layout.paths["originals"] / generation
+    stage = layout.paths["temporary"] / f"{generation}.incomplete"
+    with pinned_files({}, directories=tuple(layout.paths.values())):
+        require(not exists(final), f"ORIGINAL_GENERATION_ALREADY_EXISTS: {final}")
+        directory(stage)
+        lock_path = stage / "download.lock"
+        if exists(lock_path):
+            plain(lock_path)
+        with stage_lock(lock_path):
+            publish, paths, checkpoints = staging_files(stage)
+            states = {
+                name: complete_download_state(path, checkpoints[name], name)
+                for name, path in paths.items()
+            }
+            return publish_generation(generation, final, publish, paths, states, progress)
+
+
 def download(layout, generation, http, *, resume=False, progress):
     require(os.name == "nt", "DOWNLOAD_PUBLICATION_REQUIRES_WINDOWS")
     final = layout.paths["originals"] / generation
@@ -648,14 +765,7 @@ def download(layout, generation, http, *, resume=False, progress):
         if exists(lock_path):
             plain(lock_path)
         with stage_lock(lock_path):
-            publish = stage / "publish"
-            directory(publish)
-            paths = {name: publish / f"{name}.zip" for name in URLS}
-            checkpoints = {name: stage / f"{name}.checkpoint.json" for name in URLS}
-            require(
-                not any(exists(p.with_suffix(".next")) for p in checkpoints.values()),
-                "INCOMPLETE_CHECKPOINT_UPDATE_REQUIRES_REVIEW",
-            )
+            publish, paths, checkpoints = staging_files(stage)
             states = {
                 name: resume_state(
                     paths[name], checkpoints[name], name, observations[name], resume=resume
@@ -677,40 +787,12 @@ def download(layout, generation, http, *, resume=False, progress):
                     states[name],
                     progress,
                 )
-            validations = {}
-            for name, path in paths.items():
-                progress(f"Verifying SHA-256, ZIP member CRC and layout: {name}")
-                validations[name] = validate_archive(
-                    path, name, states[name]["archive_bytes"], states[name]["prefix_sha256"]
-                )
-            manifest = json_bytes(source_manifest(generation, final, states, validations))
-            manifest_path = publish / MANIFEST_NAME
-            if exists(manifest_path):
-                require(
-                    resume and read_metadata(manifest_path)[0] == manifest,
-                    "STAGED_MANIFEST_CONFLICT",
-                )
-            else:
-                write_new(manifest_path, manifest)
-            require(
-                set(publish.iterdir()) == {*paths.values(), manifest_path},
-                "UNEXPECTED_STAGING_FILE",
-            )
-            for path in (*paths.values(), manifest_path):
-                path.chmod(stat.S_IREAD)
-            require(not exists(final), f"ORIGINAL_GENERATION_ALREADY_EXISTS: {final}")
-            # Windows same-volume rename fails if a competing process created the destination.
-            publish.rename(final)
-    return {
-        "status": "PUBLISHED",
-        "manifest": str(final / MANIFEST_NAME),
-        "manifest_sha256": hashlib.sha256(manifest).hexdigest(),
-    }
+            return publish_generation(generation, final, publish, paths, states, progress)
 
 
 def verify_generation(layout, generation, expected_manifest_sha):
     final = directory(layout.paths["originals"] / generation)
-    raw, manifest = read_metadata(final / MANIFEST_NAME)
+    raw, manifest = read_metadata(final / MANIFEST_NAME, max_bytes=MAX_MANIFEST_BYTES)
     require(
         hashlib.sha256(raw).hexdigest() == expected_manifest_sha, "SOURCE_MANIFEST_SHA256_MISMATCH"
     )
@@ -739,8 +821,14 @@ def verify_generation(layout, generation, expected_manifest_sha):
             f"SOURCE_MANIFEST_ARCHIVE_BINDING: {name}",
         )
         validations[name] = validate_archive(path, name, entry["bytes"], entry["sha256"])
+        actual = validations[name]
+        # Earlier sealed manifests have no empty-member field and could only accept zero.
+        if name == "companyfacts" and not actual["empty_companyfacts"]["count"]:
+            legacy = {key: value for key, value in actual.items() if key != "empty_companyfacts"}
+        else:
+            legacy = actual
         require(
-            validations[name] == entry["integrity"], f"SOURCE_MANIFEST_ARCHIVE_INTEGRITY: {name}"
+            entry["integrity"] in (actual, legacy), f"SOURCE_MANIFEST_ARCHIVE_INTEGRITY: {name}"
         )
     return {"status": "VERIFIED", "manifest_sha256": expected_manifest_sha, "archives": validations}
 
@@ -751,6 +839,7 @@ def main(argv=None):
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--network-preflight", action="store_true")
     modes.add_argument("--download", action="store_true")
+    modes.add_argument("--finalize-offline", action="store_true", help="Verify and publish staging")
     modes.add_argument("--verify", action="store_true")
     modes.add_argument("--verify-archive", type=Path)
     parser.add_argument("--authorize-network", action="store_true")
@@ -772,8 +861,11 @@ def main(argv=None):
         or args.authorize_download != args.download
         or (args.resume and not args.download)
         or (network and not args.user_agent)
-        or (args.sizes_from and (network or args.verify or args.verify_archive))
-        or bool(args.generation) != (args.download or args.verify)
+        or (
+            args.sizes_from
+            and (network or args.finalize_offline or args.verify or args.verify_archive)
+        )
+        or bool(args.generation) != (args.download or args.finalize_offline or args.verify)
         or (args.generation and not GENERATION.fullmatch(args.generation))
         or (args.verify and not SHA256.fullmatch(args.manifest_sha256 or ""))
         or (
@@ -787,10 +879,16 @@ def main(argv=None):
         )
     ):
         parser.error("Invalid mode or missing authorization/binding. See --help.")
+
+    def progress(line):
+        print(line, file=sys.stderr, flush=True)
+
     try:
         layout = Layout.load(args.layout)
         if args.verify:
             result = verify_generation(layout, args.generation, args.manifest_sha256)
+        elif args.finalize_offline:
+            result = finalize_offline(layout, args.generation, progress=progress)
         elif args.verify_archive:
             path = args.verify_archive
             require(
@@ -811,7 +909,7 @@ def main(argv=None):
                     args.generation,
                     client,
                     resume=args.resume,
-                    progress=lambda line: print(line, file=sys.stderr, flush=True),
+                    progress=progress,
                 )
             else:
                 result = capacity(layout, collect_remote(client))
