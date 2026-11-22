@@ -11,6 +11,7 @@ from pathlib import Path
 
 import audit_f01_accounting_semantic_qualification as audit
 import f01_accounting_research_policy as qualification
+import f01_financing_positions as financing
 import preview_f01_advanced_accounting as advanced
 
 from trading_system.fundamentals.metrics import MAX_SHARES_OUTSTANDING_AGE
@@ -21,6 +22,7 @@ f = audit.filings
 require = f.require
 PREVIEW_SHA = "653b46434d6cf60ec3253c35be95d2ad7ec6c33920c19adea7f2aa50ca0b2382"
 RULE_PREVIEW_SHA = "98eade350f01bd5786f4caf943e182ee7f84ae3699d3f661258c0e63a49ee822"
+POLICY_REPORT_SHA = "949f8cbc7a0d7578fbd9aa748f3aab95e9aed9ec45d33348dcc74a0d89e5948b"
 VERSION = "F01_ACCOUNTING_RESEARCH_RULES_V1"
 RULES = {
     "SHARES_AGGREGATE": "Issuer-level shares instant with unit and freshness guards.",
@@ -151,7 +153,7 @@ def lease_selection(leases, assets):
     }
 
 
-def lookup(source, derived, wanted, policy_periods=None, *, proofs=None):
+def lookup(source, derived, wanted, policy_periods=None, *, proofs=None, financing_index=None):
     raw = audit.read_bound(source, audit.FILING_SHA)
     accounting = audit.read_bound(derived, audit.ACCOUNTING_SHA)
     require(
@@ -174,6 +176,11 @@ def lookup(source, derived, wanted, policy_periods=None, *, proofs=None):
         if acc in wanted:
             shares[acc] = row
         by_ordinal = {item["document_ordinal"]: item for item in row["observations"]}
+        if financing_index is not None and acc in policy_periods:
+            positions = financing.index_filing(
+                row, entry["sha256"], policy_periods[acc], by_ordinal.values()
+            )
+            financing_index.update({(acc, period): rows for period, rows in positions.items()})
         for item in by_ordinal.values():
             if instant_lease(row, item) is not None:
                 leases[acc, item["context"]["instant"]].append(audit.source_ref(item))
@@ -449,12 +456,83 @@ def qualify_result(result, prior, current, proofs):
     )
 
 
+def consolidate_financing(result, e8, index):
+    metrics = (
+        "total_debt",
+        "finance_lease_liability",
+        "operating_income",
+        "ebitda",
+        "capital_expenditures",
+        "operating_cash_flow",
+        "roic",
+    )
+    previous = {(row["symbol"], row["session"]): row["preview"] for row in e8["probes"]}
+    require(len(previous) == 77, "INVALID_E8_COVERAGE_GRID")
+    before, after = Counter(), Counter()
+    breakdown = defaultdict(Counter)
+    for probe in result["probes"]:
+        symbol, session = probe["symbol"], probe["session"]
+        old = previous[symbol, session]
+        current = probe["preview"]
+        require(
+            {key: value["value"] for key, value in old.items()}
+            == {key: value["value"] for key, value in current.items()},
+            "E8_PREVIEW_DRIFT",
+        )
+        refs = current["roic"]["current"]["total_assets"]["sources"]
+        witnesses = [
+            original
+            for key in refs
+            for original in result["source_facts"][key]["original"]["matches"]
+        ]
+        positions = financing.reported_positions(
+            index, witnesses, close(date.fromisoformat(session))
+        )
+        subtotal = financing.term_subtotal(positions)
+        positions.pop("Assets", None)
+        debt = current["total_debt"]
+        probe["financing"] = {
+            "positions": positions,
+            financing.TERM_SUBTOTAL: subtotal,
+            "debt_status": (
+                "REPORTED_AGGREGATE"
+                if debt["reason"] == "REPORTED_TOTAL_DEBT"
+                else "VERIFIED_AGGREGATE"
+                if debt["value"] is not None
+                else "INCOMPLETE_AGGREGATE"
+            ),
+        }
+        era = "2016-2019" if session < "2020-01-01" else "2020-2026"
+        present = {
+            **{key: current[key]["value"] is not None for key in metrics},
+            **{tag: positions.get(tag, {}).get("value") is not None for tag in financing.TAGS},
+            financing.TERM_SUBTOTAL: subtotal["value"] is not None,
+            "any_reported_financing_position": any(
+                row["value"] is not None for row in positions.values()
+            ),
+        }
+        before.update({key: int(key in old and old[key]["value"] is not None) for key in present})
+        after.update({key: int(value) for key, value in present.items()})
+        breakdown[f"{symbol}/{era}"].update({key: int(value) for key, value in present.items()})
+    result["financing_consolidation"] = {
+        "contract": financing.VERSION,
+        "baseline_sha256": POLICY_REPORT_SHA,
+        "rules": financing.RULES,
+        "rules_sha256": f.sha(f.bulk.json_bytes(financing.RULES)),
+        "review_required": True,
+        "coverage_before": dict(before),
+        "coverage_after": dict(after),
+        "coverage_by_issuer_and_era": {key: dict(counter) for key, counter in breakdown.items()},
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--draft", type=Path)
     parser.add_argument("--advanced", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--qualification-baseline", type=Path)
+    parser.add_argument("--consolidate-financing", action="store_true")
     parser.add_argument("--verify-policy-approval", type=Path)
     parser.add_argument("--policy-report", type=Path)
     parser.add_argument("--policy-report-sha256")
@@ -463,6 +541,7 @@ def main():
     args = parser.parse_args()
     current = f.pilot.code_binding()
     if args.verify_policy_approval:
+        require(not args.consolidate_financing, "REPLAY_AND_APPROVAL_ARE_SEPARATE")
         require(args.policy_report and args.policy_report_sha256, "BOUND_POLICY_REPORT_REQUIRED")
         report = audit.read_bound(args.policy_report, args.policy_report_sha256, max_bytes=f.LIMIT)
         template = report["approval_template"]
@@ -514,11 +593,21 @@ def main():
     )
     proofs = []
     periods = accounting_periods(prior) if prior else None
+    financing_index = None
+    if args.consolidate_financing:
+        require(prior is not None and args.policy_report, "E8_POLICY_REPLAY_BASELINE_REQUIRED")
+        e8 = audit.read_bound(args.policy_report, POLICY_REPORT_SHA, max_bytes=f.LIMIT)
+        financing_index = {}
     result = replay(
-        lookup(source, derived, wanted, periods, proofs=proofs), baseline, e6, proofs=proofs
+        lookup(source, derived, wanted, periods, proofs=proofs, financing_index=financing_index),
+        baseline,
+        e6,
+        proofs=proofs,
     )
     if prior:
         qualify_result(result, prior, current, proofs)
+    if financing_index is not None:
+        consolidate_financing(result, e8, financing_index)
     catalog = {"version": VERSION, "base_policy": POLICY, "rules": RULES}
     result.update(
         rule_catalog=catalog,
