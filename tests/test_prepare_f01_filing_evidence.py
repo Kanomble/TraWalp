@@ -71,6 +71,7 @@ def processor(tmp_path):
     processor.cache = tmp_path / "cache"
     processor.cache.mkdir()
     processor.packages = []
+    processor.sec_plugin = os.getenv("F01_ARELLE_TEST_SEC_PLUGIN")
     assert processor.run(probe=True)["version"] == evidence.ARELLE_VERSION
     return processor
 
@@ -163,3 +164,46 @@ def test_arelle_plain_xbrl_instant(processor):
     (fact,) = result["observations"]
     assert fact["value"] == "20"
     assert fact["context"]["instant"] == "2025-09-30"
+
+
+def test_pinned_sec_transform_loads_with_arelle_2475(processor):
+    if not processor.sec_plugin:
+        pytest.skip("Set F01_ARELLE_TEST_SEC_PLUGIN to the verified EDGAR transform directory")
+    plugin = Path(processor.sec_plugin)
+    assert {name: evidence.pilot.file_sha(plugin / name) for name in evidence.SEC_PLUGIN_FILES} == (
+        evidence.SEC_PLUGIN_FILES
+    )
+    (processor.directory / "sample.xsd").write_text(SCHEMA, encoding="utf-8")
+    (processor.directory / "sample_pre.xml").write_text(LINKBASE, encoding="utf-8")
+    path = processor.directory / "sample.htm"
+    path.write_text(
+        INLINE.replace(
+            "http://www.xbrl.org/inlineXBRL/transformation/2020-02-12",
+            "http://www.sec.gov/inlineXBRL/transformation/2015-08-31",
+        ).replace('t:num-dot-decimal">179.6', 't:numwordsen">two'),
+        encoding="utf-8",
+    )
+    result = processor.run(document=str(path))
+    assert result["issues"] == []
+    assert str(result["observations"][0]["value"]) in {"-2E+6", "-2000000"}
+
+
+def test_ordinary_html_leaves_separate_instance_as_entrypoint(processor):
+    folder = processor.directory / "filing"
+    row = ROW | {"primary": "sample.htm"}
+    names = ("sample.htm", "sample.xml")
+    listing = {"directory": {"item": [{"name": name} for name in names]}}
+    write_cached(folder, names[0], b"<!doctype html><html><body>Ordinary</body></html>")
+    write_cached(folder, names[1], b"<xbrl/>")
+    seen = []
+
+    def process(**request):
+        seen.append(Path(request["document"]).name)
+        return {"issues": [], "observations": []}
+
+    processor.run = process
+    _, documents, issues, sources = evidence.extract_cached(row, folder, listing, processor)
+    assert seen == ["sample.xml"]
+    assert documents[0]["format"] == "ORDINARY_HTML"
+    assert issues[0]["category"] == "INCOMPATIBLE_DOCUMENT_FORMAT"
+    assert len(sources) == 2

@@ -21,6 +21,7 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 import validate_f01_sec_bulk_pilot as qualification  # noqa: E402
+from f01_arelle_adapter import EDGAR_COMMIT, SEC_PLUGIN_FILES  # noqa: E402
 from f01_arelle_adapter import VERSION as ARELLE_VERSION  # noqa: E402
 
 from trading_system.data.canonical_paths import pinned_files  # noqa: E402
@@ -555,6 +556,7 @@ class ArelleProcessor:
         self.directory = bulk.directory(directory)
         self.site = bulk.directory(directory / "site")
         self.cache = safe_directory(directory / "cache")
+        self.sec_plugin = verified_sec_plugin(directory)
         self.packages = []
         manifest = directory / "taxonomy-packages.json"
         if bulk.exists(manifest):
@@ -581,6 +583,7 @@ class ArelleProcessor:
             "site": str(self.site),
             "cache": str(self.cache),
             "packages": [p["path"] for p in self.packages],
+            "sec_plugin": str(self.sec_plugin) if self.sec_plugin else None,
             **request,
         }
         env = os.environ | {"TEMP": str(self.directory), "TMP": str(self.directory)}
@@ -605,9 +608,46 @@ class ArelleProcessor:
         return json.loads(child.stdout)
 
 
+def verified_sec_plugin(directory):
+    plugin = directory / "plugins" / f"edgar-{EDGAR_COMMIT}" / "transform"
+    if not bulk.exists(plugin):
+        return None
+    bulk.directory(plugin)
+    for name, expected in SEC_PLUGIN_FILES.items():
+        bulk.plain(plugin / name)
+        require(pilot.file_sha(plugin / name) == expected, f"SEC_PLUGIN_HASH_MISMATCH: {name}")
+    return plugin
+
+
+def document_format(name, data):
+    if not name.lower().endswith((".html", ".htm")):
+        return "XBRL_DOCUMENT"
+    if re.search(rb"https?://www\.xbrl\.org/(?:2008|2013)/inlineXBRL", data, re.I):
+        return "INLINE_XBRL"
+    if re.search(rb"<(?:!doctype\s+html\b|html[\s>])", data, re.I):
+        return "ORDINARY_HTML"
+    return "UNKNOWN_FORMAT"
+
+
+def diagnostic_category(issue):
+    code = issue.get("code", "").lower()
+    reason = issue.get("reason", "").lower()
+    if "unrecognized transformation" in reason or (
+        "transformation" in code and "namespace" in reason
+    ):
+        return "MISSING_OR_UNSUPPORTED_TRANSFORMATION"
+    if "missingreferences" in code:
+        return "UNRESOLVED_XBRL_REFERENCE"
+    if "schemaimportmissing" in code or (
+        "ioerror" in code and ("offline" in reason or ".xsd" in reason)
+    ):
+        return "MISSING_TAXONOMY_OR_DTS_REFERENCE"
+    return "XBRL_ERROR"
+
+
 def extract_cached(row, folder, listing, processor):
     entrypoints = documents(row, listing)
-    observations, alternatives, errors, sources = [], [], [], {}
+    observations, alternatives, errors, sources, formats = [], [], [], {}, {}
     pattern = FOCUS.get(row["symbol"])
     with tempfile.TemporaryDirectory(prefix="filing-", dir=processor.directory) as temporary:
         stage = Path(temporary)
@@ -617,21 +657,45 @@ def extract_cached(row, folder, listing, processor):
                 continue
             data, source = cache_read(folder / name, row, name)
             sources[name] = source
+            formats[name] = document_format(name, data)
             (stage / name).write_bytes(data)
         staged_sources = {(stage / name).resolve(): source for name, source in sources.items()}
         for name in entrypoints:
             if name not in sources:
                 continue
+            if formats[name] in {"ORDINARY_HTML", "UNKNOWN_FORMAT"}:
+                errors.append(
+                    {
+                        "document": name,
+                        "code": formats[name],
+                        "category": "INCOMPATIBLE_DOCUMENT_FORMAT",
+                    }
+                )
+                alternatives.append(
+                    {"source": sources[name], "selected": False, "format": formats[name]}
+                )
+                continue
             try:
                 result = processor.run(document=str(stage / name))
             except (ValueError, subprocess.TimeoutExpired) as error:
                 errors.append(
-                    {"document": name, "reason": str(error), "status": "MISSING_EVIDENCE"}
+                    {
+                        "document": name,
+                        "reason": str(error),
+                        "category": "WORKER_ERROR",
+                        "status": "MISSING_EVIDENCE",
+                    }
                 )
                 continue
             issues = result["issues"]
             errors.extend(
-                {"document": name, "status": "MISSING_EVIDENCE", **issue} for issue in issues
+                {
+                    "document": name,
+                    "status": "MISSING_EVIDENCE",
+                    "category": diagnostic_category(issue),
+                    **issue,
+                }
+                for issue in issues
             )
             parsed = [
                 item
@@ -657,6 +721,16 @@ def extract_cached(row, folder, listing, processor):
                 staged = staged_sources.get(Path(resolved).resolve()) if resolved else None
                 if staged is not None:
                     dependency = {"uri": staged["url"], "sha256": staged["sha256"]}
+                elif resolved and Path(resolved).resolve().is_relative_to(processor.cache):
+                    local = Path(resolved)
+                    binding = local.with_name(local.name + ".f01-source.json")
+                    if bulk.exists(binding):
+                        _, metadata = bulk.read_metadata(binding)
+                        require(
+                            metadata["sha256"] == dependency["sha256"],
+                            f"TAXONOMY_CACHE_BINDING_MISMATCH: {resolved}",
+                        )
+                        dependency["bootstrap_source"] = metadata
                 taxonomy.append(dependency)
             selected = bool(parsed and not observations and not issues)
             if selected:
@@ -666,6 +740,7 @@ def extract_cached(row, folder, listing, processor):
                     "source": sources[name],
                     "observations": None if selected else parsed,
                     "selected": selected,
+                    "format": formats[name],
                     "taxonomy_documents": taxonomy,
                 }
             )
@@ -705,6 +780,12 @@ def draft(rows, root, facts, processor):
             "cached_sources": sources,
             "index_source": index_source,
             "issues": errors,
+            "diagnostic_summary": {
+                "issues_by_category": dict(
+                    Counter(item.get("category", "MISSING_DOCUMENT") for item in errors)
+                ),
+                "joins_by_status": dict(Counter(item["status"] for item in joins)),
+            },
         }
     lly = {acc: record for (cik, acc), record in results.items() if cik == "0000059478"}
     return {
@@ -715,6 +796,9 @@ def draft(rows, root, facts, processor):
             "name": "Arelle",
             "taxonomy_packages": processor.packages,
             "requirements_sha256": pilot.file_sha(pilot.REPO / "requirements-f01-arelle.txt"),
+            "sec_transforms": {"commit": EDGAR_COMMIT, "files": SEC_PLUGIN_FILES}
+            if processor.sec_plugin
+            else None,
         },
         "semantic_evidence": {
             "contexts": [],

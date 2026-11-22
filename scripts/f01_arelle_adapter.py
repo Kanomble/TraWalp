@@ -12,6 +12,11 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 VERSION = "2.47.5"
+EDGAR_COMMIT = "4891c4c9889c77af247428ceff4fa7cc52d534ea"
+SEC_PLUGIN_FILES = {
+    "__init__.py": "2296586f945ffd95ab37d3d4147c4e45f42ce4e5f397f61143e053208adefbf1",
+    "text2num.py": "6c9b26354320a2fb34fe380cdc71ff7f8d1cc712811e6b10c661e512f0383409",
+}
 DIM = "http://xbrl.org/2006/xbrldi"
 XHTML = "http://www.w3.org/1999/xhtml"
 ARCS = (
@@ -147,7 +152,7 @@ def fact_data(fact, ordinal, arcs):
     }
 
 
-def extract(document, cache, packages):
+def extract(document, cache, packages, sec_plugin=None):
     from arelle.api.Session import Session
     from arelle.RuntimeOptions import RuntimeOptions
 
@@ -160,6 +165,7 @@ def extract(document, cache, packages):
         xdgConfigHome=str(cache.parent),
         disablePersistentConfig=True,
         packages=[str(path) for path in packages],
+        plugins=sec_plugin,
     )
     with Session() as session:
         session.run(options, logHandler=logs)
@@ -221,7 +227,12 @@ def main():
         return
     print(
         json.dumps(
-            extract(Path(request["document"]), Path(request["cache"]), request["packages"]),
+            extract(
+                Path(request["document"]),
+                Path(request["cache"]),
+                request["packages"],
+                request.get("sec_plugin"),
+            ),
             ensure_ascii=True,
         )
     )

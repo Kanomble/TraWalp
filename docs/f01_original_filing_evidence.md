@@ -42,6 +42,40 @@ if ($LASTEXITCODE -ne 0) { throw 'Offline-Extraktion fehlgeschlagen' }
 
 Für alle 83 Accessions `--include-additional` an Download, Resume und Extraktion anhängen. Der Preflight zeigt beide Mengen einschließlich der Probe-Zuordnungen. Für andere Emittenten akzeptiert `--inventory-file` eine JSON-Liste aus `cik` (zehn Stellen), `symbol`, `accession` und optional `primary` (SEC-Dateiname), `filed` und `acceptance` (ISO mit Offset). Der individuelle Modus extrahiert Original-Facts. Der automatische Companyfacts-Abgleich verwendet das eingebaute Pilotinventar. Individuell eingetragene Filing-Zeiten benötigen eine getrennte Quellenprüfung.
 
+## Taxonomie-Bootstrap für die bereits gecachten 18 Filings
+
+Die folgenden Befehle verwenden den gebundenen Entwurf und die vorhandenen Cache-Dateien. Der Netzwerkmodus bezieht ausschließlich Taxonomien und den fest gepinnten EDGAR-Transform. Für diese Abfolge ist kein Filing-Download erforderlich.
+
+```powershell
+Set-Location 'G:\GitHub\TraWalp'
+$Python = '.\.venv\Scripts\python.exe'
+$Arelle = 'G:\TraWalpResearch\arelle\2.47.5'
+$Bootstrap = '.\scripts\prepare_f01_arelle_taxonomies.py'
+$Evidence = '.\scripts\prepare_f01_filing_evidence.py'
+
+# 1. Metadaten-Preflight mit lokalem Cache und Entwurf
+& $Python -B $Bootstrap
+if ($LASTEXITCODE -ne 0) { throw 'Taxonomie-Preflight fehlgeschlagen' }
+
+# 2. Autorisierter Download von historischen Taxonomien und EDGAR-Plugin
+$Agent = Read-Host 'SEC User-Agent mit Name oder Organisation und Kontakt-E-Mail'
+$Run = Get-Date -Format 'yyyyMMdd-HHmmss'
+& $Python -B $Bootstrap --download --authorize-download --user-agent $Agent |
+    Tee-Object -FilePath (Join-Path $Arelle "taxonomy-bootstrap-$Run.json")
+if ($LASTEXITCODE -ne 0) { throw 'Taxonomie-Bootstrap meldet fehlende oder blockierte Quellen' }
+
+# 3. Offline-Coverage der exakt referenzierten URLs und Abhängigkeiten
+& $Python -B $Bootstrap --offline-coverage |
+    Tee-Object -FilePath (Join-Path $Arelle "taxonomy-coverage-$Run.json")
+if ($LASTEXITCODE -ne 0) { throw 'Offline-Coverage ist weiterhin offen' }
+
+# 4. Erneute Extraktion der 18 vorhandenen Start-Filings
+& $Python -B $Evidence --extract --arelle-dir $Arelle --output "f01-original-filing-evidence-bootstrap-$Run.json"
+if ($LASTEXITCODE -ne 0) { throw 'Offline-Extraktion fehlgeschlagen' }
+```
+
+`--draft` kann einen weiteren lokalen Evidenzentwurf benennen. Der Standardentwurf ist auf seinen SHA-256 gebunden. Preflight und Coverage führen fehlende Offlinedateien und nicht unterstützte Zielpfade aus. `--download` kann nach einer Unterbrechung erneut aufgerufen werden. Dabei werden bekannte Pakete, Cache-Dateien und Plugin-Module gegen ihre Bindungen geprüft.
+
 ## Cache und Wiederanlauf
 
 Die Dokumentliste stammt aus dem SEC-Filing-Verzeichnis `index.json`. Das Skript bezieht das lokal belegte Primärdokument, identifizierbare XBRL-Instances sowie lokale XSDs und übliche Linkbases aus demselben Verzeichnis. Ein Resume ergänzt auch XSDs und Linkbases zu bereits gecachten Dokumenten. Die wiederverwendete SEC-HTTP-Schicht begrenzt auf einen Request pro Sekunde, behandelt temporäre Fehler und `Retry-After` und sperrt Redirects. Eine Windows-Dateisperre verhindert parallele Downloads in diesem Cache.
@@ -52,9 +86,9 @@ Ein vollständig publizierter Cache-Eintrag enthält Originalbytes und `source.j
 
 Der isolierte Worker verwendet `arelle-release==2.47.5` und die offizielle `arelle.api.Session` mit `workOffline=True`. Der historische Interpreter startet den Worker über `-I -S`. Nur der separate `site`-Pfad stellt Worker-Abhängigkeiten bereit. Es werden weder Pakete noch Konfigurationen in der historischen Umgebung installiert. Der Entwurf protokolliert die genaue Arelle- und Paketversion, den SHA-256 der Requirements-Datei und die verwendeten Taxonomie-Pakete. [Python-API](https://arelle.readthedocs.io/en/latest/python_api/python_api.html) · [Paketrelease](https://pypi.org/project/arelle-release/2.47.5/)
 
-Für historische Taxonomien den versionsgebundenen Webcache unter `$Arelle\cache` bereitstellen. Geprüfte lokale Arelle-Taxonomiepakete als ZIP unter `$Arelle\packages` ablegen und in `$Arelle\taxonomy-packages.json` als JSON-Array aus `{"file":"paket.zip","sha256":"…"}` inventarisieren. Der Worker verwendet nur lokale Paketpfade. Lokale Taxonomie-Dokumente, die Arelle auflöst, werden nach Möglichkeit per SHA-256 gebunden. Fehlende Taxonomien werden als fehlende Evidenz protokolliert. Der Worker blockiert zusätzlich Python-Socket-Verbindungs- und DNS-Aufrufe. Für den Bezug noch fehlender Taxonomiedateien ist ein separater manueller Vorbereitungsschritt nötig.
+Der Bootstrap bevorzugt offizielle Versionspakete und materialisiert die benötigten Dateien im Webcache unter `$Arelle\cache` an ihrem exakten URI-Slot. Upstream-Pakete bleiben unter `$Arelle\bootstrap-packages` erhalten. Der SEC-Transform liegt unter `$Arelle\plugins` und wird aus EDGAR-Release 26.3, Commit `4891c4c9889c77af247428ceff4fa7cc52d534ea`, geladen. Die zwei offiziellen Module werden einzeln gehasht. Optional separat bereitgestellte Arelle-Taxonomiepakete können weiterhin als ZIP unter `$Arelle\packages` liegen und in `$Arelle\taxonomy-packages.json` als Array aus `{"file":"paket.zip","sha256":"…"}` inventarisiert werden. Fehlende Taxonomien bleiben im Entwurf sichtbar. Der Worker blockiert zusätzlich Python-Socket-Verbindungs- und DNS-Aufrufe. [SEC-Updates](https://www.sec.gov/data-research/structured-data/taxonomies-schemas/taxonomy-files-annual-updates) · [EDGAR Release 26.3](https://github.com/Arelle/EDGAR/releases/tag/26.3)
 
-Arelle liefert exakte QNames, Zahlen, Originaltext, Scale, Sign, Decimals, Units, Perioden, Entity-Identifier, explizite und typisierte Dimensionen sowie verfügbare Calculation- und Presentation-Beziehungen. Das Skript ergänzt Dokumentbindung, Quellzeile und gegebenenfalls HTML-Tabelle und Caption. Jede vorhandene Originalseite oder Instance wird über Arelle geprüft. Ein per Arelle gelesener alternativer Instance-Kandidat und Fehler in der Primärdatei erscheinen getrennt in der Extraktionsspur.
+Arelle liefert exakte QNames, Zahlen, Originaltext, Scale, Sign, Decimals, Units, Perioden, Entity-Identifier, explizite und typisierte Dimensionen sowie verfügbare Calculation- und Presentation-Beziehungen. Das Skript ergänzt Dokumentbindung, Quellzeile und gegebenenfalls HTML-Tabelle und Caption. Gewöhnliches HTML bleibt als Originalbeleg im Cache und wird als ungeeignet für die XBRL-Fact-Extraktion gekennzeichnet. Bei vorhandener verifizierter Instance übernimmt diese die Fact-Extraktion. Pro Filing zeigt `diagnostic_summary` die Zahl der Fehler je Kategorie und die Join-Status. Die zugrunde liegenden Fehler bleiben erhalten.
 
 | Status | Bedeutung |
 | --- | --- |
