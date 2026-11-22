@@ -25,6 +25,7 @@ from uuid import uuid4
 
 sys.dont_write_bytecode = True
 import download_f01_sec_bulk as bulk  # noqa: E402
+import prepare_f01_accounting_handoff as handoff  # noqa: E402
 from prepare_f01_migration import REPO, repository_evidence  # noqa: E402
 
 from trading_system.data import canonical_bootstrap as bootstrap  # noqa: E402
@@ -1083,6 +1084,30 @@ def execute_or_preflight(args, scope, code, progress):
     )
     admissions = load_admission(args.admission, args.admission_sha256, scope, layout)
     external, bootstrap_manifest = bootstrap_target(layout, args.target)
+    accounting = None
+    approval_path = getattr(args, "accounting_approval", None)
+    require(
+        bool(approval_path) == (external["lineage"].get("research_scope") == handoff.SCOPE),
+        "ACCOUNTING_APPROVAL_AND_RESEARCH_SCOPE_MUST_MATCH",
+    )
+    if approval_path:
+        require(
+            approval_path.is_absolute() and approval_path.is_relative_to(RESEARCH_ROOT),
+            "ISOLATED_ACCOUNTING_APPROVAL_PATH_REQUIRED",
+        )
+        review = handoff.read_bound(approval_path, args.accounting_approval_sha256)
+        evidence, rules, registry, files = handoff.evidence(REPO, RESEARCH_ROOT)
+        expected = handoff.template(evidence, rules, external, code)
+        handoff.validate_review(expected, review)
+        require(evidence["bulk_source_manifest_sha256"] == SOURCE_SHA, "ACCOUNTING_BULK_DRIFT")
+        progress("Verifying sealed Accounting filing shards and original documents")
+        handoff.verify_files(files)
+        accounting = {
+            "contract": handoff.CONTRACT,
+            "review_sha256": args.accounting_approval_sha256,
+            "binding": review["binding"],
+            "approved_research_rules": sorted(review["decisions"]),
+        }
     source, paths, exclusions = source_inputs(layout, scope)
     db = Database(args.target)
     lineage = external["lineage"]
@@ -1123,6 +1148,12 @@ def execute_or_preflight(args, scope, code, progress):
             "admission_sha256": args.admission_sha256,
             "requests": [[request.request_id, request.input_hash] for request in requests],
         }
+        if accounting is not None:
+            projection = handoff.projection_summary(
+                registry, (fact for request in requests for fact in request.facts)
+            )
+            require(not projection.get("same_key_conflict"), "ACCOUNTING_CANONICAL_VALUE_CONFLICT")
+            binding["accounting_handoff"] = accounting | {"canonical_projection": projection}
         if bulk.exists(run):
             bulk.directory(run)
             _, old = bulk.read_metadata(run / "binding.json")
@@ -1174,6 +1205,8 @@ def main(argv=None):
     parser.add_argument("--admission", type=Path)
     parser.add_argument("--admission-sha256")
     parser.add_argument("--expect-code-fingerprint")
+    parser.add_argument("--accounting-approval", type=Path)
+    parser.add_argument("--accounting-approval-sha256")
     parser.add_argument("--admission-template", action="store_true")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--authorize-research-import", action="store_true")
@@ -1190,6 +1223,9 @@ def main(argv=None):
         or not args.admission_template
         and (args.layout is None or args.target is None)
         or bool(args.admission) != bool(args.admission_sha256)
+        or bool(args.accounting_approval) != bool(args.accounting_approval_sha256)
+        or args.accounting_approval
+        and (args.admission_template or not bulk.SHA256.fullmatch(args.accounting_approval_sha256))
     ):
         parser.error("Invalid mode, admission binding or missing explicit write authorization")
 
