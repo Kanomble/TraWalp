@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import audit_f01_accounting_semantic_qualification as semantic_audit  # noqa: E402
 import prepare_f01_filing_evidence as evidence  # noqa: E402
+import preview_f01_accounting_rules as accounting_rules  # noqa: E402
 import resolve_f01_accounting_evidence as resolution  # noqa: E402
 
 CIK = "0000059478"
@@ -343,6 +344,45 @@ def test_tradable_class_preview_respects_cutoff_and_conflict():
     ]
     assert not semantic_audit.select_class_snapshot([admitted, (existing, rival, [])], session)
     assert not semantic_audit.select_class_snapshot([(existing, stale, [])], session)
+
+
+def test_cover_holdings_must_bind_the_exact_class_amount_and_measurement():
+    cover = (
+        "Class B ordinary shares, par value $0.01 per share, outstanding as of "
+        "December 4, 2025 was 250 (which number includes 12 issued shares held by the registrant)"
+    )
+    measured = date(2025, 12, 4)
+    assert accounting_rules.net_class_shares(cover, "Class B ordinary shares", measured, 250) == (
+        238,
+        12,
+    )
+    assert (
+        accounting_rules.net_class_shares(cover, "Class A ordinary shares", measured, 250) is None
+    )
+    assert (
+        accounting_rules.net_class_shares(cover, "Class B ordinary shares", measured, 251) is None
+    )
+    assert (
+        accounting_rules.net_class_shares(cover, "Class B ordinary shares", date(2025, 12, 5), 250)
+        is None
+    )
+    conflict = cover + " " + cover.replace("includes 12", "includes 20")
+    assert (
+        accounting_rules.net_class_shares(conflict, "Class B ordinary shares", measured, 250)
+        is None
+    )
+
+
+def test_finance_lease_is_exact_to_the_selected_balance_without_implicit_zero():
+    key = (ROW["accession"], "2025-09-30")
+    assets = SimpleNamespace(
+        sources=[SimpleNamespace(accession_number=key[0], period_end=date.fromisoformat(key[1]))]
+    )
+    lease = {"value": "0", "source": {"sha256": "hash"}, "document_ordinal": 1}
+    assert accounting_rules.lease_selection({key: [lease]}, assets)["value"] == "0"
+    assert accounting_rules.lease_selection({("other", key[1]): [lease]}, assets)["value"] is None
+    conflict = accounting_rules.lease_selection({key: [lease, lease | {"value": "1"}]}, assets)
+    assert (conflict["value"], conflict["reason"]) == (None, "CONFLICT")
 
 
 def test_extended_inventory_merges_warmup_amendments_and_diagnosis():
