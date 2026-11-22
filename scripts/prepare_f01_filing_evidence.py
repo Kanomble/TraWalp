@@ -333,7 +333,9 @@ def taxonomy(concept):
     uri, _, tag = (concept or "").lstrip("{").partition("}")
     if re.fullmatch(r"https?://fasb\.org/us-gaap/\d{4}(?:-\d\d-\d\d)?", uri):
         return "us-gaap", tag
-    if re.fullmatch(r"https?://xbrl\.sec\.gov/dei/\d{4}(?:-\d\d-\d\d)?", uri):
+    if uri == "http://xbrl.sec.gov/dei/2021q4" or re.fullmatch(
+        r"https?://xbrl\.sec\.gov/dei/\d{4}(?:-\d\d-\d\d)?", uri
+    ):
         return "dei", tag
     return None, tag
 

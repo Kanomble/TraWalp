@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import audit_f01_accounting_semantic_qualification as semantic_audit  # noqa: E402
 import prepare_f01_filing_evidence as evidence  # noqa: E402
 import resolve_f01_accounting_evidence as resolution  # noqa: E402
 
@@ -286,6 +287,46 @@ def test_accounting_distinct_documents_and_opaque_context_stay_open():
     assert evidence.join(fact, [row, other], CIK)["status"] == "UNRESOLVED_CONTEXT"
     opaque = row | {"context": row["context"] | {"opaque_context": ["unparsed"]}}
     assert evidence.join(fact, [opaque], CIK)["status"] == "UNRESOLVED_CONTEXT"
+
+
+def test_exact_dei_quarterly_namespace_still_requires_entity_unit_and_context():
+    fact, row = accounting_pair()
+    fact.update(
+        taxonomy="dei",
+        tag=semantic_audit.SHARE_TAG,
+        unit="shares",
+        period_start=None,
+        period_end="2025-09-30",
+    )
+    row.update(
+        concept=semantic_audit.DEI,
+        unit={"numerator": [f"{{{evidence.XBRL}}}shares"], "denominator": []},
+    )
+    row["context"].update(startDate=None, endDate=None, instant=fact["period_end"])
+    assert evidence.join(fact, [row], CIK)["status"] == "VERIFIED_SOURCE_FACT"
+    other_namespace = row | {"concept": row["concept"].replace("2021q4", "2021q3")}
+    assert evidence.join(fact, [other_namespace], CIK)["status"] == "MISSING_EVIDENCE"
+    assert evidence.join(fact, [row], "0000000001")["status"] == "MISSING_EVIDENCE"
+    class_context = row["context"] | {"dimensions": [{"axis": "axis", "member": "class"}]}
+    assert (
+        evidence.join(fact, [row | {"context": class_context}], CIK)["status"]
+        == "UNRESOLVED_CONTEXT"
+    )
+
+
+def test_tradable_class_preview_respects_cutoff_and_conflict():
+    existing = {"acceptance": "2025-12-31T14:00:00-05:00", "filed": "2025-12-31"}
+    after_close = existing | {"acceptance": "2025-12-31T16:01:00-05:00"}
+    row = {"context": {"instant": "2025-12-20"}, "value": "100"}
+    rival = row | {"value": "200"}
+    stale = row | {"context": {"instant": "2024-01-01"}}
+    session = date(2025, 12, 31)
+    admitted = (existing, row, [])
+    assert semantic_audit.select_class_snapshot([(after_close, rival, []), admitted], session) == [
+        admitted
+    ]
+    assert not semantic_audit.select_class_snapshot([admitted, (existing, rival, [])], session)
+    assert not semantic_audit.select_class_snapshot([(existing, stale, [])], session)
 
 
 def test_extended_inventory_merges_warmup_amendments_and_diagnosis():
