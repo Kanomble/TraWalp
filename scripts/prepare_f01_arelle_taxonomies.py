@@ -87,16 +87,7 @@ def xml_dependencies(data, base):
 def seeds(draft):
     result = set()
     for row in draft["filings"]:
-        for issue in row["issues"]:
-            if issue.get("code") == "IOerror":
-                result.update(
-                    url
-                    for url in (
-                        normalize(word.rstrip(".,;)"))
-                        for word in re.findall(r'https?://[^\s<>"]+', issue.get("reason", ""))
-                    )
-                    if url
-                )
+        result.update(issue_urls(row["issues"]))
         directory = filing.ROOT / row["cik"] / row["accession"]
         for source in row["cached_sources"]:
             name = source["filename"]
@@ -109,6 +100,16 @@ def seeds(draft):
                 if url := normalize(match):
                     result.add(url)
     return result
+
+
+def issue_urls(issues):
+    return {
+        url
+        for issue in issues
+        if issue.get("code") == "IOerror"
+        for word in re.findall(r'https?://[^\s<>"]+', issue.get("reason", ""))
+        if (url := normalize(word.rstrip(".,;)")))
+    }
 
 
 def package_url(url):
@@ -430,18 +431,40 @@ def main(argv=None):
     parser.add_argument("--authorize-download", action="store_true")
     parser.add_argument("--user-agent")
     parser.add_argument("--draft", type=Path, default=filing.ROOT / DRAFT)
+    parser.add_argument("--extraction-diagnostics", type=Path)
     args = parser.parse_args(argv)
     if args.download != args.authorize_download or (args.download and not args.user_agent):
         parser.error("Download requires --authorize-download and --user-agent")
     try:
         candidate = filing.pilot.code_binding()
         raw, draft = bulk.read_metadata(args.draft.absolute(), max_bytes=64 * 1024**2)
-        require(draft["contract"] == "F01_ORIGINAL_FILING_EVIDENCE_DRAFT_V1", "INVALID_DRAFT")
+        require(
+            draft["contract"] in {"F01_ORIGINAL_FILING_EVIDENCE_DRAFT_V1", filing.EXTENDED_INPUT},
+            "INVALID_DRAFT",
+        )
+        if draft["contract"] == filing.EXTENDED_INPUT:
+            require(
+                args.draft.is_relative_to(filing.ROOT) and draft["candidate"] == candidate,
+                "EXTENDED_CACHE_BINDING_MISMATCH",
+            )
         filing.validate_rows(draft["filings"])
         if args.draft == filing.ROOT / DRAFT:
             require(filing.sha(raw) == DRAFT_SHA, "ORIGINAL_DRAFT_HASH_MISMATCH")
         root = bulk.directory(filing.ARELLE_ROOT)
         initial = seeds(draft)
+        if args.extraction_diagnostics:
+            require(
+                args.extraction_diagnostics.is_relative_to(filing.ROOT),
+                "EXTENDED_RESEARCH_PATH_REQUIRED",
+            )
+            _, prior = bulk.read_metadata(args.extraction_diagnostics)
+            require(
+                prior["inputs"]["cache_sha256"] == filing.sha(raw)
+                and prior["candidate_code"] == candidate,
+                "STALE_EXTRACTION_DIAGNOSTICS",
+            )
+            for _, row in filing.extended_records(args.extraction_diagnostics, prior):
+                initial.update(issue_urls(row["issues"]))
         client = bulk.SecHttp(args.user_agent) if args.download else None
         if client:
             prepare_plugin(root, client)
@@ -459,13 +482,22 @@ def main(argv=None):
                     "verified_packages": verify_used_packages(root, results),
                     "sec_plugin_commit": filing.EDGAR_COMMIT,
                     "sec_plugin_verified": bool(plugin),
+                    "offline_coverage": args.offline_coverage,
                 },
                 indent=2,
             )
         )
         if args.offline_coverage or args.download:
             return int(not plugin or any(row["status"] != "BOUND" for row in results.values()))
-    except (OSError, RuntimeError, ValueError, ET.ParseError, KeyError, TypeError) as error:
+    except (
+        bulk.Blocked,
+        OSError,
+        RuntimeError,
+        ValueError,
+        ET.ParseError,
+        KeyError,
+        TypeError,
+    ) as error:
         print(f"TAXONOMY_BOOTSTRAP_BLOCKED: {error}", file=sys.stderr)
         return 1
     return 0

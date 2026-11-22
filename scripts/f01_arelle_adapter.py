@@ -152,7 +152,7 @@ def fact_data(fact, ordinal, arcs):
     }
 
 
-def extract(document, cache, packages, sec_plugin=None):
+def extract(document, cache, packages, sec_plugin=None, *, all_facts=False):
     from arelle.api.Session import Session
     from arelle.RuntimeOptions import RuntimeOptions
 
@@ -185,13 +185,27 @@ def extract(document, cache, packages, sec_plugin=None):
         facts = []
         ordered = sorted(model.factsInInstance, key=lambda fact: fact.objectIndex)
         for ordinal, fact in enumerate(ordered, 1):
-            if fact.isTuple or not (fact.unitID or fact.isNumeric):
+            if not all_facts and (fact.isTuple or not (fact.unitID or fact.isNumeric)):
                 continue
             item = fact_data(fact, ordinal, arcs)
+            if all_facts:
+                item.update(
+                    is_tuple=fact.isTuple,
+                    is_nil=fact.isNil,
+                    xml_lang=fact.get("{http://www.w3.org/XML/1998/namespace}lang"),
+                    precision=fact.get("precision"),
+                    text_value=fact.value
+                    if not (fact.isNumeric or fact.isTuple or fact.isNil)
+                    else None,
+                )
             for dimension in (item["context"] or {}).get("dimensions", []):
                 if (dimension["axis"], dimension.get("member")) in default_members:
                     dimension["is_default"] = True
-            if fact.concept is None or item["context"] is None or item["unit"] is None:
+            if (
+                fact.concept is None
+                or (not fact.isTuple and item["context"] is None)
+                or (fact.isNumeric and item["unit"] is None)
+            ):
                 item["evidence_issue"] = "TAXONOMY_OR_CONTEXT_UNAVAILABLE"
             facts.append(item)
         dts = []
@@ -243,6 +257,7 @@ def main():
                 Path(request["cache"]),
                 request["packages"],
                 request.get("sec_plugin"),
+                all_facts=request.get("all_facts", False),
             ),
             ensure_ascii=True,
         )

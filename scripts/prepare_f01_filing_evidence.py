@@ -38,9 +38,31 @@ SEC = "https://www.sec.gov/Archives/edgar/data"
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,159}")
 CIK = re.compile(r"\d{10}", re.ASCII)
 LIMIT = 64 * 1024**2
+SHARD_LIMIT = 256 * 1024**2
 RESERVE = 512 * 1024**2
 XBRL = "http://www.xbrl.org/2003/instance"
 ISO = "http://www.xbrl.org/2003/iso4217"
+EXTENDED_INPUT = "F01_EXTENDED_FILING_CACHE_V1"
+EXTENDED_DRAFT = "F01_EXTENDED_FILING_EVIDENCE_V1"
+WARMUP_START = date(2015, 1, 1)
+ACCOUNTING_ACCESSIONS = {
+    "ACN": (
+        "19-000395",
+        "20-000431",
+        "21-000297",
+        "22-000370",
+        "23-000403",
+        "24-000108",
+        "24-000352",
+        "25-000222",
+        "26-000014",
+        "23-000221",
+    ),
+    "MSFT": ("0001564590-19-037549",),
+    "CAT": ("19-000281", "20-000056", "20-000155"),
+    "COST": ("19-000019", "19-000033", "20-000004", "20-000009"),
+    "LLY": ("23-000284", "24-000065", "24-000245", "25-000132", "26-000013"),
+}
 FOCUS = {
     "ACN": r"debt|borrow|lease|sharesoutstanding|classofstock",
     "AAPL": r"debt|borrow|lease|commercialpaper",
@@ -500,10 +522,39 @@ def lly_rounding(filings):
     }
 
 
-def source_metadata(rows):
+def add_extended_rows(rows, issuer, filings):
+    cik, symbol = issuer["cik"], issuer["symbol"]
+    existing = {row["accession"]: row for row in rows if row["cik"] == cik}
+    reasons = defaultdict(set)
+    for acc, (filed, form, _) in filings.items():
+        if form in qualification.FORMS and WARMUP_START <= filed <= qualification.COVERAGE_END:
+            reasons[acc].add("WARMUP" if filed.year < 2020 else "RESEARCH_PERIOD")
+    for suffix in ACCOUNTING_ACCESSIONS.get(symbol, ()):
+        accession = f"{cik}-{suffix}" if len(suffix) == 9 else suffix
+        reasons[accession].add("ACCOUNTING_AUDIT")
+    for acc, tags in sorted(reasons.items()):
+        if acc not in existing:
+            existing[acc] = {
+                "cik": cik,
+                "symbol": symbol,
+                "accession": acc,
+                "tier": "EXTENDED",
+                "probes": [],
+            }
+            rows.append(existing[acc])
+        existing[acc]["coverage_reasons"] = sorted(tags)
+    for row in existing.values():
+        tags = set(row.get("coverage_reasons", [])) | {row["tier"]}
+        if row["probes"]:
+            tags.add("BOUND_DIAGNOSIS")
+        row["coverage_reasons"] = sorted(tags)
+        row["index_url"] = f"{filing_base(row)}/{row['accession']}-index.html"
+
+
+def source_metadata(rows, *, extended=False):
     """Bind the pilot observations to the existing verified Bulk generation."""
     scope = pilot.pilot_spec()
-    issuers = [i for i in scope.active if i["cik"] in {row["cik"] for row in rows}]
+    issuers = [i for i in scope.active if extended or i["cik"] in {row["cik"] for row in rows}]
     layout = bulk.Layout({"originals": pilot.RESEARCH_ROOT / "sec-originals"}, {})
     manifest, paths, excluded = pilot.source_inputs(layout, scope)
     report = qualification.checked_metadata(
@@ -532,6 +583,8 @@ def source_metadata(rows):
             "SUBMISSIONS_MEMBER_BINDING_MISMATCH",
         )
         filings, conflicts, _ = pilot.filing_index(main, history)
+        if extended:
+            add_extended_rows(rows, issuer, filings)
         documents_by_filing, _ = qualification.filing_documents(main, history)
         for row in (r for r in rows if r["cik"] == cik):
             acc = row["accession"]
@@ -553,10 +606,15 @@ def source_metadata(rows):
                 primary = next(iter(candidates))
                 if NAME.fullmatch(primary) and primary.lower().endswith((".htm", ".html")):
                     row["primary"] = primary
+            if extended and acc not in filings:
+                # A diagnosis date is retained only as a lead when Submissions has no witness.
+                row.update(availability_unverified=True)
+    if extended:
+        rows.sort(key=lambda row: (row["tier"] != "INITIAL", row["cik"], row["accession"]))
     return issuers, paths, excluded, sources, manifest
 
 
-def companyfacts(rows, metadata):
+def companyfacts(rows, metadata, *, extended=False):
     issuers, paths, excluded, sources, manifest = metadata
     observations = defaultdict(list)
     requested = {(r["cik"], r["accession"]) for r in rows}
@@ -581,7 +639,7 @@ def companyfacts(rows, metadata):
                 "manifest_sha256": pilot.SOURCE_SHA,
                 "retrieval_ended": manifest["archives"]["companyfacts"]["retrieval_ended_at_utc"],
             }
-            pattern = re.compile(FOCUS.get(symbol, "."), re.IGNORECASE)
+            pattern = re.compile("." if extended else FOCUS.get(symbol, "."), re.IGNORECASE)
             for fact in parse_company_facts(payload, symbol, preserve_observations=True):
                 key = cik, fact.accession_number
                 if key in requested and pattern.search(fact.tag):
@@ -720,10 +778,10 @@ def diagnostic_category(issue):
     return "XBRL_ERROR"
 
 
-def extract_cached(row, folder, listing, processor):
+def extract_cached(row, folder, listing, processor, *, extended=False):
     entrypoints = documents(row, listing)
     observations, alternatives, errors, sources, formats = [], [], [], {}, {}
-    pattern = FOCUS.get(row["symbol"])
+    pattern = None if extended else FOCUS.get(row["symbol"])
     with tempfile.TemporaryDirectory(prefix="filing-", dir=processor.directory) as temporary:
         stage = Path(temporary)
         for name in dict.fromkeys(entrypoints + taxonomy_files(listing)):
@@ -751,7 +809,10 @@ def extract_cached(row, folder, listing, processor):
                 )
                 continue
             try:
-                result = processor.run(document=str(stage / name))
+                request = {"document": str(stage / name)}
+                if extended:
+                    request["all_facts"] = True
+                result = processor.run(**request)
             except (ValueError, subprocess.TimeoutExpired) as error:
                 errors.append(
                     {
@@ -822,7 +883,7 @@ def extract_cached(row, folder, listing, processor):
     return observations, alternatives, errors, list(sources.values())
 
 
-def draft(rows, root, facts, processor):
+def draft(rows, root, facts, processor, *, extended=False):
     results = {}
     for row in rows:
         acc, cik = row["accession"], row["cik"]
@@ -832,10 +893,13 @@ def draft(rows, root, facts, processor):
         if bulk.exists(folder / "index.json"):
             listing, index_source = cache_read(folder / "index.json", row, "index.json")
             observations, alternatives, errors, sources = extract_cached(
-                row, folder, json.loads(listing), processor
+                row, folder, json.loads(listing), processor, extended=extended
             )
+        by_concept = defaultdict(list)
+        for observation in observations:
+            by_concept[taxonomy(observation.get("concept"))].append(observation)
         joins = [
-            join(fact, observations, cik)
+            join(fact, by_concept[fact["taxonomy"], fact["tag"]], cik)
             | {
                 "companyfacts_source": source,
                 "filing_date": row.get("filed"),
@@ -844,7 +908,11 @@ def draft(rows, root, facts, processor):
             for fact, source in facts.get((cik, acc), [])
         ]
         for item in joins:
-            if not row.get("filed") or row["filed"] != item["fact"].get("filed"):
+            if (
+                not row.get("filed")
+                or row.get("availability_unverified")
+                or row["filed"] != item["fact"].get("filed")
+            ):
                 item["status"] = "UNRESOLVED_CONTEXT"
                 item["reason"] = "FILING_DATE_BINDING_UNAVAILABLE_OR_INCONSISTENT"
         results[cik, acc] = row | {
@@ -886,15 +954,141 @@ def draft(rows, root, facts, processor):
     }
 
 
+def extended_cache(rows, root, candidate):
+    filings = []
+    for row in rows:
+        folder = root / row["cik"] / row["accession"]
+        sources, issues, index_source = [], [], None
+        if not bulk.exists(folder / "index.json"):
+            issues.append({"reason": "MISSING_CACHED_FILING_INDEX"})
+        else:
+            data, index_source = cache_read(folder / "index.json", row, "index.json")
+            listing = json.loads(data)
+            entrypoints = documents(row, listing)
+            if not entrypoints:
+                issues.append({"reason": "NO_BOUND_FILING_ENTRYPOINT"})
+            for name in dict.fromkeys(entrypoints + taxonomy_files(listing)):
+                if not bulk.exists(folder / name):
+                    issues.append({"document": name, "reason": "MISSING_CACHED_DOCUMENT"})
+                    continue
+                _, source = cache_read(folder / name, row, name)
+                sources.append(source)
+        filings.append(
+            row | {"index_source": index_source, "cached_sources": sources, "issues": issues}
+        )
+    return {
+        "contract": EXTENDED_INPUT,
+        "candidate": candidate,
+        "pilot_diagnosis_sha256": DIAG_SHA,
+        "filings": filings,
+    }
+
+
+def verify_extended_inputs(cache, coverage, cache_sha, candidate):
+    require(
+        cache["contract"] == EXTENDED_INPUT
+        and cache["candidate"] == candidate
+        and coverage["candidate"] == candidate
+        and coverage["draft_sha256"] == cache_sha
+        and coverage.get("offline_coverage") is True
+        and coverage["sec_plugin_verified"] is True
+        and coverage["sec_plugin_commit"] == EDGAR_COMMIT
+        and bool(coverage["urls"])
+        and all(r["status"] == "BOUND" for r in coverage["urls"].values()),
+        "EXTENDED_TAXONOMY_COVERAGE_NOT_BOUND",
+    )
+
+
+def write_extended_draft(rows, root, facts, processor, candidate, cache, coverage, hashes, target):
+    require(processor.sec_plugin, "EXTENDED_EXTRACTION_REQUIRES_SEC_PLUGIN")
+    require(rows, "EXTENDED_INVENTORY_EMPTY")
+    stage = Path(tempfile.mkdtemp(prefix=".extended-evidence-incomplete-", dir=root))
+    entries = []
+    for row, expected in zip(rows, cache["filings"], strict=True):
+        print(f"Extract {row['symbol']} {row['accession']}", file=sys.stderr)
+        staging_bytes = sum(source["bytes"] for source in expected["cached_sources"])
+        require(
+            shutil.disk_usage(root).free >= staging_bytes + RESERVE, "FILING_OUTPUT_SPACE_REQUIRED"
+        )
+        record = draft([row], root, facts, processor, extended=True)
+        item = record["filings"][0]
+        require(
+            item["index_source"] == expected["index_source"]
+            and item["cached_sources"] == expected["cached_sources"],
+            "EXTENDED_CACHE_CHANGED_DURING_EXTRACTION",
+        )
+        for document in item["documents"]:
+            for dependency in document.get("taxonomy_documents", []):
+                url = dependency.get("bootstrap_source", {}).get("url", dependency["uri"])
+                if url in coverage["urls"]:
+                    require(
+                        dependency["sha256"] == coverage["urls"][url]["source"]["sha256"],
+                        f"EXTENDED_TAXONOMY_CHANGED_DURING_EXTRACTION: {url}",
+                    )
+        item["issues"].extend(issue for issue in expected["issues"] if issue not in item["issues"])
+        item["diagnostic_summary"]["issues_by_category"] = dict(
+            Counter(issue.get("category", "MISSING_DOCUMENT") for issue in item["issues"])
+        )
+        name = f"{row['cik']}-{row['accession']}.json"
+        raw = (json.dumps(item, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
+        require(len(raw) <= SHARD_LIMIT, "FILING_SHARD_SIZE_LIMIT")
+        require(shutil.disk_usage(root).free >= len(raw) + RESERVE, "FILING_OUTPUT_SPACE_REQUIRED")
+        bulk.write_new(stage / name, raw)
+        entries.append(
+            {
+                "cik": row["cik"],
+                "symbol": row["symbol"],
+                "accession": row["accession"],
+                "file": name,
+                "sha256": sha(raw),
+                "bytes": len(raw),
+            }
+        )
+    manifest = {
+        "contract": EXTENDED_DRAFT,
+        "candidate_code": candidate,
+        "pilot_diagnosis_sha256": DIAG_SHA,
+        "inputs": hashes,
+        "xbrl_processor": record["xbrl_processor"],
+        "filings": entries,
+        "review_required": True,
+    }
+    bulk.write_new(stage / "manifest.json", bulk.json_bytes(manifest))
+    stage.rename(target)
+
+
+def extended_records(path, manifest):
+    require(manifest["contract"] == EXTENDED_DRAFT, "INVALID_EXTENDED_DRAFT")
+    validate_rows(manifest["filings"])
+    for entry in manifest["filings"]:
+        require(
+            entry["file"] == f"{entry['cik']}-{entry['accession']}.json",
+            "INVALID_EXTENDED_SHARD_NAME",
+        )
+        shard = path.parent / entry["file"]
+        raw, row = bulk.read_metadata(shard, max_bytes=SHARD_LIMIT)
+        require(
+            len(raw) == entry["bytes"]
+            and sha(raw) == entry["sha256"]
+            and all(row[key] == entry[key] for key in ("symbol", "cik", "accession")),
+            "EXTENDED_SHARD_BINDING_MISMATCH",
+        )
+        yield entry, row
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--download", action="store_true")
     modes.add_argument("--resume", action="store_true")
     modes.add_argument("--extract", action="store_true")
+    modes.add_argument("--cached-inputs", action="store_true")
     parser.add_argument("--authorize-download", action="store_true")
     parser.add_argument("--user-agent")
     parser.add_argument("--include-additional", action="store_true")
+    parser.add_argument("--extended", action="store_true")
+    parser.add_argument("--cache-manifest", type=Path)
+    parser.add_argument("--taxonomy-coverage", type=Path)
     parser.add_argument(
         "--inventory-file",
         type=Path,
@@ -906,6 +1100,14 @@ def main(argv=None):
     online = args.download or args.resume
     if online != args.authorize_download or (online and not args.user_agent):
         parser.error("Network modes require --authorize-download and --user-agent")
+    if args.extended and (args.inventory_file or args.include_additional):
+        parser.error("--extended uses only the bound Research inventory")
+    if args.cached_inputs and not args.extended:
+        parser.error("--cached-inputs requires --extended")
+    if bool(args.cache_manifest or args.taxonomy_coverage) != bool(
+        args.extended and args.extract
+    ) or (args.extended and args.extract and not (args.cache_manifest and args.taxonomy_coverage)):
+        parser.error("Extended extraction requires --cache-manifest and --taxonomy-coverage")
     try:
         candidate = pilot.code_binding()  # Enforce the branch before any mode runs.
         if args.inventory_file:
@@ -913,22 +1115,63 @@ def main(argv=None):
             metadata = None
         else:
             rows = inventory()
-            if not args.include_additional and (online or args.extract):
+            if not (args.include_additional or args.extended) and (online or args.extract):
                 rows = [r for r in rows if r["tier"] == "INITIAL"]
-            metadata = source_metadata(rows)
+            metadata = source_metadata(rows, extended=args.extended)
         validate_rows(rows)
         if online:
             acquire(rows, safe_directory(ROOT), bulk.SecHttp(args.user_agent))
-        elif args.extract:
+        elif args.extract or args.cached_inputs:
             require(
                 NAME.fullmatch(args.output)
                 and ".." not in args.output
-                and args.output.endswith(".json"),
+                and (args.output.endswith(".json") or args.extended and args.extract),
                 "INVALID_DRAFT_FILENAME",
             )
             directory = safe_directory(ROOT)
             target = directory / args.output
             require(not bulk.exists(target), "EVIDENCE_OUTPUT_EXISTS")
+            if args.cached_inputs:
+                bulk.write_new(target, bulk.json_bytes(extended_cache(rows, directory, candidate)))
+                print(str(target))
+                return 0
+            if args.extended:
+                require(
+                    args.arelle_dir == ARELLE_ROOT
+                    and all(
+                        item.is_absolute() and item.is_relative_to(pilot.RESEARCH_ROOT)
+                        for item in (args.cache_manifest, args.taxonomy_coverage)
+                    ),
+                    "EXTENDED_RESEARCH_PATH_REQUIRED",
+                )
+                cache_raw, cache = bulk.read_metadata(args.cache_manifest, max_bytes=LIMIT)
+                coverage_raw, coverage = bulk.read_metadata(args.taxonomy_coverage, max_bytes=LIMIT)
+                hashes = {
+                    "cache_sha256": sha(cache_raw),
+                    "taxonomy_coverage_sha256": sha(coverage_raw),
+                }
+                verify_extended_inputs(cache, coverage, hashes["cache_sha256"], candidate)
+                require(
+                    [
+                        {key: item.get(key) for key in row}
+                        for row, item in zip(rows, cache["filings"], strict=True)
+                    ]
+                    == rows,
+                    "EXTENDED_INVENTORY_DRIFT",
+                )
+                write_extended_draft(
+                    rows,
+                    directory,
+                    companyfacts(rows, metadata, extended=True),
+                    ArelleProcessor(args.arelle_dir),
+                    candidate,
+                    cache,
+                    coverage,
+                    hashes,
+                    target,
+                )
+                print(str(target / "manifest.json"))
+                return 0
             processor = ArelleProcessor(args.arelle_dir)
             value = draft(
                 rows, directory, companyfacts(rows, metadata) if metadata else {}, processor
@@ -953,11 +1196,20 @@ def main(argv=None):
                         ],
                         "no_primary": sum(not r.get("primary") for r in rows),
                         "filings": rows,
+                        **(
+                            {
+                                "candidate": candidate,
+                                "pilot_diagnosis_sha256": DIAG_SHA,
+                                "no_acceptance": sum(not r.get("acceptance") for r in rows),
+                            }
+                            if args.extended
+                            else {}
+                        ),
                     },
                     indent=2,
                 )
             )
-    except (RuntimeError, OSError, ValueError, KeyError, TypeError) as error:
+    except (bulk.Blocked, RuntimeError, OSError, ValueError, KeyError, TypeError) as error:
         print(f"FILING_EVIDENCE_BLOCKED: {error}", file=sys.stderr)
         return 1
     return 0

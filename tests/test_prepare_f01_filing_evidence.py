@@ -3,12 +3,15 @@
 import json
 import os
 import sys
+from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import prepare_f01_filing_evidence as evidence  # noqa: E402
+import resolve_f01_accounting_evidence as resolution  # noqa: E402
 
 CIK = "0000059478"
 ROW = {"cik": CIK, "accession": "0000059478-25-000254", "symbol": "LLY"}
@@ -72,7 +75,8 @@ def processor(tmp_path):
     processor.cache.mkdir()
     processor.packages = []
     processor.sec_plugin = os.getenv("F01_ARELLE_TEST_SEC_PLUGIN")
-    assert processor.run(probe=True)["version"] == evidence.ARELLE_VERSION
+    processor.release = processor.run(probe=True)
+    assert processor.release["version"] == evidence.ARELLE_VERSION
     return processor
 
 
@@ -282,3 +286,106 @@ def test_accounting_distinct_documents_and_opaque_context_stay_open():
     assert evidence.join(fact, [row, other], CIK)["status"] == "UNRESOLVED_CONTEXT"
     opaque = row | {"context": row["context"] | {"opaque_context": ["unparsed"]}}
     assert evidence.join(fact, [opaque], CIK)["status"] == "UNRESOLVED_CONTEXT"
+
+
+def test_extended_inventory_merges_warmup_amendments_and_diagnosis():
+    seed = ROW | {"tier": "INITIAL", "probes": [["2025-12-31", "reference", "interest"]]}
+    rows = [seed]
+    cases = {
+        ROW["accession"]: (date(2025, 10, 30), "10-Q", None),
+        "0000059478-15-000001": (date(2015, 2, 1), "10-K/A", None),
+        "0000059478-24-000065": (date(2024, 2, 1), "10-K", None),
+        "0000059478-26-999999": (date(2026, 12, 1), "10-K", None),
+        "0000059478-25-999999": (date(2025, 10, 30), "8-K", None),
+    }
+    evidence.add_extended_rows(rows, ROW, cases)
+    by_id = {row["accession"]: row for row in rows}
+    assert len(rows) == len(by_id)
+    assert by_id[ROW["accession"]]["coverage_reasons"] == [
+        "BOUND_DIAGNOSIS",
+        "INITIAL",
+        "RESEARCH_PERIOD",
+    ]
+    assert by_id["0000059478-15-000001"]["coverage_reasons"] == ["EXTENDED", "WARMUP"]
+    assert by_id["0000059478-24-000065"]["coverage_reasons"] == [
+        "ACCOUNTING_AUDIT",
+        "EXTENDED",
+        "RESEARCH_PERIOD",
+    ]
+    assert not any(acc.endswith("999999") for acc in by_id)
+
+
+def test_extended_extraction_preserves_non_numeric_facts_and_bound_shards(processor, monkeypatch):
+    row = ROW | {
+        "primary": "sample.htm",
+        "tier": "INITIAL",
+        "probes": [],
+        "filed": "2025-10-30",
+        "acceptance": "2025-10-30T15:15:28+00:00",
+    }
+    directory = processor.directory
+    folder = directory / CIK / ROW["accession"]
+    listing = {
+        "directory": {
+            "item": [{"name": name} for name in ("sample.htm", "sample.xsd", "sample_pre.xml")]
+        }
+    }
+    schema = SCHEMA.replace(
+        "</schema>",
+        '<element name="TradingSymbol" type="x:stringItemType" '
+        'substitutionGroup="x:item" x:periodType="duration"/></schema>',
+    )
+    inline = INLINE.replace(
+        "</body>", '<ix:nonNumeric name="g:TradingSymbol" contextRef="q">LLY</ix:nonNumeric></body>'
+    )
+    for name, content in {
+        "index.json": json.dumps(listing),
+        "sample.htm": inline,
+        "sample.xsd": schema,
+        "sample_pre.xml": LINKBASE,
+    }.items():
+        write_cached(folder, name, content.encode())
+    # Exercise the package requirement using the isolated plugin when selected by the caller.
+    if not processor.sec_plugin:
+        pytest.skip("Set F01_ARELLE_TEST_SEC_PLUGIN to the verified EDGAR transform directory")
+    candidate = {"head": "abc", "fingerprint": "test"}
+    cache = evidence.extended_cache([row], directory, candidate)
+    hashes = {
+        "cache_sha256": evidence.sha(evidence.bulk.json_bytes(cache)),
+        "taxonomy_coverage_sha256": "fixture",
+    }
+    coverage = {
+        "candidate": candidate,
+        "draft_sha256": hashes["cache_sha256"],
+        "offline_coverage": True,
+        "sec_plugin_verified": True,
+        "sec_plugin_commit": evidence.EDGAR_COMMIT,
+        "urls": {"fixture": {"status": "BOUND"}},
+    }
+    target = directory / "extract"
+    evidence.write_extended_draft(
+        [row], directory, {}, processor, candidate, cache, coverage, hashes, target
+    )
+    path = target / "manifest.json"
+    _, manifest = evidence.bulk.read_metadata(path)
+    ((entry, parsed),) = evidence.extended_records(path, manifest)
+    (symbol_fact,) = [
+        fact for fact in parsed["observations"] if fact["concept"].endswith("}TradingSymbol")
+    ]
+    assert symbol_fact["text_value"] == "LLY"
+    assert symbol_fact["source"]["sha256"] == evidence.sha(inline.encode())
+    monkeypatch.setattr(evidence.pilot, "pilot_spec", lambda: SimpleNamespace(active=[ROW]))
+    review = directory / "review"
+    resolution.reconcile_extended(path, manifest, cache, coverage, hashes, candidate, review)
+    _, review_file = evidence.bulk.read_metadata(review / entry["file"])
+    assert review_file["review_domains"]["shares_and_classes"] == [symbol_fact["document_ordinal"]]
+    assert review_file["reported_acceptance"] == row["acceptance"]
+    assert not any(review_file["semantic_evidence"].values())
+    with pytest.raises(evidence.bulk.Blocked, match="EXTENDED_TAXONOMY_COVERAGE_NOT_BOUND"):
+        evidence.verify_extended_inputs(
+            cache, coverage | {"draft_sha256": "stale"}, hashes["cache_sha256"], candidate
+        )
+    with (target / entry["file"]).open("ab") as handle:
+        handle.write(b" ")
+    with pytest.raises(evidence.bulk.Blocked, match="EXTENDED_SHARD_BINDING_MISMATCH"):
+        list(evidence.extended_records(path, manifest))
