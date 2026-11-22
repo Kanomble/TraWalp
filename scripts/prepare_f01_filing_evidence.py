@@ -780,7 +780,7 @@ def diagnostic_category(issue):
     return "XBRL_ERROR"
 
 
-def extract_cached(row, folder, listing, processor, *, extended=False):
+def extract_cached(row, folder, listing, processor, *, extended=False, advanced_concepts=()):
     entrypoints = documents(row, listing)
     observations, alternatives, errors, sources, formats = [], [], [], {}, {}
     pattern = None if extended else FOCUS.get(row["symbol"])
@@ -814,6 +814,8 @@ def extract_cached(row, folder, listing, processor, *, extended=False):
                 request = {"document": str(stage / name)}
                 if extended:
                     request["all_facts"] = True
+                if advanced_concepts:
+                    request["advanced_concepts"] = advanced_concepts
                 result = processor.run(**request)
             except (ValueError, subprocess.TimeoutExpired) as error:
                 errors.append(
@@ -880,6 +882,11 @@ def extract_cached(row, folder, listing, processor, *, extended=False):
                     "selected": selected,
                     "format": formats[name],
                     "taxonomy_documents": taxonomy,
+                    **(
+                        {"advanced_validation": result.get("advanced_validation")}
+                        if advanced_concepts
+                        else {}
+                    ),
                 }
             )
     return observations, alternatives, errors, list(sources.values())

@@ -149,6 +149,22 @@ def test_arelle_missing_taxonomy_leaves_explicit_offline_gap(processor):
     assert not any(item["value"] is not None for item in result["observations"])
 
 
+def test_advanced_arelle_views_and_original_rounding_interval(processor):
+    (processor.directory / "sample.xsd").write_text(SCHEMA, encoding="utf-8")
+    (processor.directory / "sample_pre.xml").write_text(LINKBASE, encoding="utf-8")
+    html = processor.directory / "sample.htm"
+    html.write_text(INLINE, encoding="utf-8")
+    result = processor.run(document=str(html), advanced_concepts=["InterestExpenseNonoperating"])
+    summary = result["advanced_validation"]
+    assert summary["calculation_2_1_arcs"] == 1
+    assert summary["calculation_1_1_arcs"] == 0
+    assert summary["formulae_in_dts"] is False
+    assert summary["views"]["presentation"]
+    (fact,) = result["observations"]
+    assert fact["arelle_rounding_interval"] == ["-179650000", "-179550000", True, True]
+    assert fact["context_unit_group"] == fact["document_ordinal"]
+
+
 def test_arelle_plain_xbrl_instant(processor):
     (processor.directory / "sample.xsd").write_text(SCHEMA, encoding="utf-8")
     (processor.directory / "sample_pre.xml").write_text(LINKBASE, encoding="utf-8")

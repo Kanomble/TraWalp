@@ -10,6 +10,7 @@ import sys
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from time import perf_counter
 
 VERSION = "2.47.5"
 EDGAR_COMMIT = "4891c4c9889c77af247428ceff4fa7cc52d534ea"
@@ -32,13 +33,18 @@ def prohibit_network(event, _args):
 
 
 class FilingLogs(logging.Handler):
-    def __init__(self):
-        super().__init__(logging.ERROR)
+    def __init__(self, advanced=False):
+        super().__init__(logging.INFO if advanced else logging.ERROR)
+        self.advanced = advanced
         self.issues = []
 
     def emit(self, record):
         self.issues.append(
-            {"code": str(getattr(record, "messageCode", "")), "reason": record.getMessage()}
+            {
+                "code": str(getattr(record, "messageCode", "")),
+                "reason": record.getMessage(),
+                **({"level": record.levelname} if self.advanced else {}),
+            }
         )
 
 
@@ -152,11 +158,82 @@ def fact_data(fact, ordinal, arcs):
     }
 
 
-def extract(document, cache, packages, sec_plugin=None, *, all_facts=False):
+def standard_views(model):
+    from arelle import ViewFileRelationshipSet, XbrlConst
+    from arelle.FileSource import FileNamedStringIO
+    from arelle.ValidateXbrlCalcs import ValidateCalcsMode, validate
+
+    views = {}
+    for name, arcrole in (
+        ("presentation", XbrlConst.parentChild),
+        ("calculations", XbrlConst.summationItems),
+        ("dimensions", "XBRL-dimensions"),
+    ):
+        stream = FileNamedStringIO("json")
+        ViewFileRelationshipSet.viewRelationshipSet(model, stream, name, arcrole)
+        views[name] = json.loads(stream.getvalue())
+    legacy = [
+        {
+            "codes": issue.codes,
+            "level": issue.level.value,
+            "message": issue.msg,
+            "parameters": {
+                key: str(val) for key, val in issue.args.items() if key != "modelObject"
+            },
+        }
+        for issue in validate(model, ValidateCalcsMode.XBRL_v2_1_DEDUPLICATE)
+    ]
+    return {
+        "views": views,
+        "formulae_in_dts": model.hasFormulae,
+        "calculation_1_1_arcs": len(
+            model.relationshipSet(XbrlConst.summationItem11).modelRelationships
+        ),
+        "calculation_2_1_arcs": len(
+            model.relationshipSet(XbrlConst.summationItem).modelRelationships
+        ),
+        "xbrl21_dedup_messages": legacy,
+    }
+
+
+def advanced_aspects(item, fact, groups):
+    from arelle.ValidateXbrlCalcs import inferredDecimals, rangeValue
+
+    if fact.context is not None and fact.unit is not None:
+        bucket = groups[fact.context.contextDimAwareHash, fact.unit.hash]
+        equivalent = next(
+            (
+                ordinal
+                for ordinal, context, unit in bucket
+                if fact.context.isEqualTo(context, dimensionalAspectModel=True)
+                and fact.unit.isEqualTo(unit)
+            ),
+            None,
+        )
+        if equivalent is None:
+            equivalent = item["document_ordinal"]
+            bucket.append((equivalent, fact.context, fact.unit))
+        item["context_unit_group"] = equivalent
+        if item["value"] is not None and (item["decimals"] is not None or fact.get("precision")):
+            lower, upper, lower_closed, upper_closed = rangeValue(
+                Decimal(item["value"]), inferredDecimals(fact)
+            )
+            if lower.is_finite() and upper.is_finite():
+                item["arelle_rounding_interval"] = [
+                    str(lower),
+                    str(upper),
+                    lower_closed,
+                    upper_closed,
+                ]
+
+
+def extract(document, cache, packages, sec_plugin=None, *, all_facts=False, advanced_concepts=()):
     from arelle.api.Session import Session
     from arelle.RuntimeOptions import RuntimeOptions
 
-    logs = FilingLogs()
+    advanced = bool(advanced_concepts)
+    started = perf_counter()
+    logs = FilingLogs(advanced)
     options = RuntimeOptions(
         entrypointFile=str(document),
         workOffline=True,
@@ -166,6 +243,9 @@ def extract(document, cache, packages, sec_plugin=None, *, all_facts=False):
         disablePersistentConfig=True,
         packages=[str(path) for path in packages],
         plugins=sec_plugin,
+        validate=advanced or None,
+        calcs="c11r" if advanced else None,
+        formulaAction="none" if advanced else None,
     )
     with Session() as session:
         session.run(options, logHandler=logs)
@@ -183,11 +263,16 @@ def extract(document, cache, packages, sec_plugin=None, *, all_facts=False):
             and getattr(rel.toModelObject, "qname", None)
         }
         facts = []
+        groups = defaultdict(list)
         ordered = sorted(model.factsInInstance, key=lambda fact: fact.objectIndex)
         for ordinal, fact in enumerate(ordered, 1):
+            if advanced and fact.qname.localName not in advanced_concepts:
+                continue
             if not all_facts and (fact.isTuple or not (fact.unitID or fact.isNumeric)):
                 continue
             item = fact_data(fact, ordinal, arcs)
+            if advanced:
+                advanced_aspects(item, fact, groups)
             if all_facts:
                 item.update(
                     is_tuple=fact.isTuple,
@@ -221,11 +306,21 @@ def extract(document, cache, packages, sec_plugin=None, *, all_facts=False):
                 with path.open("rb") as stream:
                     row["sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
             dts.append(row)
-        return {
+        result = {
             "observations": facts,
-            "issues": logs.issues,
+            "issues": [
+                issue
+                for issue in logs.issues
+                if issue.get("level", "ERROR") in {"ERROR", "CRITICAL"}
+            ],
             "taxonomy_documents": dts,
         }
+        if advanced:
+            result["advanced_validation"] = standard_views(model) | {
+                "validation_messages": logs.issues,
+                "worker_seconds": round(perf_counter() - started, 3),
+            }
+        return result
 
 
 def main():
@@ -258,6 +353,7 @@ def main():
                 request["packages"],
                 request.get("sec_plugin"),
                 all_facts=request.get("all_facts", False),
+                advanced_concepts=request.get("advanced_concepts", ()),
             ),
             ensure_ascii=True,
         )

@@ -360,7 +360,7 @@ def class_preview(candidates):
     return grid
 
 
-def coverage(facts, acceptance):
+def coverage(facts, acceptance, *, preview=None):
     counts, grid = defaultdict(Counter), []
     for symbol, issuer_facts in sorted(facts.items()):
         cik = next(iter(issuer_facts)).cik
@@ -370,7 +370,7 @@ def coverage(facts, acceptance):
                 session,
                 cik=cik,
                 decision_at=datetime.combine(session, time(16), NY),
-                evidence=Evidence(acceptance=acceptance),
+                evidence=Evidence(acceptance=acceptance, **(preview or {})),
             )
             selections = {
                 key: accounting.current_balance[key] for key in ("shares_outstanding", "total_debt")
@@ -415,7 +415,7 @@ def coverage(facts, acceptance):
     }
 
 
-def run(source, derived, current):
+def run(source, derived, current, *, preview=None):
     manifest, accounting = read_bound(source, FILING_SHA), read_bound(derived, ACCOUNTING_SHA)
     require(
         manifest["candidate_code"] == accounting["candidate_code"]
@@ -494,6 +494,7 @@ def run(source, derived, current):
     require(len(restored) == 8 and len(before) == 7, "UNEXPECTED_QUALIFICATION_SCOPE")
     require(all_statuses["VERIFIED_SOURCE_FACT"] == 139734, "HISTORICAL_JOIN_COUNT_DRIFT")
     class_rows = class_preview(acn)
+    corrected = {symbol: items | additions[symbol] for symbol, items in before.items()}
     return {
         "contract": "F01_ACCOUNTING_SEMANTIC_QUALIFICATION_DRAFT_V1",
         "review_required": True,
@@ -512,14 +513,17 @@ def run(source, derived, current):
         "class_a_preview": class_rows,
         "domain_review_candidates": cases,
         "coverage_before": coverage(before, acceptance),
-        "coverage_after_dei": coverage(
-            {s: fs | additions[s] for s, fs in before.items()}, acceptance
+        "coverage_after_dei": coverage(corrected, acceptance),
+        **(
+            {"coverage_preview": coverage(corrected, acceptance, preview=preview)}
+            if preview is not None
+            else {}
         ),
     }
 
 
-def read_bound(path, expected):
-    raw, payload = filings.bulk.read_metadata(path)
+def read_bound(path, expected, *, max_bytes=filings.bulk.MAX_METADATA_BYTES):
+    raw, payload = filings.bulk.read_metadata(path, max_bytes=max_bytes)
     require(filings.sha(raw) == expected, "MANIFEST_HASH_MISMATCH")
     return payload
 
