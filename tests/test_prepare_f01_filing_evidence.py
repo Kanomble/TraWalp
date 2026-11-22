@@ -11,6 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import audit_f01_accounting_semantic_qualification as semantic_audit  # noqa: E402
+import f01_accounting_research_policy as research_policy  # noqa: E402
 import prepare_f01_filing_evidence as evidence  # noqa: E402
 import preview_f01_accounting_rules as accounting_rules  # noqa: E402
 import resolve_f01_accounting_evidence as resolution  # noqa: E402
@@ -383,6 +384,108 @@ def test_finance_lease_is_exact_to_the_selected_balance_without_implicit_zero():
     assert accounting_rules.lease_selection({("other", key[1]): [lease]}, assets)["value"] is None
     conflict = accounting_rules.lease_selection({key: [lease, lease | {"value": "1"}]}, assets)
     assert (conflict["value"], conflict["reason"]) == (None, "CONFLICT")
+
+
+def test_closed_debt_schedule_binds_period_and_both_lease_footnotes():
+    text = (
+        "Summary of total outstanding debt as of August 31, 2026 and August 31, 2025, "
+        "respectively: Commercial paper (1) $ 70 Other (2) 10 "
+        "Total current portion of long-term debt and bank borrowings $ 80 $ 75 "
+        "Total carrying amount $ 990 $ 875 Other (2) 10 Total long-term debt $ 1,000 $ 900 "
+        "(2) Amounts primarily include finance lease liabilities."
+    )
+    assert research_policy.note_totals(text, "2026-08-31") == (80, 1000, 990)
+    assert research_policy.note_totals(text, "2025-08-31") is None
+    assert (
+        research_policy.note_totals(
+            text.replace("Other (2) 10 Total long", "Other (3) 10 Total long"), "2026-08-31"
+        )
+        is None
+    )
+
+
+def test_closed_debt_partition_needs_no_combined_fact_and_blocks_overlap():
+    values = {
+        "DebtCurrent": 80,
+        "LongTermDebtAndCapitalLeaseObligations": 1000,
+        "CommercialPaper": 70,
+        "OtherLongTermDebtCurrent": 10,
+        "LongTermDebt": 990,
+        "OtherLongTermDebt": 10,
+    }
+    roots = research_policy.ROOTS
+    pairs = [
+        (roots[0], "CommercialPaper"),
+        (roots[0], "OtherLongTermDebtCurrent"),
+        (roots[1], "LongTermDebt"),
+        (roots[1], "OtherLongTermDebt"),
+    ]
+    arcs = [
+        {
+            "from": left,
+            "to": right,
+            "arcrole": sorted(research_policy.CALCS)[0],
+            "linkrole": "debt",
+            "source_sha256": "bound",
+            "weight": "1",
+        }
+        for left, right in pairs
+    ]
+    rows = [
+        {"concept": concept, "value": str(amount), "relationships": arcs}
+        for concept, amount in values.items()
+    ]
+    assert research_policy.exact_role_partition(rows, roots)
+    assert not research_policy.exact_role_partition(rows[:-1], roots)
+    overlap = arcs[0] | {"from": "LongTermDebt"}
+    rows[0] = rows[0] | {"relationships": [*arcs, overlap]}
+    assert research_policy.exact_role_partition(rows, roots) is None
+
+
+def test_research_policy_approval_requires_independent_review_and_exact_binding():
+    template = {
+        "expected_coverage": {},
+        "binding": {
+            "policy": research_policy.VERSION,
+            "required_lineage": "RESEARCH_ONLY",
+            "candidate_fingerprint": "expected",
+            "rules_sha256": evidence.sha(evidence.bulk.json_bytes(research_policy.RULES)),
+            "expected_coverage_sha256": evidence.sha(evidence.bulk.json_bytes({})),
+            "bulk_source_manifest_sha256": "source",
+        },
+    }
+    approval = {
+        "contract": research_policy.APPROVAL,
+        "binding": template["binding"],
+        "reviewer": "",
+        "decisions": dict.fromkeys(research_policy.RULES, "APPROVE_RESEARCH"),
+    }
+    with pytest.raises(evidence.bulk.Blocked, match="INDEPENDENT_POLICY_REVIEW_REQUIRED"):
+        research_policy.validate_approval(template, approval)
+    approval["reviewer"] = "independent reviewer"
+    assert research_policy.validate_approval(template, approval) == sorted(research_policy.RULES)
+    lineage = {
+        "classification": "RESEARCH_ONLY",
+        "dataset_id": "dataset",
+        "manifest_sha256": "schema",
+    }
+    target = {
+        "dataset_id": "dataset",
+        "bootstrap_manifest_sha256": "schema",
+        "manifest_sha256": "source",
+        "candidate": {"fingerprint": "expected"},
+    }
+    handoff = research_policy.canonical_handoff(template, approval, lineage, target, "review-doc")
+    assert handoff["policy_activated"] is False and handoff["approval_sha256"] == "review-doc"
+    with pytest.raises(evidence.bulk.Blocked, match="RESEARCH_POLICY_IMPORT_SCOPE_DRIFT"):
+        research_policy.canonical_handoff(
+            template, approval, lineage, target | {"dataset_id": "other"}, "x"
+        )
+    approval["decisions"]["COMMERCIAL_PAPER"] = "DENY"
+    with pytest.raises(evidence.bulk.Blocked, match="DEBT_PARTITION_POLICY_PREREQUISITES"):
+        research_policy.validate_approval(template, approval)
+    with pytest.raises(evidence.bulk.Blocked, match="POLICY_APPROVAL_BINDING_DRIFT"):
+        research_policy.validate_approval(template, approval | {"binding": {}})
 
 
 def test_extended_inventory_merges_warmup_amendments_and_diagnosis():

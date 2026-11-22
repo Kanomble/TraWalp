@@ -10,6 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import audit_f01_accounting_semantic_qualification as audit
+import f01_accounting_research_policy as qualification
 import preview_f01_advanced_accounting as advanced
 
 from trading_system.fundamentals.metrics import MAX_SHARES_OUTSTANDING_AGE
@@ -19,6 +20,7 @@ from trading_system.models.fundamentals import FundamentalFact
 f = audit.filings
 require = f.require
 PREVIEW_SHA = "653b46434d6cf60ec3253c35be95d2ad7ec6c33920c19adea7f2aa50ca0b2382"
+RULE_PREVIEW_SHA = "98eade350f01bd5786f4caf943e182ee7f84ae3699d3f661258c0e63a49ee822"
 VERSION = "F01_ACCOUNTING_RESEARCH_RULES_V1"
 RULES = {
     "SHARES_AGGREGATE": "Issuer-level shares instant with unit and freshness guards.",
@@ -149,7 +151,7 @@ def lease_selection(leases, assets):
     }
 
 
-def lookup(source, derived, wanted):
+def lookup(source, derived, wanted, policy_periods=None, *, proofs=None):
     raw = audit.read_bound(source, audit.FILING_SHA)
     accounting = audit.read_bound(derived, audit.ACCOUNTING_SHA)
     require(
@@ -203,6 +205,12 @@ def lookup(source, derived, wanted):
                 "filing_shard": entry["sha256"],
                 "acceptance": row["acceptance"],
             }
+        if policy_periods and acc in policy_periods:
+            selected = {fact for fact in facts[row["symbol"]] if fact.accession_number == acc}
+            for instant in sorted(policy_periods[acc]):
+                proof = qualification.qualify_note(row, selected, instant)
+                if proof:
+                    proofs.append(proof)
     return facts, originals, accepted, leases, shares, open_refs
 
 
@@ -309,7 +317,7 @@ class Trace:
         }
 
 
-def replay(data, baseline, e6):
+def replay(data, baseline, e6, *, proofs=()):
     candidates = {item["session"]: item["sources"] for item in baseline["class_a_preview"]}
     # Use the bound listing fact itself as the scope witness, independent of the Debt sample.
     scope = {s["share_fact"]["source"]["cik"] for v in candidates.values() for s in v}
@@ -317,6 +325,9 @@ def replay(data, baseline, e6):
     (scope_cik,) = scope
     facts, originals, accepted, leases, covers, open_refs = data
     trial = advanced.trial_evidence(e6["filings"])
+    trial["debt_coverage"] += tuple(coverage for coverage, _, _ in proofs)
+    for _, contexts, _ in proofs:
+        trial["contexts"].update(contexts)
     trace = Trace(originals)
     before_index = {(row["symbol"], row["session"]): row for row in e6["coverage_preview"]["grid"]}
     grid, totals = [], defaultdict(Counter)
@@ -382,17 +393,102 @@ def replay(data, baseline, e6):
     }
 
 
+def accounting_periods(prior):
+    periods = defaultdict(set)
+    for probe in prior["probes"]:
+        for side in ("current", "prior"):
+            assets = probe["before"]["roic"][side].get("total_assets", {})
+            for ref in assets.get("sources", ()):
+                fact = prior["source_facts"][ref]["fact"]
+                periods[fact["accession_number"]].add(fact["period_end"])
+    return periods
+
+
+def qualify_result(result, prior, current, proofs):
+    expected = {(x["symbol"], x["session"]): x for x in prior["probes"]}
+    statuses = Counter()
+    for probe in result["probes"]:
+        reference = expected[probe["symbol"], probe["session"]]["before"]
+        require(
+            all(item["value"] == probe["before"][key]["value"] for key, item in reference.items()),
+            "RULE_REPLAY_BASELINE_DRIFT",
+        )
+        trace = probe["preview"]["total_debt"]
+        if trace["value"] is not None:
+            status = trace["reason"]
+        elif trace["blocked_candidates"]:
+            status = "OBSERVED_BORROWINGS_SCOPE_NOT_PROVEN"
+        else:
+            status = "NO_ELIGIBLE_DEBT_INPUT"
+        probe["debt_qualification"] = status
+        statuses[status] += 1
+    binding = {
+        "policy": qualification.VERSION,
+        "candidate_fingerprint": current["fingerprint"],
+        "rules_sha256": f.sha(f.bulk.json_bytes(qualification.RULES)),
+        "baseline_sha256": RULE_PREVIEW_SHA,
+        "filing_manifest_sha256": audit.FILING_SHA,
+        "accounting_manifest_sha256": audit.ACCOUNTING_SHA,
+        "bulk_source_manifest_sha256": f.pilot.SOURCE_SHA,
+        "expected_coverage_sha256": f.sha(f.bulk.json_bytes(result["coverage"])),
+        "required_lineage": "RESEARCH_ONLY",
+    }
+    result.update(
+        policy_qualification={
+            "debt_status_counts": dict(statuses),
+            "proofs": [proof for _, _, proof in proofs],
+        },
+        approval_template={
+            "contract": qualification.APPROVAL,
+            "binding": binding,
+            "reviewer": "",
+            "decisions": dict.fromkeys(qualification.RULES, "PENDING"),
+            "rule_definitions": qualification.RULES,
+            "expected_coverage": result["coverage"],
+        },
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--draft", type=Path, required=True)
-    parser.add_argument("--advanced", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--draft", type=Path)
+    parser.add_argument("--advanced", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--qualification-baseline", type=Path)
+    parser.add_argument("--verify-policy-approval", type=Path)
+    parser.add_argument("--policy-report", type=Path)
+    parser.add_argument("--policy-report-sha256")
+    parser.add_argument("--bootstrap-result", type=Path)
+    parser.add_argument("--import-binding", type=Path)
     args = parser.parse_args()
     current = f.pilot.code_binding()
+    if args.verify_policy_approval:
+        require(args.policy_report and args.policy_report_sha256, "BOUND_POLICY_REPORT_REQUIRED")
+        report = audit.read_bound(args.policy_report, args.policy_report_sha256, max_bytes=f.LIMIT)
+        template = report["approval_template"]
+        require(
+            template["binding"]["candidate_fingerprint"] == current["fingerprint"],
+            "POLICY_CODE_DRIFT",
+        )
+        approval_raw, approval = f.bulk.read_metadata(args.verify_policy_approval)
+        if args.bootstrap_result or args.import_binding:
+            require(args.bootstrap_result and args.import_binding, "IMPORT_HANDOFF_INPUTS_REQUIRED")
+            _, bootstrap = f.bulk.read_metadata(args.bootstrap_result)
+            _, import_binding = f.bulk.read_metadata(args.import_binding)
+            output = qualification.canonical_handoff(
+                template, approval, bootstrap["lineage"], import_binding, f.sha(approval_raw)
+            )
+        else:
+            decisions = qualification.validate_approval(template, approval)
+            output = {"validated_research_rules": decisions, "policy_activated": False}
+        print(json.dumps(output))
+        return
+    require(args.draft and args.advanced and args.output, "REPLAY_PATHS_REQUIRED")
     require(
         all(
             path.absolute().drive.upper() == "G:"
-            for path in (args.draft, args.advanced, args.output)
+            for path in (args.draft, args.advanced, args.output, args.qualification_baseline)
+            if path
         ),
         "G_DRIVE_REQUIRED",
     )
@@ -411,7 +507,18 @@ def main():
         / f"f01-extended-accounting-evidence-{audit.RUN}"
         / "manifest.json"
     )
-    result = replay(lookup(source, derived, wanted), baseline, e6)
+    prior = (
+        audit.read_bound(args.qualification_baseline, RULE_PREVIEW_SHA, max_bytes=f.LIMIT)
+        if args.qualification_baseline
+        else None
+    )
+    proofs = []
+    periods = accounting_periods(prior) if prior else None
+    result = replay(
+        lookup(source, derived, wanted, periods, proofs=proofs), baseline, e6, proofs=proofs
+    )
+    if prior:
+        qualify_result(result, prior, current, proofs)
     catalog = {"version": VERSION, "base_policy": POLICY, "rules": RULES}
     result.update(
         rule_catalog=catalog,
