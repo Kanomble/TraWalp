@@ -267,8 +267,11 @@ class SecHttp:
         self.last_request = None
 
     def open(self, name, method, **headers):
+        return self.open_url(URLS[name], method, **headers)
+
+    def open_url(self, url, method, **headers):
         request = urllib.request.Request(
-            URLS[name],
+            url,
             method=method,
             headers={"User-Agent": self.user_agent, "Accept-Encoding": "identity", **headers},
         )
@@ -281,11 +284,11 @@ class SecHttp:
             except urllib.error.HTTPError as error:
                 with closing(error):
                     if error.code not in RETRYABLE or attempt == 2:
-                        raise Blocked(f"SEC_HTTP_{error.code}: {name}") from error
+                        raise Blocked(f"SEC_HTTP_{error.code}: {url}") from error
                     wait = retry_delay(error.headers.get("Retry-After"), error.code, attempt)
             except TRANSPORT_ERRORS as error:
                 if attempt == 2:
-                    raise Blocked(f"SEC_TRANSPORT_FAILED: {name}") from error
+                    raise Blocked(f"SEC_TRANSPORT_FAILED: {url}") from error
                 wait = 2**attempt
             self.pause(wait)
         raise AssertionError("unreachable")
