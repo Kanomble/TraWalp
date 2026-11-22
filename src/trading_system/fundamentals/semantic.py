@@ -107,6 +107,7 @@ class Evidence:
     acceptance: Mapping[str, datetime] = field(default_factory=dict)
     amendments: Mapping[str, Amendment] = field(default_factory=dict)
     debt_coverage: tuple[DebtCoverage, ...] = ()
+    strict_amendments: bool = False
 
 
 @dataclass(frozen=True)
@@ -206,6 +207,8 @@ class _ResearchFacts:
         candidates = _ordered(facts)
         if not candidates:
             return Selection("NO_ELIGIBLE_OBSERVATION")
+        if self.evidence.strict_amendments and not self._amendments_identified(candidates):
+            return Selection("UNRESOLVED_AMENDMENT_LINEAGE", candidates=candidates)
         latest = max(fact.filed for fact in candidates)
         contenders = tuple(fact for fact in candidates if fact.filed == latest)
         references = []
@@ -228,6 +231,21 @@ class _ResearchFacts:
         return Selection(
             reason, contenders[0].value, contenders, candidates, tuple(sorted(set(references)))
         )
+
+    def _amendments_identified(self, candidates):
+        for item in candidates:
+            if item.form.endswith("/A"):
+                link = self.evidence.amendments.get(item.accession_number)
+                peers = [
+                    other for other in candidates if other.accession_number != item.accession_number
+                ]
+                if any(other.value != item.value for other in peers) and (
+                    not link
+                    or not link.reference.strip()
+                    or not any(self._supersedes(item, other, link) for other in peers)
+                ):
+                    return False
+        return True
 
     def _supersedes(self, amendment, original, link):
         if (
@@ -305,7 +323,10 @@ class _ResearchFacts:
             )
         )
         totals = {value for _, value in pairs}
-        if len(totals) > 1 or combined.reason == "UNRESOLVED_EQUIVALENT_OBSERVATIONS":
+        if len(totals) > 1 or combined.reason in {
+            "UNRESOLVED_EQUIVALENT_OBSERVATIONS",
+            "UNRESOLVED_AMENDMENT_LINEAGE",
+        }:
             return Selection("UNRESOLVED_DEBT_TOTALS", candidates=latest, references=references)
         components = next(iter(totals), None)
         if combined.value is not None:
@@ -520,6 +541,16 @@ def _window(series, cutoff):
     )
 
 
+def ttm_from_windows(windows: Mapping[str, SeriesWindow], as_of: date):
+    """Reuse the standard arithmetic with already selected Research flow windows."""
+
+    def flow_ttm(_facts, metric, _as_of, *, end_on_or_before=None):
+        chosen = windows.get(metric)
+        return (chosen.value, chosen.period_end, chosen.filed) if chosen else (None, None, None)
+
+    return build_ttm([], as_of, flow_ttm=flow_ttm)
+
+
 def research_accounting_as_of(
     facts: Iterable[FundamentalFact],
     as_of: date,
@@ -542,20 +573,18 @@ def research_accounting_as_of(
         if chosen.period_end is not None
     }
 
-    def ttm(windows):
-        def flow_ttm(_facts, metric, _as_of, *, end_on_or_before=None):
-            chosen = windows.get(metric)
-            return (chosen.value, chosen.period_end, chosen.filed) if chosen else (None, None, None)
-
-        return build_ttm([], as_of, flow_ttm=flow_ttm)
-
     balance, current_balance = book.balance(as_of, as_of)
     prior_balance, prior_trace = (
         book.balance(as_of, balance.period_end - timedelta(days=300))
         if balance.period_end
         else (BalanceSheetSnapshot(), {})
     )
-    state = FundamentalAccountingState(ttm(current_flows), ttm(prior_flows), balance, prior_balance)
+    state = FundamentalAccountingState(
+        ttm_from_windows(current_flows, as_of),
+        ttm_from_windows(prior_flows, as_of),
+        balance,
+        prior_balance,
+    )
     return ResearchAccounting(
         cik=cik,
         as_of=as_of,

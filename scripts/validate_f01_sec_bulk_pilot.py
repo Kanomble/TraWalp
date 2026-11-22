@@ -226,7 +226,18 @@ def legacy_connection(path):
         yield db
 
 
-def read_snapshot(connection, report, identity, admissions, external, manifest):
+def read_snapshot(
+    connection,
+    report,
+    identity,
+    admissions,
+    external,
+    manifest,
+    *,
+    target=TARGET,
+    dataset_id=DATASET_ID,
+    counts=COUNTS,
+):
     require_contract(connection, writer=False)
     binding = report["binding"]
     version = connection.execute(
@@ -239,7 +250,7 @@ def read_snapshot(connection, report, identity, admissions, external, manifest):
     stored = connection.execute("SELECT evidence,manifest FROM research_bootstrap").fetchone()
     require(
         tuple(version) == (pilot.CONTRACT, binding["schema_fingerprint"], 8)
-        and tuple(origin) == (DATASET_ID, binding["bootstrap_manifest_sha256"])
+        and tuple(origin) == (dataset_id, binding["bootstrap_manifest_sha256"])
         and stored
         and json.loads(stored[0]) == lineage
         and stored[1] == manifest
@@ -275,7 +286,7 @@ def read_snapshot(connection, report, identity, admissions, external, manifest):
             SELECT DISTINCT fact_id,symbol,taxonomy FROM source_occurrence)""",
     }
     require(
-        {key: connection.execute(sql).fetchone()[0] for key, sql in table_counts.items()} == COUNTS,
+        {key: connection.execute(sql).fetchone()[0] for key, sql in table_counts.items()} == counts,
         "DATABASE_PILOT_COUNTS_MISMATCH",
     )
     require(
@@ -286,17 +297,17 @@ def read_snapshot(connection, report, identity, admissions, external, manifest):
     namespace = digest(
         json_bytes(
             [
-                str(TARGET.resolve()),
+                str(target.resolve()),
                 binding["target_file_identity"],
                 tuple(version[:2]),
                 tuple(origin),
             ]
         )
     )
-    archive_path = TARGET.with_name(TARGET.name + ".sec-requests") / namespace
+    archive_path = target.with_name(target.name + ".sec-requests") / namespace
     bulk.directory(archive_path)
     archive = SecRequestArchive(archive_path)
-    backend = CanonicalSecPersistence(TARGET, archive)
+    backend = CanonicalSecPersistence(target, archive)
     for index, (issuer, pair) in enumerate(
         zip(binding["active_issuers"], binding["requests"], strict=True), 2
     ):
@@ -343,12 +354,12 @@ def read_snapshot(connection, report, identity, admissions, external, manifest):
         yield issuer, envelope, submissions, provenance
 
 
-def check_facts(reader, connection, issuer, envelope, errors):
+def check_facts(reader, connection, issuer, envelope, errors, *, target=TARGET):
     """Compare the physical forward projection with the sealed normalized request."""
     full = reader.facts_available_as_of(issuer["symbol"], date.max)
     if Counter(_fact_rows(full)) != Counter(_fact_rows(envelope.facts)):
         errors.append(issuer | {"issue": "FORWARD_PROJECTION_REQUEST_MISMATCH"})
-    compatibility = Database(TARGET).facts_available_as_of(
+    compatibility = Database(target).facts_available_as_of(
         issuer["symbol"], date.max, connection=connection
     )
     if Counter(_fact_rows(compatibility)) != Counter(_fact_rows(envelope.facts)):

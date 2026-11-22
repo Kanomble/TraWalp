@@ -153,7 +153,17 @@ def lease_selection(leases, assets):
     }
 
 
-def lookup(source, derived, wanted, policy_periods=None, *, proofs=None, financing_index=None):
+def lookup(
+    source,
+    derived,
+    wanted,
+    policy_periods=None,
+    *,
+    proofs=None,
+    financing_index=None,
+    on_filing=None,
+    symbols=None,
+):
     raw = audit.read_bound(source, audit.FILING_SHA)
     accounting = audit.read_bound(derived, audit.ACCOUNTING_SHA)
     require(
@@ -161,10 +171,15 @@ def lookup(source, derived, wanted, policy_periods=None, *, proofs=None, financi
     )
     accepted, facts, leases, originals, shares = {}, defaultdict(set), defaultdict(list), {}, {}
     open_refs = defaultdict(list)
-    for (entry, row), record in zip(
-        f.extended_records(source, raw), accounting["filings"], strict=True
-    ):
-        require(entry["sha256"] == record["source_sha256"], "ACCOUNTING_SHARD_DRIFT")
+    for entry, record in zip(raw["filings"], accounting["filings"], strict=True):
+        require(
+            entry["sha256"] == record["source_sha256"]
+            and entry["accession"] == record["accession"],
+            "ACCOUNTING_SHARD_DRIFT",
+        )
+        if symbols is not None and entry["symbol"] not in symbols:
+            continue
+        _, row = next(f.extended_records(source, raw | {"filings": [entry]}))
         acc = row["accession"]
         if (
             not row["acceptance"]
@@ -176,6 +191,7 @@ def lookup(source, derived, wanted, policy_periods=None, *, proofs=None, financi
         if acc in wanted:
             shares[acc] = row
         by_ordinal = {item["document_ordinal"]: item for item in row["observations"]}
+        verified = set()
         if financing_index is not None and acc in policy_periods:
             positions = financing.index_filing(
                 row, entry["sha256"], policy_periods[acc], by_ordinal.values()
@@ -207,17 +223,19 @@ def lookup(source, derived, wanted, policy_periods=None, *, proofs=None, financi
             )
             require(refs, "VERIFIED_FACT_WITHOUT_EXACT_ORIGINAL")
             facts[row["symbol"]].add(fact)
+            verified.add(fact)
             originals[fact] = {
                 "matches": refs,
                 "filing_shard": entry["sha256"],
                 "acceptance": row["acceptance"],
             }
         if policy_periods and acc in policy_periods:
-            selected = {fact for fact in facts[row["symbol"]] if fact.accession_number == acc}
             for instant in sorted(policy_periods[acc]):
-                proof = qualification.qualify_note(row, selected, instant)
+                proof = qualification.qualify_note(row, verified, instant)
                 if proof:
                     proofs.append(proof)
+        if on_filing is not None:
+            on_filing(entry, row, verified, originals)
     return facts, originals, accepted, leases, shares, open_refs
 
 
