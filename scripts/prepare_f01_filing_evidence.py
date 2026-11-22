@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import html.entities
-import io
 import json
 import msvcrt
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
-import xml.etree.ElementTree as ET
 import zipfile
 from collections import Counter, defaultdict
 from contextlib import closing
@@ -23,6 +21,7 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 import validate_f01_sec_bulk_pilot as qualification  # noqa: E402
+from f01_arelle_adapter import VERSION as ARELLE_VERSION  # noqa: E402
 
 from trading_system.data.canonical_paths import pinned_files  # noqa: E402
 from trading_system.data.xbrl_parser import TAG_ALIASES, parse_company_facts  # noqa: E402
@@ -31,6 +30,7 @@ pilot = qualification.pilot
 bulk = pilot.bulk
 require = bulk.require
 ROOT = pilot.RESEARCH_ROOT / "sec-originals" / "filing-evidence"
+ARELLE_ROOT = pilot.RESEARCH_ROOT / "arelle" / ARELLE_VERSION
 DIAG = "f01-fundamental-gaps-readonly-20261121-220344.json"
 DIAG_SHA = "43609781335d384931b7b3b44ad9bc3ed18d7aaf40b7ecb7b447adfa4c4a805f"
 SEC = "https://www.sec.gov/Archives/edgar/data"
@@ -39,8 +39,6 @@ CIK = re.compile(r"\d{10}", re.ASCII)
 LIMIT = 64 * 1024**2
 RESERVE = 512 * 1024**2
 XBRL = "http://www.xbrl.org/2003/instance"
-IX = {"http://www.xbrl.org/2013/inlineXBRL", "http://www.xbrl.org/2008/inlineXBRL"}
-DIM = "http://xbrl.org/2006/xbrldi"
 ISO = "http://www.xbrl.org/2003/iso4217"
 FOCUS = {
     "ACN": r"debt|borrow|lease|sharesoutstanding|classofstock",
@@ -251,16 +249,30 @@ def get_document(client, root, row, filename):
     return cache_read(target, row, filename)
 
 
-def documents(row, listing):
+def listing_names(listing):
     items = listing["directory"]["item"]
     require(len(items) <= 3000, "SEC_DIRECTORY_TOO_LARGE")
-    names = {
+    return {
         item["name"]
         for item in items
         if isinstance(item.get("name"), str)
         and NAME.fullmatch(item["name"])
         and ".." not in item["name"]
     }
+
+
+def taxonomy_files(listing):
+    names = sorted(
+        name
+        for name in listing_names(listing)
+        if re.search(r"(?:\.xsd|_(?:cal|pre|def|lab|ref)\.xml)$", name, re.IGNORECASE)
+    )
+    require(len(names) <= 32, "FILING_TAXONOMY_DOCUMENT_LIMIT")
+    return names
+
+
+def documents(row, listing):
+    names = listing_names(listing)
     primary = row.get("primary")
     instances = sorted(name for name in names if re.search(r"(?:_html?|[-_]\d{8})\.xml$", name))
     if not primary:
@@ -284,199 +296,14 @@ def acquire(rows, root, client):
             for row in rows:
                 print(f"{row['symbol']} {row['accession']}", file=sys.stderr)
                 listing, _ = get_document(client, root, row, "index.json")
-                for filename in documents(row, json.loads(listing)):
+                directory = json.loads(listing)
+                for filename in dict.fromkeys(
+                    documents(row, directory) + taxonomy_files(directory)
+                ):
                     get_document(client, root, row, filename)
         finally:
             lock.seek(0)
             msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
-
-
-def expanded(raw, names):
-    if raw.startswith("{"):
-        return raw
-    prefix, separator, name = raw.partition(":")
-    if not separator:
-        return f"{{{names['']}}}{prefix}" if "" in names else prefix
-    return f"{{{names[prefix]}}}{name}" if prefix in names else None
-
-
-def parse_xml(data):
-    raw = data.decode("utf-8-sig")
-    raw = re.sub(r"<!DOCTYPE\s+html\s*>", "", raw, flags=re.IGNORECASE)
-    require(not re.search(r"<!DOCTYPE|<!ENTITY", raw, re.IGNORECASE), "UNSUPPORTED_XML_DECLARATION")
-    # SEC XHTML can use predefined HTML names without a DTD.
-    raw = re.sub(
-        r"&([A-Za-z][A-Za-z0-9]+);",
-        lambda m: (
-            f"&#{html.entities.name2codepoint[m[1]]};"
-            if m[1] in html.entities.name2codepoint
-            and m[1] not in {"amp", "lt", "gt", "quot", "apos"}
-            else m[0]
-        ),
-        raw,
-    )
-    namespace, parents, pending, stack = {}, {}, {}, []
-    events = ET.iterparse(io.StringIO(raw), events=("start", "end", "start-ns"))
-    for event, value in events:
-        if event == "start-ns":
-            pending[value[0]] = value[1]
-        elif event == "start":
-            parent = stack[-1] if stack else None
-            names = namespace[parent] if parent is not None else {}
-            namespace[value] = names | pending if pending else names
-            pending = {}
-            parents[value] = parent
-            stack.append(value)
-        else:
-            stack.pop()
-    return events.root, namespace, parents
-
-
-def context_data(node, names):
-    prefix = f"{{{XBRL}}}"
-    identifier = node.find(f".//{prefix}identifier")
-    period = node.find(f"{prefix}period")
-    times = {
-        tag: period.findtext(prefix + tag) if period is not None else None
-        for tag in ("instant", "startDate", "endDate")
-    }
-    dimensions = []
-    for item in node.iter():
-        if item.tag == f"{{{DIM}}}explicitMember":
-            dimensions.append(
-                {
-                    "axis": expanded(item.get("dimension", ""), names[item]),
-                    "member": expanded((item.text or "").strip(), names[item]),
-                }
-            )
-        elif item.tag == f"{{{DIM}}}typedMember":
-            dimensions.append(
-                {
-                    "axis": expanded(item.get("dimension", ""), names[item]),
-                    "typed_xml": ET.tostring(item, encoding="unicode"),
-                }
-            )
-    # Undeclared segment/scenario content cannot be silently treated as dimensionless.
-    opaque_context = any(
-        child.tag not in {f"{{{DIM}}}explicitMember", f"{{{DIM}}}typedMember"}
-        for container in node.iter()
-        if container.tag in {prefix + "segment", prefix + "scenario"}
-        for child in container
-    )
-    return times | {
-        "entity": identifier.text if identifier is not None else None,
-        "scheme": identifier.get("scheme") if identifier is not None else None,
-        "dimensions": dimensions,
-        "opaque_context": opaque_context,
-    }
-
-
-def numeric(raw, transform, scale, sign):
-    if transform:
-        uri, _, local = transform[1:].partition("}") if transform.startswith("{") else ("", "", "")
-        if not re.fullmatch(
-            r"http://www\.xbrl\.org/inlineXBRL/transformation/\d{4}-\d{2}-\d{2}", uri
-        ):
-            return None
-        cleaned = re.sub(r"\s", "", raw)
-        if local in {"numdotdecimal", "num-dot-decimal"} and re.fullmatch(
-            r"(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?", cleaned
-        ):
-            raw = cleaned.replace(",", "")
-        elif local in {"numcommadecimal", "num-comma-decimal"} and re.fullmatch(
-            r"(?:\d+|\d{1,3}(?:\.\d{3})+)(?:,\d+)?", cleaned
-        ):
-            raw = cleaned.replace(".", "").replace(",", ".")
-        elif local == "fixed-zero" or (local == "zerodash" and cleaned in {"-", "–", "—"}):
-            raw = "0"
-        else:
-            return None
-    if sign not in {"", "-"} or not re.fullmatch(r"[+-]?\d{1,2}", scale):
-        return None
-    if not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", raw.strip()) or len(raw) > 160:
-        return None
-    try:
-        val = Decimal(raw)
-        if sign == "-" and val.is_signed():
-            return None
-        num = val.as_tuple()
-        return str(Decimal((int(sign == "-" or num.sign), num.digits, num.exponent + int(scale))))
-    except InvalidOperation:
-        return None
-
-
-def extract(data):
-    tree, names, parents = parse_xml(data)
-    prefix = f"{{{XBRL}}}"
-    contexts, units = {}, {}
-    for node in tree.iter():
-        if node.tag == prefix + "context":
-            require(node.get("id") and node.get("id") not in contexts, "DUPLICATE_CONTEXT_ID")
-            contexts[node.get("id")] = context_data(node, names)
-        if node.tag == prefix + "unit":
-            require(node.get("id") and node.get("id") not in units, "DUPLICATE_UNIT_ID")
-            units[node.get("id")] = {
-                "numerator": [
-                    expanded((item.text or "").strip(), names[item])
-                    for item in node.iter(prefix + "measure")
-                    if not any(
-                        item in list(branch) for branch in node.iter(prefix + "unitDenominator")
-                    )
-                ],
-                "denominator": [
-                    expanded((item.text or "").strip(), names[item])
-                    for branch in node.iter(prefix + "unitDenominator")
-                    for item in branch.iter(prefix + "measure")
-                ],
-            }
-    for ordinal, node in enumerate(tree.iter(), 1):
-        cref, uref = node.get("contextRef"), node.get("unitRef")
-        if not cref or not uref:
-            continue
-        inline = node.tag in {f"{{{uri}}}nonFraction" for uri in IX}
-        concept = expanded(node.get("name", ""), names[node]) if inline else node.tag
-        transform = expanded(node.get("format"), names[node]) if node.get("format") else ""
-        scale, sign = node.get("scale", "0"), node.get("sign", "")
-        raw = "".join(node.itertext()).strip()
-        value = None
-        markup = {
-            "{http://www.w3.org/1999/xhtml}" + tag for tag in ("span", "b", "i", "em", "strong")
-        }
-        if (
-            transform is not None
-            and not node.get("continuedAt")
-            and all(child.tag in markup for child in list(node.iter())[1:])
-        ):
-            value = numeric(raw, transform, scale, sign)
-        parent = parents[node]
-        while parent is not None and parent.tag.rsplit("}", 1)[-1].lower() != "table":
-            parent = parents[parent]
-        captions = (
-            []
-            if parent is None
-            else [
-                " ".join("".join(child.itertext()).split())
-                for child in parent
-                if child.tag.rsplit("}", 1)[-1].lower() == "caption"
-            ]
-        )
-        yield {
-            "concept": concept,
-            "raw_text": raw,
-            "value": value,
-            "scale": scale,
-            "sign": sign,
-            "decimals": node.get("decimals"),
-            "format": transform,
-            "context_id": cref,
-            "context": contexts.get(cref),
-            "unit_id": uref,
-            "unit": units.get(uref),
-            "fact_id": node.get("id"),
-            "document_ordinal": ordinal,
-            "table_id": parent.get("id") if parent is not None else None,
-            "table_captions": captions,
-        }
 
 
 def taxonomy(concept):
@@ -519,7 +346,9 @@ def join(fact, rows, cik):
         if row["value"] is not None and Decimal(row["value"]) == Decimal(fact["value"])
     ]
     if len(comparable) == len(exact) == 1 and not (
-        exact[0]["context"]["dimensions"] or exact[0]["context"]["opaque_context"]
+        exact[0]["context"]["dimensions"]
+        or exact[0]["context"]["opaque_context"]
+        or exact[0].get("evidence_issue")
     ):
         status = "VERIFIED_SOURCE_FACT"
     elif exact or any(
@@ -717,42 +546,144 @@ def companyfacts(rows, metadata):
     return observations
 
 
-def draft(rows, root, facts):
+class ArelleProcessor:
+    def __init__(self, directory):
+        require(
+            directory.is_absolute() and directory.drive.upper() == "G:",
+            "ARELLE_RESEARCH_DIRECTORY_MUST_BE_ON_G",
+        )
+        self.directory = bulk.directory(directory)
+        self.site = bulk.directory(directory / "site")
+        self.cache = safe_directory(directory / "cache")
+        self.packages = []
+        manifest = directory / "taxonomy-packages.json"
+        if bulk.exists(manifest):
+            _, items = bulk.read_metadata(manifest)
+            for item in items:
+                name = item["file"]
+                require(
+                    NAME.fullmatch(name) and ".." not in name and name.endswith(".zip"),
+                    "INVALID_TAXONOMY_PACKAGE_NAME",
+                )
+                folder = bulk.directory(directory / "packages")
+                path = folder / name
+                bulk.plain(path)
+                require(pilot.file_sha(path) == item["sha256"], "TAXONOMY_PACKAGE_SHA256_MISMATCH")
+                require(
+                    all(manifest_entry["path"] != str(path) for manifest_entry in self.packages),
+                    "DUPLICATE_TAXONOMY_PACKAGE",
+                )
+                self.packages.append({"path": str(path), "sha256": item["sha256"]})
+        self.release = self.run(probe=True)
+
+    def run(self, **request):
+        payload = {
+            "site": str(self.site),
+            "cache": str(self.cache),
+            "packages": [p["path"] for p in self.packages],
+            **request,
+        }
+        env = os.environ | {"TEMP": str(self.directory), "TMP": str(self.directory)}
+        child = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                "-B",
+                str(Path(__file__).with_name("f01_arelle_adapter.py")),
+            ],
+            input=json.dumps(payload),
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            env=env,
+            timeout=180,
+            check=False,
+        )
+        if child.returncode:
+            raise ValueError(f"ARELLE_WORKER_FAILED: {child.stderr.strip()[-2000:]}")
+        return json.loads(child.stdout)
+
+
+def extract_cached(row, folder, listing, processor):
+    entrypoints = documents(row, listing)
+    observations, alternatives, errors, sources = [], [], [], {}
+    pattern = FOCUS.get(row["symbol"])
+    with tempfile.TemporaryDirectory(prefix="filing-", dir=processor.directory) as temporary:
+        stage = Path(temporary)
+        for name in dict.fromkeys(entrypoints + taxonomy_files(listing)):
+            if not bulk.exists(folder / name):
+                errors.append({"document": name, "reason": "MISSING_CACHED_DOCUMENT"})
+                continue
+            data, source = cache_read(folder / name, row, name)
+            sources[name] = source
+            (stage / name).write_bytes(data)
+        staged_sources = {(stage / name).resolve(): source for name, source in sources.items()}
+        for name in entrypoints:
+            if name not in sources:
+                continue
+            try:
+                result = processor.run(document=str(stage / name))
+            except (ValueError, subprocess.TimeoutExpired) as error:
+                errors.append(
+                    {"document": name, "reason": str(error), "status": "MISSING_EVIDENCE"}
+                )
+                continue
+            issues = result["issues"]
+            errors.extend(
+                {"document": name, "status": "MISSING_EVIDENCE", **issue} for issue in issues
+            )
+            parsed = [
+                item
+                for item in result["observations"]
+                if not pattern
+                or re.search(pattern, (item["concept"] or "").rsplit("}", 1)[-1], re.I)
+            ]
+            for item in parsed:
+                source = staged_sources.get(Path(item["source_document"]).resolve())
+                if source is None:
+                    item["evidence_issue"] = "ORIGINAL_DOCUMENT_BINDING_UNAVAILABLE"
+                else:
+                    item["source"] = source
+                    item["source_document"] = source["url"]
+                for relationship in item["relationships"]:
+                    linkbase = staged_sources.get(Path(relationship["source_document"]).resolve())
+                    if linkbase is not None:
+                        relationship["source_document"] = linkbase["url"]
+                        relationship["source_sha256"] = linkbase["sha256"]
+            taxonomy = []
+            for dependency in result.get("taxonomy_documents", []):
+                resolved = dependency["resolved_path"]
+                staged = staged_sources.get(Path(resolved).resolve()) if resolved else None
+                if staged is not None:
+                    dependency = {"uri": staged["url"], "sha256": staged["sha256"]}
+                taxonomy.append(dependency)
+            selected = bool(parsed and not observations and not issues)
+            if selected:
+                observations = parsed
+            alternatives.append(
+                {
+                    "source": sources[name],
+                    "observations": None if selected else parsed,
+                    "selected": selected,
+                    "taxonomy_documents": taxonomy,
+                }
+            )
+    return observations, alternatives, errors, list(sources.values())
+
+
+def draft(rows, root, facts, processor):
     results = {}
     for row in rows:
         acc, cik = row["accession"], row["cik"]
         folder = root / cik / acc
-        observations, alternatives, errors = [], [], []
+        observations, alternatives, errors, sources = [], [], [], []
         index_source = None
         if bulk.exists(folder / "index.json"):
             listing, index_source = cache_read(folder / "index.json", row, "index.json")
-            for name in documents(row, json.loads(listing)):
-                if not bulk.exists(folder / name):
-                    errors.append({"document": name, "reason": "MISSING_CACHED_DOCUMENT"})
-                    continue
-                data, meta = cache_read(folder / name, row, name)
-                try:
-                    pattern = FOCUS.get(row["symbol"])
-                    parsed = [
-                        fact
-                        for fact in extract(data)
-                        if not pattern
-                        or re.search(
-                            pattern, (fact["concept"] or "").rsplit("}", 1)[-1], flags=re.IGNORECASE
-                        )
-                    ]
-                except (ET.ParseError, UnicodeError, ValueError) as error:
-                    errors.append({"document": name, "reason": str(error)})
-                    continue
-                for fact in parsed:
-                    fact["source"] = meta
-                if not observations and parsed:
-                    observations = parsed
-                    alternatives.append(
-                        {"source": meta, "observation_count": len(parsed), "selected": True}
-                    )
-                else:
-                    alternatives.append({"source": meta, "observations": parsed, "selected": False})
+            observations, alternatives, errors, sources = extract_cached(
+                row, folder, json.loads(listing), processor
+            )
         joins = [
             join(fact, observations, cik)
             | {
@@ -771,6 +702,7 @@ def draft(rows, root, facts):
             "observations": observations,
             "companyfacts_joins": joins,
             "documents": alternatives,
+            "cached_sources": sources,
             "index_source": index_source,
             "issues": errors,
         }
@@ -778,6 +710,12 @@ def draft(rows, root, facts):
     return {
         "contract": "F01_ORIGINAL_FILING_EVIDENCE_DRAFT_V1",
         "review_required": True,
+        "xbrl_processor": processor.release
+        | {
+            "name": "Arelle",
+            "taxonomy_packages": processor.packages,
+            "requirements_sha256": pilot.file_sha(pilot.REPO / "requirements-f01-arelle.txt"),
+        },
         "semantic_evidence": {
             "contexts": [],
             "acceptance": [],
@@ -804,6 +742,7 @@ def main(argv=None):
         help="Custom filing metadata list. Only the built-in inventory has Companyfacts joins.",
     )
     parser.add_argument("--output", default="f01-original-filing-evidence-draft.json")
+    parser.add_argument("--arelle-dir", type=Path, default=ARELLE_ROOT)
     args = parser.parse_args(argv)
     online = args.download or args.resume
     if online != args.authorize_download or (online and not args.user_agent):
@@ -831,7 +770,10 @@ def main(argv=None):
             directory = safe_directory(ROOT)
             target = directory / args.output
             require(not bulk.exists(target), "EVIDENCE_OUTPUT_EXISTS")
-            value = draft(rows, directory, companyfacts(rows, metadata) if metadata else {})
+            processor = ArelleProcessor(args.arelle_dir)
+            value = draft(
+                rows, directory, companyfacts(rows, metadata) if metadata else {}, processor
+            )
             value["candidate_code"] = candidate
             value["pilot_diagnosis_sha256"] = DIAG_SHA if metadata else None
             stage = Path(tempfile.mkdtemp(prefix=".draft-incomplete-", dir=directory))
