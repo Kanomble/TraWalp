@@ -207,3 +207,78 @@ def test_ordinary_html_leaves_separate_instance_as_entrypoint(processor):
     assert documents[0]["format"] == "ORDINARY_HTML"
     assert issues[0]["category"] == "INCOMPATIBLE_DOCUMENT_FORMAT"
     assert len(sources) == 2
+
+
+def accounting_pair(value="100", decimals="-2", unit="USD"):
+    measure = f"{{{evidence.ISO}}}USD" if unit == "USD" else f"{{{evidence.XBRL}}}pure"
+    fact = {
+        "taxonomy": "us-gaap",
+        "tag": "InterestExpenseNonoperating",
+        "unit": unit,
+        "period_start": "2025-07-01",
+        "period_end": "2025-09-30",
+        "value": value,
+        "accession_number": ROW["accession"],
+    }
+    row = {
+        "concept": "{http://fasb.org/us-gaap/2025}InterestExpenseNonoperating",
+        "unit": {"numerator": [measure], "denominator": []},
+        "context": {
+            "scheme": "https://www.sec.gov/CIK",
+            "entity": "59478",
+            "startDate": fact["period_start"],
+            "endDate": fact["period_end"],
+            "instant": None,
+            "opaque_context": [],
+            "dimensions": [],
+        },
+        "value": value,
+        "decimals": decimals,
+        "document_ordinal": 4,
+        "source": {"accession": ROW["accession"], "sha256": "a" * 64},
+    }
+    return fact, row
+
+
+def test_accounting_pure_preserves_value_and_unit():
+    fact, row = accounting_pair("0.15", "2", "pure")
+    assert evidence.join(fact, [row], CIK)["fact"] == fact
+    assert evidence.join(fact, [row], CIK)["status"] == "VERIFIED_SOURCE_FACT"
+    assert evidence.join(fact | {"unit": "percent"}, [row], CIK)["status"] == "MISSING_EVIDENCE"
+
+
+def test_accounting_complete_duplicates_and_dimensional_provenance():
+    fact, row = accounting_pair()
+    duplicate = row | {"document_ordinal": 6, "context_id": "another"}
+    segment = row | {
+        "document_ordinal": 8,
+        "context": row["context"]
+        | {
+            "dimensions": [{"axis": "{urn:sample}SegmentAxis", "member": "{urn:sample}Member"}],
+        },
+    }
+    joined = evidence.join(fact, [segment, row, duplicate], CIK)
+    assert joined == evidence.join(fact, [duplicate, segment, row], CIK)
+    assert joined["reason"] == "COMPLETE_DUPLICATES"
+    assert joined["source_candidates"] == [4, 6, 8]
+    assert joined["whole_entity_candidates"] == [4, 6]
+
+
+def test_accounting_numeric_precision_conflicts_and_closed_intervals():
+    fact, row = accounting_pair("2500", "-2")
+    other = row | {"document_ordinal": 7, "value": "2000", "decimals": "-3"}
+    assert evidence.join(fact, [row, other], CIK)["reason"] == "CONSISTENT_DUPLICATES_MOST_PRECISE"
+    assert (
+        evidence.join(fact | {"value": "2000"}, [row, other], CIK)["status"]
+        == "CANDIDATE_EQUIVALENCE"
+    )
+    conflicting = other | {"value": "2400", "decimals": "-2"}
+    assert evidence.join(fact, [row, conflicting], CIK)["status"] == "CONFLICT"
+
+
+def test_accounting_distinct_documents_and_opaque_context_stay_open():
+    fact, row = accounting_pair()
+    other = row | {"document_ordinal": 7, "source": row["source"] | {"sha256": "b" * 64}}
+    assert evidence.join(fact, [row, other], CIK)["status"] == "UNRESOLVED_CONTEXT"
+    opaque = row | {"context": row["context"] | {"opaque_context": ["unparsed"]}}
+    assert evidence.join(fact, [opaque], CIK)["status"] == "UNRESOLVED_CONTEXT"

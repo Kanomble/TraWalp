@@ -174,12 +174,23 @@ def extract(document, cache, packages, sec_plugin=None):
             return {"observations": [], "issues": logs.issues or [{"code": "MODEL_UNAVAILABLE"}]}
         model = models[0]
         arcs = relationships(model)
+        default_members = {
+            (qname(rel.fromModelObject.qname), qname(rel.toModelObject.qname))
+            for rel in model.relationshipSet(
+                "http://xbrl.org/int/dim/arcrole/dimension-default"
+            ).modelRelationships
+            if getattr(rel.fromModelObject, "qname", None)
+            and getattr(rel.toModelObject, "qname", None)
+        }
         facts = []
         ordered = sorted(model.factsInInstance, key=lambda fact: fact.objectIndex)
         for ordinal, fact in enumerate(ordered, 1):
             if fact.isTuple or not (fact.unitID or fact.isNumeric):
                 continue
             item = fact_data(fact, ordinal, arcs)
+            for dimension in (item["context"] or {}).get("dimensions", []):
+                if (dimension["axis"], dimension.get("member")) in default_members:
+                    dimension["is_default"] = True
             if fact.concept is None or item["context"] is None or item["unit"] is None:
                 item["evidence_issue"] = "TAXONOMY_OR_CONTEXT_UNAVAILABLE"
             facts.append(item)

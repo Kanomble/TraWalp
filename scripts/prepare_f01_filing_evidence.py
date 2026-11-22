@@ -321,6 +321,7 @@ def unit_matches(raw, unit):
     expected = {
         "USD": ([f"{{{ISO}}}USD"], []),
         "shares": ([shares], []),
+        "pure": ([f"{{{XBRL}}}pure"], []),
         "USD/shares": ([f"{{{ISO}}}USD"], [shares]),
     }.get(unit)
     return bool(raw and expected and (raw["numerator"], raw["denominator"]) == expected)
@@ -340,30 +341,78 @@ def matches(raw, fact, cik):
 
 
 def join(fact, rows, cik):
-    comparable = [row for row in rows if matches(row, fact, cik)]
-    exact = [
+    accession = fact.get("accession_number")
+    comparable = [
         row
-        for row in comparable
-        if row["value"] is not None and Decimal(row["value"]) == Decimal(fact["value"])
+        for row in rows
+        if matches(row, fact, cik)
+        and (not accession or row.get("source", {}).get("accession") == accession)
     ]
-    if len(comparable) == len(exact) == 1 and not (
-        exact[0]["context"]["dimensions"]
-        or exact[0]["context"]["opaque_context"]
-        or exact[0].get("evidence_issue")
-    ):
-        status = "VERIFIED_SOURCE_FACT"
-    elif exact or any(
-        row["value"] is None or row["context"]["dimensions"] or row["context"]["opaque_context"]
+    # Companyfacts covers the whole filing entity. Preserve dimensional matches,
+    # but never infer that a reported member is equivalent to the whole entity.
+    whole = [row for row in comparable if not row["context"]["dimensions"]]
+    if not comparable:
+        status, reason = "MISSING_EVIDENCE", "NO_COMPARABLE_SOURCE"
+    elif not whole or any(
+        row["context"]["opaque_context"]
+        or row.get("evidence_issue")
+        or any(
+            not dim.get("axis")
+            or not (dim.get("member") or dim.get("typed_xml"))
+            or dim.get("is_default")
+            for dim in row["context"]["dimensions"]
+        )
         for row in comparable
     ):
-        status = "UNRESOLVED_CONTEXT"
+        status, reason = "UNRESOLVED_CONTEXT", "REPORTING_CONTEXT_UNRESOLVED"
     else:
-        status = "CONFLICT" if comparable else "MISSING_EVIDENCE"
+        status, reason = whole_entity_match(whole, Decimal(str(fact["value"])))
     return {
         "status": status,
+        "reason": reason,
         "fact": fact,
-        "source_candidates": [row["document_ordinal"] for row in comparable],
+        "source_candidates": sorted(row["document_ordinal"] for row in comparable),
+        "whole_entity_candidates": sorted(row["document_ordinal"] for row in whole),
     }
+
+
+def whole_entity_match(rows, target):
+    aspects = {
+        (
+            row["concept"],
+            row["context"]["scheme"],
+            row["context"]["entity"],
+            row.get("source", {}).get("accession"),
+            row.get("source", {}).get("sha256"),
+        )
+        for row in rows
+    }
+    if len(aspects) != 1 or any(row["value"] is None for row in rows):
+        return "UNRESOLVED_CONTEXT", "DISTINCT_OR_INCOMPLETE_SOURCE_ASPECTS"
+    observations = {(Decimal(row["value"]), row.get("decimals")) for row in rows}
+    if len(observations) == 1:
+        value, _ = next(iter(observations))
+        if value == target:
+            return "VERIFIED_SOURCE_FACT", "COMPLETE_DUPLICATES" if len(rows) > 1 else "EXACT"
+        return "CONFLICT", "DIFFERENT_REPORTED_VALUE"
+    precisions = {}
+    intervals = []
+    for value, decimals in observations:
+        interval = rounding(value, decimals)
+        if interval is None:
+            return "UNRESOLVED_CONTEXT", "DECIMALS_UNAVAILABLE"
+        precision = float("inf") if decimals == "INF" else int(decimals)
+        if precision in precisions and precisions[precision] != value:
+            return "CONFLICT", "INCONSISTENT_DUPLICATES"
+        precisions[precision] = value
+        intervals.append(interval)
+    if max(low for low, _ in intervals) > min(high for _, high in intervals):
+        return "CONFLICT", "INCONSISTENT_DUPLICATES"
+    if precisions[max(precisions)] == target:
+        return "VERIFIED_SOURCE_FACT", "CONSISTENT_DUPLICATES_MOST_PRECISE"
+    if target in precisions.values():
+        return "CANDIDATE_EQUIVALENCE", "CONSISTENT_DUPLICATES_REVIEW_VALUE"
+    return "CONFLICT", "DIFFERENT_REPORTED_VALUE"
 
 
 def rounding(value, decimals):
@@ -390,15 +439,23 @@ def lly_rounding(filings):
             "period_end": end,
             "unit": "USD",
             "value": value,
+            "accession_number": acc,
         }
         observations = filings.get(acc, {}).get("observations", [])
         match = join(fact, observations, "0000059478")
         if match["status"] != "VERIFIED_SOURCE_FACT":
             return {"status": match["status"], "accession": acc, "target": fact}
-        row = next(
-            r for r in observations if r["document_ordinal"] == match["source_candidates"][0]
-        )
-        interval = rounding(Decimal(value), row["decimals"])
+        supporting = [
+            r
+            for r in observations
+            if r["document_ordinal"] in match["whole_entity_candidates"]
+            and Decimal(r["value"]) == Decimal(value)
+        ]
+        intervals_with_precision = {rounding(Decimal(value), r["decimals"]) for r in supporting}
+        valid_intervals = [
+            interval for interval in intervals_with_precision if interval is not None
+        ]
+        interval = min(valid_intervals, key=lambda bounds: bounds[1] - bounds[0], default=None)
         if interval is None:
             return {
                 "status": "MISSING_EVIDENCE",
@@ -407,7 +464,22 @@ def lly_rounding(filings):
             }
         intervals.append(interval)
         items.append(
-            {"accession": acc, "ordinal": row["document_ordinal"], "decimals": row["decimals"]}
+            {
+                "accession": acc,
+                "supporting_sources": [
+                    {
+                        "ordinal": r["document_ordinal"],
+                        "decimals": r["decimals"],
+                        "source": r["source"],
+                        "context": r["context"],
+                        "concept": r["concept"],
+                        "value": r["value"],
+                        "unit": r["unit"],
+                        "table_captions": r.get("table_captions", []),
+                    }
+                    for r in supporting
+                ],
+            }
         )
     direct, ytd, half = intervals
     derived = ytd[0] - half[1], ytd[1] - half[0]
@@ -417,6 +489,9 @@ def lly_rounding(filings):
         "inputs": items,
         "direct_interval": list(map(str, direct)),
         "derived_interval": list(map(str, derived)),
+        "common_interval": [str(max(direct[0], derived[0])), str(min(direct[1], derived[1]))]
+        if overlap
+        else None,
         "review_required": [
             "same Reporting Entity and disclosure scope",
             "H1-to-9M comparability",
