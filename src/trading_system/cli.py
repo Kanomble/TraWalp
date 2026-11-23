@@ -305,9 +305,15 @@ def _parser() -> argparse.ArgumentParser:
             )
         if name == "shadow-f-run":
             shadow.add_argument("--session", type=date.fromisoformat)
-    commands.add_parser(
+    massive_recovery = commands.add_parser(
         "recover-massive-rate-limit",
         help="Manual clock recovery under the shared lock after a full expiry window; no API calls",
+    )
+    massive_recovery.add_argument(
+        "--windows-reboot", action="store_true", help="Run a read-only Windows reboot diagnosis"
+    )
+    massive_recovery.add_argument(
+        "--apply", action="store_true", help="Authorize applying a verified Windows reboot recovery"
     )
     commands.add_parser(
         "sync-security-reference", help="Explicit Massive Stocks Basic Free reference-only sync"
@@ -782,6 +788,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "recover-massive-rate-limit":
         from trading_system.data.massive_reference import _REQUEST_LIMITER, MassiveReferenceError
 
+        if args.apply and not args.windows_reboot:
+            print("--apply requires --windows-reboot", file=sys.stderr)
+            return 2
+        if args.windows_reboot:
+            from trading_system.data.massive_reboot_recovery import reboot_recovery
+
+            result = reboot_recovery(_REQUEST_LIMITER, apply=args.apply)
+            print(json.dumps(result, sort_keys=True))
+            success = {"RECOVERY_NOT_REQUIRED", "REBOOT_RECOVERY_ELIGIBLE", "RECOVERED"}
+            return 0 if result["status"] in success else 1
         try:
             result = _REQUEST_LIMITER.recover_clock_anomaly()
         except KeyboardInterrupt:

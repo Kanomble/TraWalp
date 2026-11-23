@@ -120,11 +120,18 @@ class _RollingWindowLimiter:
         handle.seek(0)
         marker = handle.read(1)
         try:
-            state = json.loads(path.read_text(encoding="utf-8"))
+            raw = path.read_text(encoding="utf-8")
         except FileNotFoundError:
             if marker != b"0":
                 raise MassiveReferenceError("MASSIVE_RATE_LIMIT_STATE_UNAVAILABLE") from None
             return {"timestamps": [], "last_clock": self._now(), "in_flight": False}
+        except (ValueError, UnicodeError):
+            raise MassiveReferenceError("MASSIVE_RATE_LIMIT_STATE_INVALID") from None
+        return self._decode_state(raw)
+
+    def _decode_state(self, raw):
+        try:
+            state = json.loads(raw)
         except (ValueError, UnicodeError):
             raise MassiveReferenceError("MASSIVE_RATE_LIMIT_STATE_INVALID") from None
         if (
