@@ -81,6 +81,59 @@ def test_transport_does_not_redirect_leak_or_retry_after_429(monkeypatch):
     assert secret not in str(result) and "[REDACTED]" in str(result)
 
 
+def test_massive_limiter_failure_preserves_safe_detail_and_stops_before_transport(monkeypatch):
+    from trading_system.data.massive_rate_limit import MassiveReferenceError
+    from trading_system.data.massive_reference import _REQUEST_LIMITER
+
+    monkeypatch.setenv("MASSIVE_API_KEY", "test-fixture-only")
+    plan = [p for p in audit.probe_plan() if p.provider == "massive"][:2]
+
+    def forbid_network(*args, **kwargs):
+        pytest.fail("Network unexpectedly reached")
+
+    monkeypatch.setattr(requests.Session, "get", forbid_network)
+    for source, expected in (
+        ("MASSIVE_RATE_LIMIT_CLOCK_ANOMALY", "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY"),
+        ("unsafe provider content: test-fixture-only", "UNRECOGNIZED_LIMITER_ERROR"),
+    ):
+
+        def fail(operation, *, limit, source=source):
+            assert callable(operation) and limit == 5
+            raise MassiveReferenceError(source)
+
+        monkeypatch.setattr(_REQUEST_LIMITER, "transmit", fail)
+        first, second = audit.run_probes("massive", plan, None)
+        assert first["classification"] == "LOCAL_RATE_LIMITER_ERROR"
+        assert first["limiter_error"] == expected
+        assert first["transport_started"] is False and "http_status" not in first
+        assert second["classification"] == "PROBE_STOPPED"
+
+
+def test_massive_network_error_and_http_auth_remain_distinct(monkeypatch):
+    from trading_system.data.massive_reference import _REQUEST_LIMITER
+
+    monkeypatch.setenv("MASSIVE_API_KEY", "test-fixture-only")
+    monkeypatch.setattr(_REQUEST_LIMITER, "transmit", lambda operation, **kwargs: operation())
+    calls = []
+
+    def stub_get(self, url, **kwargs):
+        calls.append(url)
+        if len(calls) == 1:
+            raise requests.ConnectionError("synthetic")
+        response = requests.Response()
+        response.status_code = 401
+        response._content_consumed = True
+        response._content = b"{}"
+        return response
+
+    monkeypatch.setattr(requests.Session, "get", stub_get)
+    probes = [p for p in audit.probe_plan() if p.provider == "massive"][:3]
+    first, second, third = audit.run_probes("massive", probes, None)
+    assert first["classification"] == "NETWORK_ERROR" and "http_status" not in first
+    assert second["classification"] == "AUTH_FAILED" and second["http_status"] == 401
+    assert third["classification"] == "PROBE_STOPPED" and len(calls) == 2
+
+
 def test_capacity_uses_complete_same_variant_samples_and_never_mixes_feeds():
     samples = []
     for probe in audit.probe_plan():

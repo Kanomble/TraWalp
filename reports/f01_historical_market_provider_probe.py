@@ -72,6 +72,12 @@ ACCOUNT_KEYS = {
     "alpaca": ("ALPACA_API_KEY", "ALPACA_SECRET_KEY"),
     "massive": ("MASSIVE_API_KEY",),
 }
+LIMITER_CODES = {
+    "MASSIVE_RATE_LIMIT_CLOCK_ANOMALY",
+    "MASSIVE_RATE_LIMIT_EXCEEDS_FREE_TIER",
+    "MASSIVE_RATE_LIMIT_STATE_INVALID",
+    "MASSIVE_RATE_LIMIT_STATE_UNAVAILABLE",
+}
 REFERENCE_FIELDS = set(
     [
         "ticker",
@@ -511,13 +517,27 @@ def run_probes(provider, probes, env_file):
                 results.append({"probe": asdict(probe), "classification": "PROBE_STOPPED"})
                 continue
             observed = datetime.now(UTC).isoformat()
+            transport_started = False
+
+            def send(probe=probe):
+                nonlocal transport_started
+                transport_started = True
+                return fetch(probe)
+
             try:
                 if provider == "massive":
-                    item = _REQUEST_LIMITER.transmit(lambda probe=probe: fetch(probe), limit=5)
+                    item = _REQUEST_LIMITER.transmit(send, limit=5)
                 else:
                     item = fetch(probe)
-            except MassiveReferenceError:
-                item = {"classification": "SHARED_RATE_LIMITER_UNAVAILABLE"}
+            except MassiveReferenceError as exc:
+                code = str(exc)
+                item = {
+                    "classification": "LOCAL_RATE_LIMITER_ERROR",
+                    "limiter_error": code
+                    if code in LIMITER_CODES
+                    else "UNRECOGNIZED_LIMITER_ERROR",
+                    "transport_started": transport_started,
+                }
                 stopped = True
             except requests.RequestException:
                 item = {"classification": "NETWORK_ERROR"}
