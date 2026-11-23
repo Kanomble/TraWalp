@@ -5,6 +5,11 @@ TraWalp uses one market-data pipeline and one bar identity for every timeframe:
 configured Alpaca feed and adjustment mode. The backfill never deletes existing bars and writes
 each provider batch through the existing SQLite bulk upsert.
 
+This runbook covers the existing SQLite sync and its local bar key. That key does not identify
+the provider, feed, adjustment or historical security epoch. For the isolated historical
+50-issuer project, use the [F01 architecture and evidence index](f01_research_architecture_index.md).
+It links the existing SIP coverage audit and the prerequisites for a separate research archive.
+
 ## Backward and forward coverage
 
 `sync-daily-history` accepts an inclusive date interval. The first verification for a symbol,
