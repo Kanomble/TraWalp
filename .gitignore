@@ -215,6 +215,7 @@ reports/*.csv
 reports/*.json
 reports/*
 !reports/f01_historical_50_preflight_run.py
+!reports/f01_alpaca_historical_sip_coverage.py
 !reports/f01_historical_market_provider_probe.py
 !reports/f01_historical_market_feasibility_audit.md
 !reports/f01_historical_market_feasibility.json
