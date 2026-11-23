@@ -215,6 +215,9 @@ reports/*.csv
 reports/*.json
 reports/*
 !reports/f01_historical_50_preflight_run.py
+!reports/f01_historical_market_provider_probe.py
+!reports/f01_historical_market_feasibility_audit.md
+!reports/f01_historical_market_feasibility.json
 !reports/champion_consolidation_audit.md
 !reports/f_shadow_execution_v1_summary.json
 !reports/f_shadow_execution_v1_audit.md

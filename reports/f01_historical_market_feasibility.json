@@ -1,0 +1,970 @@
+{
+  "status": "HISTORICAL_MARKET_FEASIBILITY_ASSESSED",
+  "contract": "F01_HISTORICAL_MARKET_FEASIBILITY_V1",
+  "decision": "C",
+  "decision_scope": "HISTORICAL_TRADING_QUALIFICATION_2016_2026",
+  "documentation_reviewed": "2026-11-23",
+  "documentation": {
+    "alpaca_basic": "https://docs.alpaca.markets/us/v1.1/docs/about-market-data-api",
+    "alpaca_sip": "https://docs.alpaca.markets/us/v1.1/docs/market-data-faq",
+    "alpaca_bars": "https://docs.alpaca.markets/us/v1.4.2/reference/stockbarsingle-1",
+    "alpaca_actions": "https://docs.alpaca.markets/us/reference/corporateactions-1",
+    "alpaca_assets": "https://docs.alpaca.markets/us/reference/get-v2-assets-symbol_or_asset_id",
+    "massive_basic": "https://massive.com/knowledge-base/article/how-much-historical-stock-data-does-massive-have",
+    "massive_reference": "https://massive.com/knowledge-base/article/does-massive-have-a-downloadable-security-master",
+    "massive_all_tickers": "https://massive.com/docs/rest/stocks/tickers/all-tickers",
+    "massive_adjustment": "https://massive.com/knowledge-base/article/is-massives-stock-data-adjusted-for-splits-or-dividends",
+    "massive_splits": "https://massive.com/docs/rest/stocks/corporate-actions/splits",
+    "massive_events": "https://massive.com/docs/rest/stocks/overview"
+  },
+  "source_sha256": {
+    "f01_historical_security_50_issuer_preflight_audit.md": "e757ba1619698c97476d11dbedfe25c91b90e5bf3ff78f4d0f06d099001fc1f5",
+    "f01_historical_50_preflight.json": "2c47e3da2bd21c03cc262232e85d775c0fde7190d49149656dfe72d8c3fc9752",
+    "f01_historical_50_pilot.csv": "75627e9032cf0dd1410d9ad93663a3248a22df1998b394d7aff892df6fbe0955",
+    "f_2022_massive_identity_pilot_v1_observations.json": "deaf0541803eb01be95e636de1b7a3c654d4a269c3335725db9983b2653aeaf7",
+    "f_2022_massive_identity_pilot_v1_summary.json": "b5221c7e8070ee0f73859e9e4fa90b1bf8ff7cbfc7832803a6d974e54df2c821",
+    "f_forward_sip_shadow_contract_summary.json": "8acff6d2aa0125a4a5228ba757c3ecba7ed29f5e1fdf723d55d554268d72a1d6"
+  },
+  "helper_sha256": "e27474c0347cff016193c84d92caa0e65fc87a8865a742c2f161df46f05a2049",
+  "documented": {
+    "alpaca": {
+      "tier": "Basic",
+      "history_since": 2016,
+      "calls_per_min": 200,
+      "live_feed": "iex",
+      "historical_sip_end_delay_minutes": 15,
+      "actions_publication_time_guaranteed": false
+    },
+    "massive": {
+      "tier": "Stocks Basic",
+      "calls_per_min": 5,
+      "bars_rolling_years": 2,
+      "dated_reference_rolling_years": 2,
+      "splits_rolling_years": 2,
+      "flat_files": false,
+      "experimental_ticker_events": true
+    }
+  },
+  "prior_observations": {
+    "massive_2022_reference_run": {
+      "pilot_symbols": [
+        "QRVO",
+        "BG",
+        "XOM",
+        "SAIL",
+        "FERG"
+      ],
+      "period": [
+        "2022-01-03",
+        "2022-12-30"
+      ],
+      "massive_requests": 16,
+      "successful_responses": 15,
+      "not_found_responses": 1
+    },
+    "massive_normalized_reference_archive_bytes": 25151,
+    "alpaca_persisted_observations": {
+      "separate_forward_contract": "SIP_DAILY_ALL_FAIL_CLOSED_V1",
+      "forward_groups": [
+        {
+          "provider": "alpaca",
+          "feed": "sip",
+          "adjustment": "all",
+          "timeframe": "1d",
+          "rows": 1806028,
+          "symbols": 5892,
+          "first": "2025-08-01T04:00:00+00:00",
+          "last": "2026-11-06T05:00:00+00:00"
+        }
+      ],
+      "spy": {
+        "2016-2019": {
+          "observed_dates": 0,
+          "usable_xnys_sessions": 0,
+          "xnys_reference_sessions": 1006,
+          "dates_with_only_invalid_bars_on_xnys": 0,
+          "first_date": null,
+          "last_date": null,
+          "warmup_usable_sessions": 0,
+          "warmup_expected": 300,
+          "early_gap_sessions": null,
+          "internal_gap_sessions": null,
+          "trailing_gap_sessions": null
+        },
+        "2020-2026": {
+          "observed_dates": 320,
+          "usable_xnys_sessions": 320,
+          "xnys_reference_sessions": 1732,
+          "dates_with_only_invalid_bars_on_xnys": 0,
+          "first_date": "2025-08-01",
+          "last_date": "2026-11-06",
+          "warmup_usable_sessions": 0,
+          "warmup_expected": 300,
+          "early_gap_sessions": 1402,
+          "internal_gap_sessions": 0,
+          "trailing_gap_sessions": 10
+        }
+      }
+    },
+    "prior_account_tier_verified_for_these_observations": false,
+    "legacy_spy": {
+      "2016-2019": {
+        "observed_dates": 0,
+        "usable_xnys_sessions": 0,
+        "xnys_reference_sessions": 1006,
+        "dates_with_only_invalid_bars_on_xnys": 0,
+        "first_date": null,
+        "last_date": null,
+        "warmup_usable_sessions": 0,
+        "warmup_expected": 300,
+        "early_gap_sessions": null,
+        "internal_gap_sessions": null,
+        "trailing_gap_sessions": null
+      },
+      "2020-2026": {
+        "observed_dates": 1570,
+        "usable_xnys_sessions": 1570,
+        "xnys_reference_sessions": 1732,
+        "dates_with_only_invalid_bars_on_xnys": 0,
+        "first_date": "2020-07-27",
+        "last_date": "2026-10-23",
+        "warmup_usable_sessions": 0,
+        "warmup_expected": 300,
+        "early_gap_sessions": 142,
+        "internal_gap_sessions": 0,
+        "trailing_gap_sessions": 20
+      }
+    },
+    "historically_trading_qualified_issuers": 0
+  },
+  "security_blockers": {
+    "SPY": [
+      "300_CONTIGUOUS_PRIOR_SESSIONS",
+      "2014_2015_BOUNDARY_FOR_2016_START"
+    ],
+    "AAPL": [
+      "SPLIT_EFFECTIVE_DATE_AND_FACTOR",
+      "PIT_PRICE_EPS_SHARES_BASIS"
+    ],
+    "ACN": [
+      "CLASS_A_SECURITY_ID_AND_EPOCHS",
+      "ECONOMIC_ISSUER_SHARES_SCOPE"
+    ],
+    "TWTR": [
+      "HISTORICAL_SECURITY_ID_AND_FINAL_SESSION",
+      "EXIT_TERMS_EFFECTIVE_DATE_AND_VALUE"
+    ],
+    "JATT": [
+      "PRE_AND_POST_CHANGE_SECURITY_ID",
+      "TICKER_REUSE_EPOCH",
+      "CORPORATE_ACTION_EFFECTIVE_DATE"
+    ],
+    "universe": [
+      "DATE_BOUND_LISTING_AND_DELISTING_INTERVALS",
+      "NO_CURRENT_UNIVERSE_BACKFILL",
+      "NO_CROSS_FEED_STITCHING"
+    ]
+  },
+  "batch_plan": {
+    "symbols_per_batch": 5,
+    "time_slice_months": 12,
+    "variants_separate": true,
+    "commit": "validated immutable per-symbol shards and atomic completion manifest",
+    "resume_key": [
+      "provider",
+      "feed",
+      "adjustment",
+      "security_epoch",
+      "symbol",
+      "asof",
+      "query_interval",
+      "schema",
+      "source_hash"
+    ],
+    "precondition": "review_account_security_epochs_and_exits_before_sec_expansion"
+  },
+  "probe_plan": [
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "SPY",
+      "path": "/v2/stocks/SPY/bars",
+      "query": {
+        "start": "2016-01-04T00:00:00-05:00",
+        "end": "2016-01-08T23:59:59-05:00",
+        "timeframe": "1Day",
+        "feed": "sip",
+        "adjustment": "raw",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "SPY",
+      "path": "/v2/stocks/SPY/bars",
+      "query": {
+        "start": "2016-01-04T00:00:00-05:00",
+        "end": "2016-01-08T23:59:59-05:00",
+        "timeframe": "1Day",
+        "feed": "iex",
+        "adjustment": "raw",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "SPY",
+      "path": "/v2/stocks/SPY/bars",
+      "query": {
+        "start": "2018-10-22T00:00:00-04:00",
+        "end": "2018-10-26T23:59:59-04:00",
+        "timeframe": "1Day",
+        "feed": "sip",
+        "adjustment": "raw",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "SPY",
+      "path": "/v2/stocks/SPY/bars",
+      "query": {
+        "start": "2018-10-22T00:00:00-04:00",
+        "end": "2018-10-26T23:59:59-04:00",
+        "timeframe": "1Day",
+        "feed": "iex",
+        "adjustment": "raw",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "SPY",
+      "path": "/v2/stocks/SPY/bars",
+      "query": {
+        "start": "2019-12-24T00:00:00-05:00",
+        "end": "2019-12-31T23:59:59-05:00",
+        "timeframe": "1Day",
+        "feed": "sip",
+        "adjustment": "raw",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "SPY",
+      "path": "/v2/stocks/SPY/bars",
+      "query": {
+        "start": "2019-12-24T00:00:00-05:00",
+        "end": "2019-12-31T23:59:59-05:00",
+        "timeframe": "1Day",
+        "feed": "iex",
+        "adjustment": "raw",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "AAPL",
+      "path": "/v2/stocks/AAPL/bars",
+      "query": {
+        "start": "2020-08-27T00:00:00-04:00",
+        "end": "2020-09-02T23:59:59-04:00",
+        "timeframe": "1Day",
+        "feed": "sip",
+        "adjustment": "raw",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "AAPL",
+      "path": "/v2/stocks/AAPL/bars",
+      "query": {
+        "start": "2020-08-27T00:00:00-04:00",
+        "end": "2020-09-02T23:59:59-04:00",
+        "timeframe": "1Day",
+        "feed": "iex",
+        "adjustment": "raw",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "TWTR",
+      "path": "/v2/stocks/TWTR/bars",
+      "query": {
+        "start": "2022-10-25T00:00:00-04:00",
+        "end": "2022-11-02T23:59:59-04:00",
+        "timeframe": "1Day",
+        "feed": "sip",
+        "adjustment": "raw",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "TWTR",
+      "path": "/v2/stocks/TWTR/bars",
+      "query": {
+        "start": "2022-10-25T00:00:00-04:00",
+        "end": "2022-11-02T23:59:59-04:00",
+        "timeframe": "1Day",
+        "feed": "iex",
+        "adjustment": "raw",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "SPY",
+      "path": "/v2/stocks/SPY/bars",
+      "query": {
+        "start": "2025-06-02T00:00:00-04:00",
+        "end": "2025-06-06T23:59:59-04:00",
+        "timeframe": "1Day",
+        "feed": "sip",
+        "adjustment": "raw",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "SPY",
+      "path": "/v2/stocks/SPY/bars",
+      "query": {
+        "start": "2025-06-02T00:00:00-04:00",
+        "end": "2025-06-06T23:59:59-04:00",
+        "timeframe": "1Day",
+        "feed": "iex",
+        "adjustment": "raw",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "ACN",
+      "path": "/v2/stocks/ACN/bars",
+      "query": {
+        "start": "2026-11-16T00:00:00-05:00",
+        "end": "2026-11-20T23:59:59-05:00",
+        "timeframe": "1Day",
+        "feed": "sip",
+        "adjustment": "raw",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "ACN",
+      "path": "/v2/stocks/ACN/bars",
+      "query": {
+        "start": "2026-11-16T00:00:00-05:00",
+        "end": "2026-11-20T23:59:59-05:00",
+        "timeframe": "1Day",
+        "feed": "iex",
+        "adjustment": "raw",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "AAPL",
+      "path": "/v2/stocks/AAPL/bars",
+      "query": {
+        "start": "2020-08-27T00:00:00-04:00",
+        "end": "2020-09-02T23:59:59-04:00",
+        "timeframe": "1Day",
+        "feed": "sip",
+        "adjustment": "split",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "AAPL",
+      "path": "/v2/stocks/AAPL/bars",
+      "query": {
+        "start": "2020-08-27T00:00:00-04:00",
+        "end": "2020-09-02T23:59:59-04:00",
+        "timeframe": "1Day",
+        "feed": "sip",
+        "adjustment": "all",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "JATT",
+      "path": "/v2/stocks/JATT/bars",
+      "query": {
+        "start": "2023-03-16T00:00:00-04:00",
+        "end": "2023-03-24T23:59:59-04:00",
+        "timeframe": "1Day",
+        "feed": "sip",
+        "adjustment": "raw",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "ZURA",
+      "path": "/v2/stocks/ZURA/bars",
+      "query": {
+        "start": "2023-03-16T00:00:00-04:00",
+        "end": "2023-03-24T23:59:59-04:00",
+        "timeframe": "1Day",
+        "feed": "sip",
+        "adjustment": "raw",
+        "asof": "-",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "bars",
+      "symbol": "ZURA",
+      "path": "/v2/stocks/ZURA/bars",
+      "query": {
+        "start": "2023-03-16T00:00:00-04:00",
+        "end": "2023-03-24T23:59:59-04:00",
+        "timeframe": "1Day",
+        "feed": "sip",
+        "adjustment": "raw",
+        "asof": "2023-03-22",
+        "limit": 16,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "actions",
+      "symbol": "AAPL",
+      "path": "/v1/corporate-actions",
+      "query": {
+        "symbols": "AAPL",
+        "start": "2020-08-20",
+        "end": "2020-09-08",
+        "types": "forward_split",
+        "limit": 10,
+        "data_quality": "all"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "actions",
+      "symbol": "TWTR",
+      "path": "/v1/corporate-actions",
+      "query": {
+        "symbols": "TWTR",
+        "start": "2022-10-25",
+        "end": "2022-11-10",
+        "types": "cash_merger,stock_and_cash_merger",
+        "limit": 10,
+        "data_quality": "all"
+      }
+    },
+    {
+      "origin": "alpaca_data",
+      "kind": "actions",
+      "symbol": "JATT,ZURA",
+      "path": "/v1/corporate-actions",
+      "query": {
+        "symbols": "JATT,ZURA",
+        "start": "2023-03-15",
+        "end": "2023-03-31",
+        "types": "name_change",
+        "limit": 10,
+        "data_quality": "all"
+      }
+    },
+    {
+      "origin": "alpaca_paper",
+      "kind": "asset_snapshot",
+      "symbol": "ACN",
+      "path": "/v2/assets/ACN",
+      "query": {}
+    },
+    {
+      "origin": "alpaca_paper",
+      "kind": "asset_snapshot",
+      "symbol": "TWTR",
+      "path": "/v2/assets/TWTR",
+      "query": {}
+    },
+    {
+      "origin": "alpaca_paper",
+      "kind": "asset_snapshot",
+      "symbol": "JATT",
+      "path": "/v2/assets/JATT",
+      "query": {}
+    },
+    {
+      "origin": "massive",
+      "kind": "bars",
+      "symbol": "SPY",
+      "path": "/v2/aggs/ticker/SPY/range/1/day/2018-10-22/2018-10-26",
+      "query": {
+        "adjusted": "false",
+        "limit": 32,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "massive",
+      "kind": "bars",
+      "symbol": "TWTR",
+      "path": "/v2/aggs/ticker/TWTR/range/1/day/2022-10-25/2022-11-02",
+      "query": {
+        "adjusted": "false",
+        "limit": 32,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "massive",
+      "kind": "bars",
+      "symbol": "SPY",
+      "path": "/v2/aggs/ticker/SPY/range/1/day/2025-06-02/2025-06-06",
+      "query": {
+        "adjusted": "false",
+        "limit": 32,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "massive",
+      "kind": "bars",
+      "symbol": "ACN",
+      "path": "/v2/aggs/ticker/ACN/range/1/day/2026-11-16/2026-11-20",
+      "query": {
+        "adjusted": "false",
+        "limit": 32,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "massive",
+      "kind": "bars",
+      "symbol": "ACN",
+      "path": "/v2/aggs/ticker/ACN/range/1/day/2026-11-16/2026-11-20",
+      "query": {
+        "adjusted": "true",
+        "limit": 32,
+        "sort": "asc"
+      }
+    },
+    {
+      "origin": "massive",
+      "kind": "details",
+      "symbol": "ACN",
+      "path": "/v3/reference/tickers/ACN",
+      "query": {
+        "date": "2018-10-23"
+      }
+    },
+    {
+      "origin": "massive",
+      "kind": "details",
+      "symbol": "ACN",
+      "path": "/v3/reference/tickers/ACN",
+      "query": {
+        "date": "2026-11-19"
+      }
+    },
+    {
+      "origin": "massive",
+      "kind": "details",
+      "symbol": "TWTR",
+      "path": "/v3/reference/tickers/TWTR",
+      "query": {
+        "date": "2022-10-27"
+      }
+    },
+    {
+      "origin": "massive",
+      "kind": "details",
+      "symbol": "JATT",
+      "path": "/v3/reference/tickers/JATT",
+      "query": {
+        "date": "2023-03-17"
+      }
+    },
+    {
+      "origin": "massive",
+      "kind": "details",
+      "symbol": "JATT",
+      "path": "/v3/reference/tickers/JATT",
+      "query": {
+        "date": "2026-11-19"
+      }
+    },
+    {
+      "origin": "massive",
+      "kind": "details",
+      "symbol": "ZURA",
+      "path": "/v3/reference/tickers/ZURA",
+      "query": {
+        "date": "2026-11-19"
+      }
+    },
+    {
+      "origin": "massive",
+      "kind": "inactive",
+      "symbol": "TWTR",
+      "path": "/v3/reference/tickers",
+      "query": {
+        "ticker": "TWTR",
+        "market": "stocks",
+        "active": "false",
+        "limit": 10
+      }
+    },
+    {
+      "origin": "massive",
+      "kind": "events",
+      "symbol": "JATT",
+      "path": "/vX/reference/tickers/JATT/events",
+      "query": {
+        "types": "ticker_change"
+      }
+    },
+    {
+      "origin": "massive",
+      "kind": "splits",
+      "symbol": "AAPL",
+      "path": "/stocks/v1/splits",
+      "query": {
+        "ticker": "AAPL",
+        "execution_date.gte": "2020-08-20",
+        "execution_date.lte": "2020-09-08",
+        "limit": 10
+      }
+    }
+  ],
+  "account_probe": "NOT_RUN",
+  "observations": [],
+  "aapl_split_comparison": [],
+  "capacity": {
+    "state": "PENDING_MEASURED_BAR_SAMPLE",
+    "target_symbols_including_spy": 51,
+    "target_daily_row_slots_with_warmup": 154938,
+    "by_feed_and_adjustment": [],
+    "excluded": [
+      "additional_share_classes",
+      "security_and_action_sources",
+      "manifests",
+      "workspace_reserve",
+      "future_database_indexes_and_journals"
+    ]
+  },
+  "local_storage_measurement": {
+    "basis": "PRIOR_PERSISTED_PROVIDER_OBSERVATIONS_NOT_CURRENT_ACCOUNT_PROBE",
+    "source": "G:\\GitHub\\TraWalp\\data\\trading_system.sqlite3",
+    "file_state": {
+      "trading_system.sqlite3": [
+        3758399467636927046,
+        5910974510933108,
+        10501169152,
+        1794248592928785400
+      ],
+      "trading_system.sqlite3-wal": [
+        3758399467636927046,
+        9851624185004406,
+        0,
+        1794248953590173000
+      ],
+      "trading_system.sqlite3-shm": [
+        3758399467636927046,
+        9851624185004407,
+        32768,
+        1794510899034245300
+      ]
+    },
+    "samples": [
+      {
+        "probe": {
+          "origin": "alpaca_data",
+          "kind": "bars",
+          "symbol": "SPY",
+          "path": "/v2/stocks/SPY/bars",
+          "query": {
+            "start": "2025-08-04",
+            "end": "2025-08-08",
+            "feed": "sip",
+            "adjustment": "all",
+            "asof": "-",
+            "limit": 16
+          }
+        },
+        "stored_rows_digest": "d338db2308a244ac055efbe5b28d5bf224b0c906433671bed3c6db202d76f279",
+        "classification": "SAMPLE_COMPLETE",
+        "expected_sessions": [
+          "2025-08-04",
+          "2025-08-05",
+          "2025-08-06",
+          "2025-08-07",
+          "2025-08-08"
+        ],
+        "missing_sessions": [],
+        "invalid_rows": 0,
+        "rows_returned": 5,
+        "rows_usable": 5,
+        "last_observed_session": "2025-08-08",
+        "normalized_jsonl_bytes": 479,
+        "normalized_gzip_bytes": 183,
+        "feed_evidence": "EXPLICIT_REQUEST_PARAMETER_NOT_ECHOED"
+      },
+      {
+        "probe": {
+          "origin": "alpaca_data",
+          "kind": "bars",
+          "symbol": "SPY",
+          "path": "/v2/stocks/SPY/bars",
+          "query": {
+            "start": "2026-11-02",
+            "end": "2026-11-06",
+            "feed": "sip",
+            "adjustment": "all",
+            "asof": "-",
+            "limit": 16
+          }
+        },
+        "stored_rows_digest": "29402f139d197de12a62b0db49a20daf6f7eca8a2a4532cbf44075721c0be383",
+        "classification": "SAMPLE_COMPLETE",
+        "expected_sessions": [
+          "2026-11-02",
+          "2026-11-03",
+          "2026-11-04",
+          "2026-11-05",
+          "2026-11-06"
+        ],
+        "missing_sessions": [],
+        "invalid_rows": 0,
+        "rows_returned": 5,
+        "rows_usable": 5,
+        "last_observed_session": "2026-11-06",
+        "normalized_jsonl_bytes": 480,
+        "normalized_gzip_bytes": 189,
+        "feed_evidence": "EXPLICIT_REQUEST_PARAMETER_NOT_ECHOED"
+      },
+      {
+        "probe": {
+          "origin": "alpaca_data",
+          "kind": "bars",
+          "symbol": "AAPL",
+          "path": "/v2/stocks/AAPL/bars",
+          "query": {
+            "start": "2025-08-04",
+            "end": "2025-08-08",
+            "feed": "sip",
+            "adjustment": "all",
+            "asof": "-",
+            "limit": 16
+          }
+        },
+        "stored_rows_digest": "d36a98c991a927ebeec72e60ed6f333b88d744633f54e05cf2ec8ebe2c100a86",
+        "classification": "SAMPLE_COMPLETE",
+        "expected_sessions": [
+          "2025-08-04",
+          "2025-08-05",
+          "2025-08-06",
+          "2025-08-07",
+          "2025-08-08"
+        ],
+        "missing_sessions": [],
+        "invalid_rows": 0,
+        "rows_returned": 5,
+        "rows_usable": 5,
+        "last_observed_session": "2025-08-08",
+        "normalized_jsonl_bytes": 484,
+        "normalized_gzip_bytes": 191,
+        "feed_evidence": "EXPLICIT_REQUEST_PARAMETER_NOT_ECHOED"
+      },
+      {
+        "probe": {
+          "origin": "alpaca_data",
+          "kind": "bars",
+          "symbol": "AAPL",
+          "path": "/v2/stocks/AAPL/bars",
+          "query": {
+            "start": "2026-11-02",
+            "end": "2026-11-06",
+            "feed": "sip",
+            "adjustment": "all",
+            "asof": "-",
+            "limit": 16
+          }
+        },
+        "stored_rows_digest": "ff2a5dcba04a0177228da26bebbbc089f62b7b99939a4d163f59d8dc8b808b40",
+        "classification": "SAMPLE_COMPLETE",
+        "expected_sessions": [
+          "2026-11-02",
+          "2026-11-03",
+          "2026-11-04",
+          "2026-11-05",
+          "2026-11-06"
+        ],
+        "missing_sessions": [],
+        "invalid_rows": 0,
+        "rows_returned": 5,
+        "rows_usable": 5,
+        "last_observed_session": "2026-11-06",
+        "normalized_jsonl_bytes": 481,
+        "normalized_gzip_bytes": 192,
+        "feed_evidence": "EXPLICIT_REQUEST_PARAMETER_NOT_ECHOED"
+      },
+      {
+        "probe": {
+          "origin": "alpaca_data",
+          "kind": "bars",
+          "symbol": "ACN",
+          "path": "/v2/stocks/ACN/bars",
+          "query": {
+            "start": "2025-08-04",
+            "end": "2025-08-08",
+            "feed": "sip",
+            "adjustment": "all",
+            "asof": "-",
+            "limit": 16
+          }
+        },
+        "stored_rows_digest": "961520dfa176420fb2f3e5a1b92a909974b90062be1cf39a9fda5a00d8a8d003",
+        "classification": "SAMPLE_COMPLETE",
+        "expected_sessions": [
+          "2025-08-04",
+          "2025-08-05",
+          "2025-08-06",
+          "2025-08-07",
+          "2025-08-08"
+        ],
+        "missing_sessions": [],
+        "invalid_rows": 0,
+        "rows_returned": 5,
+        "rows_usable": 5,
+        "last_observed_session": "2025-08-08",
+        "normalized_jsonl_bytes": 475,
+        "normalized_gzip_bytes": 185,
+        "feed_evidence": "EXPLICIT_REQUEST_PARAMETER_NOT_ECHOED"
+      },
+      {
+        "probe": {
+          "origin": "alpaca_data",
+          "kind": "bars",
+          "symbol": "ACN",
+          "path": "/v2/stocks/ACN/bars",
+          "query": {
+            "start": "2026-11-02",
+            "end": "2026-11-06",
+            "feed": "sip",
+            "adjustment": "all",
+            "asof": "-",
+            "limit": 16
+          }
+        },
+        "stored_rows_digest": "3c177e2f4cf8218e5ed7a69b9e0fc605702f7ad61cea41e08ba6e7da3c1b2027",
+        "classification": "SAMPLE_COMPLETE",
+        "expected_sessions": [
+          "2026-11-02",
+          "2026-11-03",
+          "2026-11-04",
+          "2026-11-05",
+          "2026-11-06"
+        ],
+        "missing_sessions": [],
+        "invalid_rows": 0,
+        "rows_returned": 5,
+        "rows_usable": 5,
+        "last_observed_session": "2026-11-06",
+        "normalized_jsonl_bytes": 478,
+        "normalized_gzip_bytes": 188,
+        "feed_evidence": "EXPLICIT_REQUEST_PARAMETER_NOT_ECHOED"
+      }
+    ],
+    "capacity": {
+      "state": "SAMPLE_EXTRAPOLATION_ONLY",
+      "target_symbols_including_spy": 51,
+      "target_daily_row_slots_with_warmup": 154938,
+      "by_feed_and_adjustment": [
+        {
+          "origin": "alpaca_data",
+          "feed": "sip",
+          "adjustment": "all",
+          "sample_bars": 30,
+          "sample_windows": 6,
+          "projected_rows": 154938,
+          "projected_bytes": {
+            "normalized_jsonl_bytes": 14858555,
+            "normalized_gzip_bytes": 5825669
+          },
+          "compact_plus_one_same_volume_copy_bytes": 11651338
+        }
+      ],
+      "excluded": [
+        "additional_share_classes",
+        "security_and_action_sources",
+        "manifests",
+        "workspace_reserve",
+        "future_database_indexes_and_journals"
+      ]
+    }
+  },
+  "release": {
+    "pit": false,
+    "trading": false,
+    "production": false
+  },
+  "head": "182e146da07a95478d16948fc03c1039f435a749"
+}
