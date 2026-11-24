@@ -25,7 +25,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 sys.dont_write_bytecode = True
-from prepare_f01_migration import REPO  # noqa: E402
+from f01_research_evidence import REPO  # noqa: E402
 
 from trading_system.data.canonical_bootstrap import BootstrapBlocked, _local_drive  # noqa: E402
 from trading_system.data.canonical_paths import pinned_files  # noqa: E402

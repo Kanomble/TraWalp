@@ -8,7 +8,7 @@ Der neue Canonical-A-V1-Pfad funktioniert für einen real verifizierten Sieben-E
 
 ## 2. Current Status
 
-**Aktualisiert am 23.11.2026 · Task 8F.3D.10.** Geprüfter Branch `SEC-integration`, HEAD `4c98ac0e04ba2c6b72402fc96e9e6a94e4e712b9`. Der Ausgangsbaum war sauber. Dieses Dokument, Pflegeanweisung und Root-`AGENTS.md` sind uncommittierte Ergänzungen. Sichtbare Git-Historie am HEAD: 141 Commits vom 09.08. bis 23.11.2026. Quellen können Datenzeiträume vor dem ersten Commit beschreiben. [Baseline-Belegsatz](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1>)
+**Aktualisiert am 24.11.2026 · Task 8F.3D.11.** Geprüfter Branch `SEC-integration`, Basis-HEAD `1a869020d0f4ef54c1437b5fbfa2becad6c0a5ba`. Der Ausgangsbaum war sauber. Die Änderungen aus D.11 liegen uncommittet vor. [Eingefrorene D.10-Baseline](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1>)
 
 | Gegenstand | Implementierung | Belegte Validierung | Freigabe oder Grenze |
 | --- | --- | --- | --- |
@@ -17,11 +17,11 @@ Der neue Canonical-A-V1-Pfad funktioniert für einen real verifizierten Sieben-E
 | SEC-Bulk und Arelle | `IMPLEMENTED` | `VALIDATED_REAL_DATA` auf veröffentlichtem Bulk und 339 Filings | `RESEARCH_ONLY`; durchgehende fachliche und PIT-Abdeckung `PARTIAL` |
 | Canonical E.11 und E.13 | `IMPLEMENTED` | `VALIDATED_REAL_DATA`, `PARITY_VERIFIED`, 77 Anker, drei freigegebene Regeln | `RESEARCH_ONLY` in exakter Daten- und Reader-Bindung |
 | Historischer Fundamental-PIT | `IMPLEMENTED` | `VALIDATED_REAL_DATA` für sieben fest gebundene Issuer | `PARTIAL`; Marktdaten und historisches Trading-Universe separat |
-| G0–G3 und G6 | `IMPLEMENTED` | `VALIDATED_REAL_DATA`; G3 `G3_COMPLETE`, G6 `PASS` | `RESEARCH_ONLY` im historischen Rehearsal-Vertrag |
+| Copy-Rehearsal G0–G6 | `F01_LEGACY_MIGRATION_RETIRED` | Historisch G3 `G3_COMPLETE`, G6 `PASS`, V2-A für gebundenen Snapshot | Aktiver Rehearsal-Pfad entfernt. Original-Rehearsal-Bytes lokal nicht verfügbar. |
 | G4 und V2-Scopes | `IMPLEMENTED` | `VALIDATED_REAL_DATA`; Scope A für gebundenen Snapshot belegt | Historisches G4 bleibt `INSUFFICIENT_EVIDENCE`. Scopes B/C offen, D `NOT_RELEASED` |
 | G5-Integration | `IMPLEMENTED` | `TESTED_OFFLINE` | `BLOCKED`; keine unabhängige reale G5-Abnahme in der gültigen Belegkette |
 | Historische Security und SIP | `IMPLEMENTED` für Adapter, Referenzen und Diagnose | `VALIDATED_REAL_DATA` für begrenzte lokale Stichproben | `PARTIAL`; Handelbarkeit, Vollständigkeit, Lizenz und Warm-up separat |
-| Integrierte 50-Issuer-Lineage | `PLANNED` | `UNKNOWN` | `BLOCKED`; 0/50 durchgehend historisch trading-qualifiziert |
+| 50-Issuer-Preflight | `F01_HISTORICAL_50_BATCH_PREPARATION_READY` | Offline-Regressionen, 50 CIKs und erster Review-Batch mit 20 Accessions | Acquisition und Import separat gesperrt. 0/50 historisch trading-qualifiziert. |
 | Produktiver Cutover | `PLANNED` als gesonderte Entscheidung | `UNKNOWN` | `BLOCKED`; V2-D `NOT_RELEASED` |
 
 Die letzten vorhandenen Real-Gates wurden für diese Baseline nicht erneut gestartet. Der aktuelle Betriebszustand eines eventuell extern betriebenen Journals oder Brokerkontos ist `UNKNOWN`. [Freigabematrix](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1/status_matrix.csv>) · [Acceptance V2](f01_acceptance_v2.md) · [Observation-Gate](../reports/shadow_pre_inception_final_audit.md)
@@ -43,7 +43,7 @@ Historische Strategieaussagen setzen geprüfte Inputs und einen dokumentierten U
 | Forward und Shadow | [`forward_market.py`](../src/trading_system/data/forward_market.py), [Readiness](../src/trading_system/shadow/readiness.py), [Admission](../src/trading_system/shadow/admission.py), [Runner](../src/trading_system/shadow/runner.py), [Journal](../src/trading_system/shadow/journal.py) | Separates Alpaca SIP/all/1d-Archiv → STRICT und Inception-Admission → lokales Journal. Observation und Economic haben unterschiedliche Readiness. Shadow erzeugt interne Beobachtungen bzw. modellierte Intents/Fills innerhalb seiner Verträge. |
 | Research-Fundamentals | [Bulk-Runbook](f01_sec_bulk_download.md), [Filing Evidence](f01_original_filing_evidence.md), [`canonical_facts.py`](../src/trading_system/data/canonical_facts.py), [`canonical_research.py`](../src/trading_system/fundamentals/canonical_research.py) | Originale / Companyfacts → Parser/Arelle und geprüfte Semantik → isolierter Canonical-Writer/Receipts → beleggebundener E.13-Reader. Legacy ist weiterhin ein eigener, kompatibler Laufzeitpfad. |
 | Historische Identitäten | [`security_identity.py`](../src/trading_system/data/security_identity.py), [`security_lifecycle.py`](../src/trading_system/data/security_lifecycle.py), [Security Reference](security-reference.md) | CIK ist die Reporting-Entity. Handelbare Klassen/Security-IDs werden über zeitgebundene Belege, Symbole und Corporate Actions zugeordnet. Punktbeobachtungen bleiben Punkte. |
-| Ziel der 50er-Erweiterung | [D.9 Zielarchitektur](</G:/TraWalpResearch/import-artifacts/f01-comprehensive-audit-20261123-v1/architecture_after_cleanup.md>) | Bestehende Canonical-Komponenten in einer neuen RESEARCH_ONLY-Lineage plus separat qualifizierte Marktshards. Vollständiger Runner, neue Lineage und Strategy-Abnahme sind geplant. |
+| 50er-Erweiterung | [Offline-Preflight und Ziel-Lineage](f01_historical_50_research_preparation.md) | D.6-Hashes → lokale Filing-Inventur → versionierter Review-Batch. Source- und Accounting-Admission, Bootstrap und Import in die neue RESEARCH_ONLY-Lineage folgen nach Freigabe. |
 
 Der aktive produktive Pfad und das E.11-Research-Paket teilen Teile der Fachlogik. Die operative Readiness und Provenienz jeder Datenquelle bleiben separate Verträge. [Code-Inventar mit SHA-256](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1/architecture_inventory.json>)
 
@@ -59,7 +59,8 @@ Der aktive produktive Pfad und das E.11-Research-Paket teilen Teile der Fachlogi
 | 21.11. | SEC-Persistence und isolierte DataSynchronizer-Anbindung; kontrollierter Bulk- und Canonical-Bootstrap. Report- und Import-Scope getrennt, BAC und JSM ausgeschlossen. | Offline-Integration belegt, reale G5-Abnahme offen. |
 | 22.11. | Offline-Arelle-Verarbeitung lokaler Filings, Taxonomie-/EDGAR-Transformationsregeln, Accounting-Evidenz, E.11 Handoff, E.12 und E.13. | Accounting-Fact-Abdeckung bleibt ungleichmäßig; nur sieben zugelassene Issuer. |
 | 22.–23.11. | E.5 rekonstruiert Filed-/Acceptance- und Ablaufereignisse. D.6 bindet 50 historisch begründete Kandidaten, D.7/Zusätze untersuchen kostenlose Provider und Limiter, D.8 zählt SIP- und Warm-up-Gaps getrennt. | 0/50 qualifizierte Trading-Historien. Providerzugriff und Lizenz lassen sich aus Stichproben nicht ableiten. |
-| 23.11. | Unter ID 8F.3D.9 wurde der frühere Markt-Runner-Auftrag abgebrochen. Der nachfolgende Codebase-/Storage-Audit unter derselben ID wurde abgeschlossen. Dieses Dokument bildet die startende Living-State-Baseline. | Keine erkennbare Runner-Implementierung aus dem Abbruch. Keine Löschgenehmigung. |
+| 23.11. | Unter ID 8F.3D.9 wurde der frühere Markt-Runner-Auftrag abgebrochen. Der nachfolgende Codebase-/Storage-Audit unter derselben ID wurde abgeschlossen. D.10 fror die startende Living-State-Baseline ein. | Keine erkennbare Runner-Implementierung aus dem Abbruch. |
+| 24.11. | D.11 legt den aktiven Copy-Rehearsal-Pfad still, sichert gleichschlüsselige Canonical-Konflikte ab und erstellt den ersten Offline-Batch für die 50er-Erweiterung. | Neue Source-Gates, Datenbank und Trading bleiben offen. |
 
 [Vollständige Git-Chronologie](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1/git_chronology.csv>) · [Quellengebundene Task-Timeline](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1/task_timeline.csv>)
 
@@ -69,7 +70,8 @@ Der aktive produktive Pfad und das E.11-Research-Paket teilen Teile der Fachlogi
 - **Market und Security:** Alpaca-Daily/Intraday, explizites Forward-SIP, XNYS-Kalender, Vergleichs- und Gap-Prüfungen, CIK/FIGI-/Lifecycle-Recherche, streng begrenzte Massive-Tools. Ein manueller reboot-aware Recovery-Pfad für den bestehenden Massive-Limiter ist vorhanden und offline getestet; ein erfolgreicher Dry-run ist keine automatische Zustandsänderung. [Daily-Runbook](historical-daily-backfill.md) · [Reboot-Recovery](f01_massive_reboot_recovery_audit.md)
 - **SEC-Capture und Canonical:** Retrieval und lokale Bulk-Integrität, Source-Membership-Admission, Original-Filing-Evidenz, versionierte Arelle-Taxonomien/Transformationen, verlustfreie Occurrences, Current/Revision-/Dataset-Versionen, Receipt und Request-Archiv. Canonical-Anbindung des DataSynchronizer im isolierten Pfad ist realisiert und offline getestet. [Integrationsaudit](../reports/f01_data_synchronizer_integration_audit.md)
 - **Replay und Zeitsemantik:** E.13 prüft Accepted-/Filed-Zeitpunkte und Periodenkontext, starke Supersession-Bindung für widersprüchliche Amendments und freigegebene E.12-Fallbacks. Nicht belegte Angaben erscheinen mit konkretem Missing-Status. Die Freigabe bindet Regel-, Source-, Schema-, Daten- und Code-Stand. [E.13 Audit](../reports/f01_canonical_research_reader_audit.md)
-- **Wartung:** D.9 erstellte Repository-/Storage-Inventar, Dependency-Graph und Cleanup-Manifest, präzisierte das Daily-Backfill-Runbook und ergänzte einen Architekturindex. Keine bestehende Runtime-Funktion wurde entfernt. [D.9 Abschluss](</G:/TraWalpResearch/import-artifacts/f01-comprehensive-audit-20261123-v1/final_audit.md>)
+- **Canonical Deduplication:** Der A-V1-Key und seine partiellen Unique-Indizes gelten weiter. Widersprüchliche Inhalte für denselben Key innerhalb eines Requests werden atomar abgewiesen. Die isolierte Duplicate Assurance prüft Storage und optionale PIT-Zeugen. [Canonical-Vertrag](f01_canonical_deduplication_contract.md)
+- **Wartung:** D.9 erstellte Repository-/Storage-Inventar, Dependency-Graph und Cleanup-Manifest. D.11 entfernte den ausschließlich migrationsbezogenen Rehearsal-Code und verlagerte gemeinsame Research-Fingerprints. [D.9 Abschluss](</G:/TraWalpResearch/import-artifacts/f01-comprehensive-audit-20261123-v1/final_audit.md>) · [Retirement](f01_legacy_migration_retirement.md)
 
 ## 7. SEC, Arelle & Fundamental Research
 
@@ -81,9 +83,11 @@ Der aktive produktive Pfad und das E.11-Research-Paket teilen Teile der Fachlogi
 
 **Zulassung und nachgewiesene Daten.** Der erste Sieben-Emittenten-Pilot auf `f01-research-adb7d5d14b5b4cf889c8a8e5e63fa185` hat 26.102 Facts/Occurrences. Das getrennte E.11 auf `f01-research-051f55358e844dd0b752ad0c10fa2e84` hat Version 8, sieben Receipts und 26.184 Facts. Beide behalten ihren Scope. AAPL, ACN, CAT, COST, LLY, MSFT und NVDA sind zugelassen. BAC bleibt wegen des Reporting-Entity-Konflikts, JSM wegen Identity-Konflikts ausgeschlossen. Der E.13-Report meldet 77 Paritätsanker, 4.234 gebundene Originalreferenzen, 31 verwendete Fallback-Proofs und null Findings. [Scope V2](../reports/f01_pilot_scope_reduction_audit.md) · [E.11 Handoff](../reports/f01_canonical_accounting_handoff_audit.md) · [E.13 Ergebnis](</G:/TraWalpResearch/import-artifacts/f01-e13-reader-validation-20261122-211700.json>)
 
-**Filing-Lücken.** D.6 maß 2.352 unterschiedliche fehlende periodische Original-Accessions für die erweiterte Kohorte. Das ist der damalige gebundene Differenzstand und wurde hier arithmetisch und per Artefakt bestätigt, ohne neuen Crawl. Neueste offene Fachfälle umfassen ACN Issuer Shares, CAT/COST Warm-up-OCF, NVDA PPE-only-CapEx, vollständige konsolidierte Debt-Komponenten und ROIC. E.13-Paritätsanker lieferten Total Debt 4/77, Operating Income 65/77, EBITDA 47/77, CapEx 54/77, OCF 65/77, FCF 46/77 und ROIC 0/77. Das sind Abdeckungen der 77 Anker. [D.6 Inventar](../reports/f01_historical_50_preflight.json) · [E.5 Findings](../reports/f01_historical_pit_qualification_audit.md)
+**Filing-Lücken.** D.6 maß 2.352 unterschiedliche fehlende periodische Original-Accessions für die erweiterte Kohorte. D.11 fand für diese 2.352 Paare kein Originalverzeichnis im geprüften Cache. Für weitere 336 periodische Paare waren Index- und Dokumentnamen gelistet und die Arelle-Shard-Größen abgleichbar. Originalbytes und neue fachliche Zulassung bleiben unverifiziert. Offene Fachfälle umfassen ACN Issuer Shares, CAT/COST Warm-up-OCF, NVDA PPE-only-CapEx, vollständige konsolidierte Debt-Komponenten und ROIC. E.13-Paritätsanker lieferten Total Debt 4/77, Operating Income 65/77, EBITDA 47/77, CapEx 54/77, OCF 65/77, FCF 46/77 und ROIC 0/77. [D.11 Preflight](f01_historical_50_research_preparation.md) · [D.6 Inventar](../reports/f01_historical_50_preflight.json) · [E.5 Findings](../reports/f01_historical_pit_qualification_audit.md)
 
 ## 8. Market Data & Historical Coverage
+
+Der D.11 Fundamental-Batch plant ohne vorausgesetzte Trading-Freigabe. Feed, Adjustment, Corporate Actions, Security-Epochen und SPY-Warm-up bleiben eigenständige PIT-Evidence-Gates. [50er-Vorbereitung](f01_historical_50_research_preparation.md)
 
 **Speicherverträge.** Legacy/U0 zählen historisch sichtbare Bars, aber Legacy bindet Feed und Adjustment nicht je Zeile. Der explizite Forward-Vertrag `SIP_DAILY_ALL_FAIL_CLOSED_V1` bindet Alpaca/SIP/all/1d, UTC-Retrieval und Session. Das Archiv dient dem operativen Lookback. Raw, Split und All sind getrennte Preisbasen; IEX ersetzt keine fehlenden SIP-Sessions. Intraday-Replay hat eigenständige Coverage-, Session- und Ausführungsverträge. [Forward SIP](../reports/f_forward_sip_shadow_contract_audit.md) · [Execution Fidelity](../reports/market_execution_fidelity_audit.md) · [Intraday-Runbook](intraday-market-data.md)
 
@@ -97,9 +101,9 @@ Der aktive produktive Pfad und das E.11-Research-Paket teilen Teile der Fachlogi
 | --- | --- |
 | Produktive Originaldatenbank `data/trading_system.sqlite3` | Physisch vorhanden. Metadaten am 23.11.2026: 10.501.169.152 Bytes. WAL/SHM gehören zum geschützten Bestand. In diesem Task kein SQLite-Zugriff. |
 | Legacy-Projektionen und U0-Snapshot | Alte Bars-/Fact-Verträge und der historisch rekonstruierte U0-Baseline-Snapshot bleiben separate Referenzen. U0 ist maßgeblich für seine eingefrorene Replay-Abnahme. Historische Altberichte bleiben Zeitzeugen und enthalten nicht zwangsläufig reproduzierbare Candidate-Lineage. |
-| G0–G6 Copy-Rehearsal | Unter `reports/f01_copy_rehearsal/20261115_8f2a`. Sieben physische Source-/Backup-/Work-/Restore-/Rebuild-Dateien sind geschützt. Der Census-Scratch ist ein prüfpflichtiger Cleanup-Kandidat. |
+| G0–G6 Copy-Rehearsal | Original-Jobpfad `reports/f01_copy_rehearsal/20261115_8f2a` nach manueller Vorab-Löschung abwesend. D.11 entfernte 393 weitere eindeutig zugeordnete Dateien mit 39.909.268 logischen Dateibytes. [Retirement](f01_legacy_migration_retirement.md) |
 | Sieben-Emittenten-Piloten | Unter `G:\TraWalpResearch\research-databases`. E.11 SQLite am 23.11.2026 per Metadaten 16.842.752 Bytes. D.9 maß 67.380.056 Bytes für den gesamten E.11-Ordner inkl. Requests/Metadaten. E.13 öffnet den gebundenen Bestand als Reader. |
-| Zukünftige 50er-Lineage | `PLANNED`. Isolierter Canonical-Bootstrap und bestehender Writer/Receipt-Vertrag. Marktshards, Review, Restore-Bindung und qualifizierte Joins sind vor Import bzw. Replay separat nachzuweisen. |
+| Zukünftige 50er-Lineage | Zielpfad und versionierter Review-Batch vorbereitet. Isolierter Canonical-Bootstrap und Writer/Receipt-Vertrag sind wiederverwendbar. Eine reale 50er-Datenbank wurde noch nicht angelegt. |
 
 **Historische Abnahme.** Das alte Problem war eine mögliche fachliche Wirkung identisch wiederholter Facts auf Auswahl und Scores. Der Migrationspfad bewahrt 18.698.090 Occurrences bei 8.329.908 eindeutigen Canonical-Facts. G3 ist vollständig. Historisches V1-G4 und Supplements behalten `INSUFFICIENT_EVIDENCE`. V2 akzeptiert A (Storage-/Semantikparität) für den gebundenen Snapshot, hält B (qualifiziertes Forward-Ranking) mit je 334 offenen Kandidaten offen und C (historische Identity) unbelegt. D (operative Champion-Readiness) bleibt `NOT_RELEASED`. G6-PASS belegt Restore- und Crash-/Resume-Verhalten. G5 braucht eine unabhängige reale Integrationsevidenz und hat weiterhin keinen belegten PASS. [V2](f01_acceptance_v2.md) · [G5-Input](../reports/f01_g5_input_evidence_preparation_audit.md)
 
@@ -108,6 +112,8 @@ Der gebundene V2-Bericht nennt 2.618 PIT-/Accounting-Vergleiche, zwölf unverän
 **Kapazität.** D.9 berichtete am 23.11.2026 **90,020 GiB** frei, **2,037 GiB** bedingt rückgewinnbar und **0 Bytes** zur Löschung freigegeben. Der neue Quellenlauf maß davon getrennt **96.656.535.552 freie Bytes** auf G: (rund 90,018 GiB). Eine erneute Speicherinventur des gesamten Datenträgers fand nicht statt. **75,37 GiB** zusätzlicher SEC-Arbeitsbedarf und **128,75 GiB** mit vollständiger neuer Kopie auf G: bleiben D.9-Schätzungen auf Basis des 339-Filing-Pilots, 2.352 Lücken und Reserve. Ein zweites physisches Laufwerk ist nach Projektvorgabe eine geplante Option; Buchstabe, Kapazität, Archivpfad, Dateisystem und geprüfte Restore-Strategie sind `UNKNOWN`. Pfadgebundene alte Verifikation kann eine reine Verschiebung verweigern. [D.9 Speicher](</G:/TraWalpResearch/import-artifacts/f01-comprehensive-audit-20261123-v1/final_audit.md>) · [Freigabeplan](</G:/TraWalpResearch/import-artifacts/f01-comprehensive-audit-20261123-v1/cleanup_authorization_plan.md>)
 
 ## 10. Historical Security & PIT Correctness
+
+D.11 bindet die ausgewählten Filings an die historischen D.6-CIKs und Accessions. Die dazugehörigen D.6-Security-Blocker stehen pro ausgewähltem Filing im Batch. Markt- und Trading-Qualifikation folgen erst nach Audit zu Security, Zeit und Scope. [Batch-Entwurf](f01_historical_50_research_preparation.md)
 
 CIK, handelsfähige Security-ID, Share Class, Symbol, Börse, effektives Intervall, Beobachtungszeit und Corporate Action sind unterschiedliche Felder. Ein heutiger Typ wird nicht rückdatiert. Eine geschlossene Epoche braucht belastbare Grenzen und die Abgrenzung zu Name-Change, Fusion, Delisting, Austausch oder Wiederverwendung. Bei JATT sind unterschiedliche CIK-Punkte 2023 und 2026 belegt, ZURA liefert zusätzliche Transition-Evidenz. Vollständige Epochen und historische Exits bleiben separate Prüfungen. ACN-Class-A-Belege schließen den wirtschaftlichen Issuer-Shares-Scope nicht. AAPL-Split- und TWTR-Merger-Stichproben zeigen, welche zusätzliche Action-/Exit-Provenienz benötigt wird. [D.6 Security-Audit](../reports/f01_historical_security_50_issuer_preflight_audit.md) · [D.8 Action-Belege](f01_alpaca_historical_sip_coverage.md)
 
@@ -137,6 +143,7 @@ Der Champion-Audit bindet eine Position, 100 % Notional-Obergrenze, 1 % Risikobu
 3. F01 konservierte alle Occurrences samt Legacy- und Forward-Projektionen. G0–G3 und der später versiegelte G6-PASS belegen Migration bzw. Recovery. V2 trennt die Freigaben in A–D.
 4. Finalisierter Bulk, Canonical-Bootstrap, Sieben-Emittenten-Import, Arelle-Originalbelege, E.11-Handoff, E.12-Review und E.13-Parität sind mit vorhandenen Artefakten belegt.
 5. D.6 band die historische Kohorte, D.7 prüfte die Machbarkeit kostenloser Quellen, D.8 maß die lokalen SIP-/Warm-up-Gaps. D.9 band Storage-Kandidaten an einen separaten Freigabeprozess.
+6. D.11 legte den Copy-Rehearsal-Pfad still und veröffentlichte den Offline-Batch-Vertrag und die synthetisch geprüfte Duplicate Assurance.
 
 Die [Task-Timeline](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1/task_timeline.csv>) identifiziert 47 Task-IDs einschließlich dieses Tasks. Git-Implementierungsbelege, validierte Resultate und der unter bereits vergebener D.9-ID erfasste Abbruch werden separat gewertet. Ältere Git-Meilensteine ohne eindeutige Task-ID bleiben datierte Chronologie.
 
@@ -144,10 +151,10 @@ Die [Task-Timeline](</G:/TraWalpResearch/import-artifacts/f01-project-state-base
 
 | Prio | Offener Nachweis und Abnahmekriterium |
 | --- | --- |
-| P0 | **Archivziel und Kapazität.** Zweites Laufwerk eindeutig identifizieren und messbaren Platz, Dateisystem, Reserve sowie Restore-Plan dokumentieren. |
-| P0 | **G0–G6-Reproduzierbarkeit.** Exact checkout, Runtime, Pfad-/Dateiidentität, Seal und Restore-Bindungen erhalten. Archivierungsverfahren separat reviewen. |
-| P0 | **Reale G5-Abnahme.** Gebundene historische Korrektur-/Submissions-/Identity-/Admission-Eingänge und geprüften Restore der Pending-/Receipt-Verträge bereitstellen. |
-| P0 | **2.352 historische Original-Accessions.** Bestätigten Scope in überwachbare CIK-/Zeitfenster-Batches überführen. Archive erst nach ausdrücklicher Freigabe ergänzen. |
+| P0 | **Kapazität der neuen Lineage.** Staging, dauerhafte Evidenz, Reserve und getrennte Backups für den autorisierten Batch planen. |
+| Historisch | **G0–G6-Reproduzierbarkeit.** Alte Bindungen und Resultate bleiben dokumentiert. Prüfungen mit entfernten Originaldatenbankbytes sind lokal nicht mehr ausführbar. |
+| Historisch | **Reale G5-Abnahme.** Der historische 8F.3C-Gate bleibt unbelegt. Die neue Lineage braucht ihre eigene Receipt-/Resume-Abnahme. |
+| P0 | **Original-Accessions.** Für 2.352 historische Gaps fehlt im geprüften Cache ein Originalverzeichnis. 336 weitere gelistete Originalpaare bleiben unverifiziert. Den ersten 20er-Review-Entwurf filtern und einzeln autorisieren. |
 | P0 | **Accounting-Lücken.** CAT-DTS und OCF, ACN Issuer Shares, NVDA PPE-only, Debt/ROIC sowie betroffene Filing-Versionen mit passenden Quellen klären. |
 | P0 | **Provider- und Speicherrechte.** Kostenfreien Alpaca-Scope, Archive-Rights und konkreten authorized Batch dokumentieren. |
 | P0 | **SIP und Warm-up.** Historische SIP-Lücken, 300 Pre-2016-Sessions oder neuen belegten Start mit vollständigem Vorlauf lösen. |
@@ -165,7 +172,7 @@ Die [Task-Timeline](</G:/TraWalpResearch/import-artifacts/f01-project-state-base
 | Codequalität | **Gut prüfbar im Kern.** D.9 fand 153 AST-Gleichheitsgruppen und 11 scheinbar private unreferenzierte Definitionen, aber keinen nachweislich sicheren Löschfall. Alte Gate-/Fixture-Pfade haben Windows-Pfadlängen- und Git-Drift-Grenzen. |
 | Datenverfügbarkeit | **Teilweise.** Gebundene SEC-Bulk und lokaler Filingcache vorhanden, Expansion, alte SIP-Historie und Warm-up unvollständig. |
 | Datenqualität | **Heterogen nach Quelle.** Canonical und Originale sind punktuell technisch und fachlich geprüft. Legacy fehlt Feed-Provenienz pro Bar, und Reportingscopes sind oft kontextabhängig. |
-| Historische Reproduzierbarkeit | **Stark im gebundenen Umfang.** Versiegelte G0–G6- und U0-Replays lassen sich über Originalcheckout und Seals nachvollziehen. Außerhalb der alten Bindungen bleiben neue Prüfungen erforderlich. |
+| Historische Reproduzierbarkeit | **Scope-gebunden.** G0–G6-Ergebnisse bleiben historische Nachweise. Vollständige Replays der entfernten Datenbanken sind lokal nicht mehr verfügbar. U0 bleibt separat an seinen eigenen Snapshot gebunden. |
 | PIT-Korrektheit | **Teilweise belegt.** E.13 Filed/Acceptance/Revision für sieben Issuer. Provider-Revisionshistorie, Klassen-/Listing- und historische Markt-Joins fehlen. |
 | Strategische Validierung | **Reproduzierbare historische Research-Ergebnisse.** Reine OOS-Aussage, Feed-Wechselwirkung und inkrementelles Alpha sind offen. |
 | Trading-Ausführbarkeit | **Gesperrt.** Die vorhandene Modell-Execution und Shadow-Infrastruktur belegen keine Broker-, Inception- oder aktuelle operative Freigabe. |
@@ -176,8 +183,8 @@ Die [Task-Timeline](</G:/TraWalpResearch/import-artifacts/f01-project-state-base
 
 | Reihenfolge | Prio und Arbeit | Abhängigkeit und prüfbares Ergebnis | Freigabe / offline |
 | --- | --- | --- | --- |
-| 1 | P0 **Archiv-/Restore- und Kapazitätsvorprüfung** | Zweites Laufwerk, getrenntes Ziel, vollständige Evidence-Schließung und Read-only-Restore-Preflight prüfen. Alte Git-/Byte-/Runtime-Bindungen mappen. | Plan offline. Jede reale Kopie, Auslagerung oder Löschung separat autorisieren. |
-| 2 | P0 **Kleine SEC-Filing-Batches vorbereiten** | Gebundene 2.352 Accessions nach CIK/Epoche und benötigter historischer Abdeckung priorisieren. Erst 20er-Testbudget, Source-Review und Draft-Admission. | Planung offline. Abrufe einzeln autorisieren. |
+| 1 | P0 **Ersten SEC-Batch reviewen und autorisieren** | 20 Accessions im D.11-Entwurf. CIK, Acceptance, Amendment-Lineage und Speicherbedarf pro konkretem Teilumfang prüfen. | Offline-Entwurf liegt vor. Reale Akquisition verlangt ausdrückliche Freigabe. |
+| 2 | P0 **Expansion-Admission und atomaren Import abnehmen** | Source-Generation, Arelle-DTS, Accounting und Source-Membership pro Filing binden. Canonical-Writer, Duplicate Assurance und Resume für die isolierte Lineage nutzen. | Isolierter Bootstrap und Import erst nach Review und Freigabe. |
 | 3 | P0 **Markt- und Security-Evidence vorbereiten** | Basic/Lizenz, SPY mit Vorlauf, historisch belegte Security-Epochen, Exits, Split/Adjustment. Separaten Raw/All-SIP-Runner-Plan an die Datenverträge binden. | Offline-Artefaktprüfung möglich. Jeder neue Provider-Call braucht ausdrückliche Freigabe. |
 | 4 | P1 **Isolierten 50er-Aufbau und fachliche Qualifikation** | SEC/Arelle/Accounting wiederverwenden, eigene Canonical-Lineage und Marktshards prüfen, E.13-Erweiterung und reproduzierbaren PIT-Join abnehmen. | Neue Datenbank-/Import- und Review-Freigabe. Bereits vorhandene Evidenz offline prüfen. |
 | 5 | P1 **Strategien und operative Entscheidung** | Erforderliche Coverage und Universe/PIT bestanden. Fixierte A–F-/F-Scopes, costs, echtes neues OOS/Robustheit, auf spätere Readiness begrenzter Entscheidungsauftrag. | Kein Replay oder Betrieb ohne separaten Scope und Gates. |
@@ -185,7 +192,7 @@ Die [Task-Timeline](</G:/TraWalpResearch/import-artifacts/f01-project-state-base
 ## 16. Decisions & Superseded Approaches
 
 - **F bleibt Frozen Champion.** Intraday-Control und neuere Varianten, Kapazitäts- und Exit-Hypothesen liefern getrennte Research-Evidenz.
-- **Parallel Research** ersetzt die Fortsetzung einer produktiven Alt-Migration als Weg zum neuen Bestand. Canonical A-V1, der gemeinsame Writer und die historischen Migrationsevidenzen bleiben erhalten.
+- **Parallel Research** ersetzt den stillgelegten Copy-Rehearsal-Pfad. Canonical A-V1, der gemeinsame Writer und verfügbare historische Belege bleiben erhalten. Die 50er-Lineage braucht eine eigene geprüfte Zulassung. [Retirement](f01_legacy_migration_retirement.md) · [Deduplication](f01_canonical_deduplication_contract.md)
 - **Scoped V2** folgt dem Vorschlag aus 8F.2D. Alte G4-/Supplement-Status bleiben als historische Resultate sichtbar. G6 ist ein separater PASS.
 - **E.13 hat den frühen Pending-Stand überwunden.** Die spätere freigegebene Review-Datei und 77 Read-only-Proben belegen die drei Regeln. Diese Freigabe gilt für die ursprüngliche Reader-/Runtime-Bindung.
 - **Source/Scope getrennt.** 26.102 vs. 26.184 Facts sind getrennte Dataset-Lineages. 320 SIP/all vs. 1.570 Legacy-SPY-Sessions und v3 vs. v4 Identity-Sessions sind abweichende Quellen/Versionen und dürfen nicht kombiniert werden.
@@ -212,6 +219,20 @@ Historische Task-IDs und Commit-/Auditbindungen stehen in der [vollständigen Ti
 - **Nächster Schritt:** Zweites Laufwerk und einen rein lesenden Archiv-/Restore-Vertragsplan für geschützte G0–G6-Evidenz prüfen.
 - **Evidenz:** [Baseline-Audit und Manifest](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1>), [Pflegeanweisung](trawalp_project_state_maintenance.md).
 
+#### 8F.3D.11 – Legacy Migration Retirement, Canonical Deduplication Assurance & 50-Issuer Research Preparation
+
+- **Datum:** 2026-11-24
+- **Git-Stand:** `SEC-integration`, sauberer Ausgangs-HEAD `1a869020d0f4ef54c1437b5fbfa2becad6c0a5ba`; D.11 uncommittet.
+- **Status:** COMPLETED
+- **Ziel:** Copy-Rehearsal beenden, Canonical-Deduplikation absichern und die nächste D.6-Expansion offline vorbereiten.
+- **Änderungen:** 393 Dateien mit 39.909.268 logischen Dateibytes entfernt. Drei aktive Research-CLIs auf den neutralen Evidence-Helfer umgestellt. Gleichschlüsselige Widersprüche innerhalb eines Requests werden atomar abgewiesen. Versionierter Batch-Preflight und isolierte Duplicate Assurance ergänzt.
+- **Tests:** 134 gezielte Offline-Regressionen, Ruff, Import- und CLI-Help-Smoke, `git diff --check`, Linkprüfung der neuen und aktualisierten Quellen, Manifest- und Artefakthashes sowie synthetischer read-only Duplicate-Assurance-Lauf. Vollständiger Helfervergleich im identischen Baum vor der Entfernung.
+- **Ergebnis:** `F01_LEGACY_MIGRATION_RETIRED`, `F01_CANONICAL_DEDUPLICATION_ASSURANCE_PASSED` im synthetisch geprüften Umfang und `F01_HISTORICAL_50_BATCH_PREPARATION_READY` als Offline-Plan. 2.352 fehlende Originalverzeichnisse im geprüften Cache. Review-Batch mit 20 Accessions für NKE, BBBY, HEI, ALOT und BG.
+- **Neue Blocker:** 336 im Original-Cache gelistete Paare unverifiziert. 254 nicht zur Löschung freigegebene Inventarpositionen mit offenen Bindungen oder Zugriffsfragen blieben erhalten. Import braucht ausdrückliche Autorisierung, Source-/Accounting-Admission und vollständige DTS-Evidenz.
+- **Geschlossene Blocker:** Der aktive Copy-Rehearsal-Pfad ist stillgelegt. Offline-Planung für die 50er-Kohorte ist ausführbar.
+- **Nächster Schritt:** 8F.3D.12. Ersten autorisierten Teilumfang beschaffen, offline per Arelle prüfen und nach separater Admission in die neue isolierte Lineage schreiben.
+- **Evidenz:** [Retirement](f01_legacy_migration_retirement.md), [Canonical-Vertrag](f01_canonical_deduplication_contract.md), [50er-Preflight](f01_historical_50_research_preparation.md).
+
 ## 18. Evidence & Source Index
 
 | Thema | Maßgebliche Quellen |
@@ -219,7 +240,8 @@ Historische Task-IDs und Commit-/Auditbindungen stehen in der [vollständigen Ti
 | Repository- und historische Arbeitswege | [F01-Architekturindex](f01_research_architecture_index.md), [D.9 Audit](</G:/TraWalpResearch/import-artifacts/f01-comprehensive-audit-20261123-v1/final_audit.md>) |
 | Strategy, Portfolio, Kosten und Regime | [Lifecycle](strategy-research-lifecycle.md), [Champion](../reports/champion_consolidation_audit.md), [Capacity](f-configured-capacity-research.md), [Regime](f-regime-capacity-research.md), [Alpha](../reports/f_champion_strategy_improvement_audit.md) |
 | Inception, Forward und Economic | [Shadow-Vertrag](f-shadow-execution-v1.md), [Forward](../reports/f_forward_sip_shadow_contract_audit.md), [Reales Observation-Gate](../reports/shadow_pre_inception_final_audit.md), [Policy B](../reports/shadow_policy_b_implementation_audit.md) |
-| G0–G6 | [Copy-Preparation](f01_migration_preparation_script.md), [G3](f01_migration_rehearsal_script.md), [G4–G6 V1](f01_migration_acceptance_script.md), [Acceptance V2](f01_acceptance_v2.md), [Approval](f01_acceptance_v2_approval.json) |
+| D.11 Retirement und Expansion | [Retirement](f01_legacy_migration_retirement.md), [Canonical-Vertrag](f01_canonical_deduplication_contract.md), [50er-Vorbereitung](f01_historical_50_research_preparation.md) |
+| G0–G6 historisch | [Copy-Preparation](f01_migration_preparation_script.md), [G3](f01_migration_rehearsal_script.md), [G4–G6 V1](f01_migration_acceptance_script.md), [Acceptance V2](f01_acceptance_v2.md), [Approval](f01_acceptance_v2_approval.json) |
 | SEC, Arelle, Canonical und E.13 | [Bulk](f01_sec_bulk_download.md), [Filing](f01_original_filing_evidence.md), [Pilotimport](f01_sec_bulk_pilot_import.md), [E.13](../reports/f01_canonical_research_reader_audit.md), [E.5](../reports/f01_historical_pit_qualification_audit.md) |
 | Historical Market und Security | [D.6](../reports/f01_historical_security_50_issuer_preflight_audit.md), [D.7](../reports/f01_historical_market_feasibility_audit.md), [D.8](f01_alpaca_historical_sip_coverage.md), [U1](../reports/f_u1_research_parked_status.md) |
 | Quellenbestand der Baseline | [Inventar](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1/source_inventory.csv>), [Belegmatrix](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1/evidence_matrix.csv>), [Baseline-Manifest](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1/baseline_manifest.json>) |
@@ -230,9 +252,9 @@ Der Offline-Lauf inventarisierte und las vollständig 169 zugängliche Projekt-M
 
 16 ACL-gesperrte Fixture-Unterbäume unter `reports/` wurden als nicht lesbar protokolliert. Kein einzeln identifizierter Markdown-Pfad war unlesbar. Die Anzahl etwaiger Dokumente in den gesperrten Unterbäumen ist `UNKNOWN`. Installierte Drittanbieterumgebungen, Git-Interna, neue Auditdateien und synthetische/duplizierte Test-Checkouts waren außerhalb des fachlichen Dokumentationsscopes. Zwei D.9-Textdateien enthalten bereits beschädigte Zeichen; numerische Kernaussagen wurden gegen ihre CSV-/JSON-Evidenz abgeglichen. Vollständige nicht lokale Chat-Historien wurden nicht als Quelle vorausgesetzt.
 
-Unveränderte G0–G6-Seal-Jahrgänge bleiben im historischen Workspace reproduzierbar. Die Baseline prüfte die fünf kleinen Originalseals gegen V2, nicht deren große SQLite-Mitglieder. Der aktuell überprüfte Code-Inventar-Fingerprint ist `6bce687f9aa1e63728cb2189474efe37fe5f2b43895512c39aed5df5277e2a8d`. Er ist eine andere Bindung als die historische genehmigte E.13-Reader-Version. Dokumente und `AGENTS.md` fallen außerhalb des Code-Inventars, können aber in Git-basierten Additions-/Drift-Gates als zusätzliche Dateien erscheinen. Alte Gates werden im ursprünglich gebundenen Checkout und Runtime reproduziert. Keine Vollhashes großer Datenbanken, kein SQLite-Open produktiver/versiegelter Bestände, keine Downloads, Aufräummaßnahmen, Backtests oder Provider-Calls.
+Die D.10-Baseline prüfte die fünf kleinen Originalseals gegen V2. Historische Code- und Runtime-Bindungen bleiben dokumentiert. Bytegebundene Rehearsal-Prüfungen sind mit den lokal entfernten Originalmitgliedern nicht reproduzierbar. D.11 öffnete keine geschützte Datenbank und führte keine Downloads, Provider-Calls, Strategiereplays oder G0–G6-Gates aus.
 
 ## 20. Next Recommended Task
 
-**Read-only Archive & Restore Feasibility für G0–G6.** Das geplante zweite physische Laufwerk zuerst über seine tatsächlich verfügbaren Metadaten identifizieren. Eine präzise Zuordnung von Source-, Backup-, Work-, Restore- und G6-Rebuild-Pfaden zu Seals, Hashes, neutralem Archivmanifest und späterem Verifikations-Checkout erstellen. Ergebnis ist ein genehmigungsfähiger, kapazitätsgeprüfter Plan mit einem Restore-Testverfahren und klarer Pfadidentitätsgrenze. Reale Kopien oder Auslagerung folgen nur in einem separat genehmigten Schritt. Das schützt die vorhandenen Evidenzen und klärt den Backup-Engpass vor den ersten größeren SEC- oder Marktdatenbatches. [D.9 Freigabeplan](</G:/TraWalpResearch/import-artifacts/f01-comprehensive-audit-20261123-v1/cleanup_authorization_plan.md>)
+**8F.3D.12 – Historical 50-Issuer SEC Acquisition & Canonical Batch Ingestion.** Einen konkreten Teilumfang des D.11-Entwurfs mit CIK, Accession, Source-Review und Budget genehmigen. Die Originale versioniert sichern, Arelle/DTS und historische Verfügbarkeit prüfen, Source-Membership und Accounting separat zulassen und nach autorisiertem Bootstrap atomar mit Receipts in der neuen RESEARCH_ONLY-Lineage veröffentlichen. [Batch- und Lineage-Plan](f01_historical_50_research_preparation.md)
 

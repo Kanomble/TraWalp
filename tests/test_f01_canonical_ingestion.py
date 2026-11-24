@@ -1,7 +1,5 @@
 """A-V1 implementation tests. Synthetic SQLite only; network is forbidden."""
 
-import hashlib
-import os
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
@@ -19,7 +17,6 @@ from trading_system.data.canonical_facts import (
     install_writer_guard,
     write_company,
 )
-from trading_system.data.canonical_migration import migrate_work, validate_work_manifest
 from trading_system.fundamentals.debug import debug_fundamentals
 from trading_system.fundamentals.quality import accounting_state_as_of
 from trading_system.models.fundamentals import CompanyIdentity
@@ -235,40 +232,6 @@ def test_schema_cross_guards_and_snapshot_conflict(tmp_path):
                 c.execute(sql)
 
 
-def manifest(tmp_path):
-    for name in ["source", "backup", "work"]:
-        (tmp_path / name).write_bytes(b"synthetic-not-a-database")
-    return dict(
-        contract="F01_CANON_OCC_V1",
-        plan_id="synthetic",
-        **{k: str(tmp_path / k) for k in ["source", "backup", "work"]},
-        **{
-            k + "_sha256": hashlib.sha256(b"synthetic-not-a-database").hexdigest()
-            for k in ["source", "backup", "work"]
-        },
-        expected_counts={"occurrences": 0},
-        input_inventory=["synthetic"],
-        consumer_inventory=["test"],
-        capacity_budget={"bytes": 1},
-        restore_evidence="synthetic",
-    )
-
-
-def test_disabled_manifest_tool_hash_and_protected_files(tmp_path):
-    m = manifest(tmp_path)
-    with pytest.raises(RuntimeError, match="DISABLED"):
-        migrate_work({})
-    assert validate_work_manifest(m) == tmp_path / "work"
-    for protected in ["source", "backup"]:
-        with pytest.raises(ValueError):
-            validate_work_manifest({**m, "work": m[protected]})
-    with pytest.raises(ValueError, match="HASH_MISMATCH"):
-        validate_work_manifest({**m, "work_sha256": "0" * 64})
-    os.link(tmp_path / "source", tmp_path / "hardlink")
-    with pytest.raises(ValueError, match="HARDLINKED"):
-        validate_work_manifest({**m, "work": str(tmp_path / "hardlink")})
-
-
 @pytest.mark.parametrize(
     "change",
     [
@@ -331,16 +294,6 @@ def test_schema_drift_fails_before_mutation(tmp_path):
         with pytest.raises(ValueError, match="SCHEMA_OR_FK"):
             write(c, [current("cash", 10)])
         assert state(c) == before
-
-
-def test_manifest_rejects_linked_parent_without_opening_files(tmp_path, monkeypatch):
-    from pathlib import Path
-
-    m = manifest(tmp_path)
-    original = Path.is_symlink
-    monkeypatch.setattr(Path, "is_symlink", lambda p: p == tmp_path or original(p))
-    with pytest.raises(ValueError, match="LINKED_PATH"):
-        validate_work_manifest(m)
 
 
 def test_later_source_admission_is_versioned_and_never_moves_forward_anchor(tmp_path):

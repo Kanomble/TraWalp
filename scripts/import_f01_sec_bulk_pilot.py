@@ -26,7 +26,7 @@ from uuid import uuid4
 sys.dont_write_bytecode = True
 import download_f01_sec_bulk as bulk  # noqa: E402
 import prepare_f01_accounting_handoff as handoff  # noqa: E402
-from prepare_f01_migration import REPO, repository_evidence  # noqa: E402
+from f01_research_evidence import REPO, repository_evidence  # noqa: E402
 
 from trading_system.data import canonical_bootstrap as bootstrap  # noqa: E402
 from trading_system.data.canonical_facts import (  # noqa: E402

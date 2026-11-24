@@ -461,6 +461,15 @@ def write_company(
             or (proposed and str(proposed).zfill(10) != company.cik)
         ):
             raise ValueError("IDENTITY_ASSIGNMENT_REJECTED")
+        request_values = {}
+        for row in rows:
+            admission = admissions.get((row["symbol"], row["taxonomy"]))
+            if row["cik"] != company.cik or not admission or not admission.evidence:
+                raise ValueError("SOURCE_MEMBERSHIP_ADMISSION_REQUIRED")
+            key = tuple(row[k] for k in KEY)
+            content = tuple(row[k] for k in MUTABLE)
+            if request_values.setdefault(key, content) != content:
+                raise ValueError("UNRESOLVED_CONTENT_CONFLICT_IN_REQUEST")
         version = current + 1
         c.execute("INSERT INTO fact_dataset VALUES (?,?,?)", (version, request_id, ih))
         c.execute(
@@ -477,9 +486,7 @@ def write_company(
             ),
         )
         for row in rows:
-            admission = admissions.get((row["symbol"], row["taxonomy"]))
-            if row["cik"] != company.cik or not admission or not admission.evidence:
-                raise ValueError("SOURCE_MEMBERSHIP_ADMISSION_REQUIRED")
+            admission = admissions[row["symbol"], row["taxonomy"]]
             fid = _lookup(c, row)
             new = fid is None
             changed = new

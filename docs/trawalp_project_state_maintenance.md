@@ -34,3 +34,5 @@ Für widersprüchliche Aussagen gilt die Rangfolge Originalbeleg, gültiges gebu
 
 Vor einer Aktualisierung prüfen, ob der aktuelle Checkout einen exakten historischen Git-/Acceptance-Nachweis reproduzieren muss. In diesem Fall den ursprünglichen gebundenen Checkout und dessen Runtime respektieren. Wenn eine Änderung am Projektstand durch diesen Scope, fehlende Evidenz oder vom Benutzer vorgegebene Schreibbeschränkungen ausgeschlossen ist, die konkrete Grenze im Task-Abschluss protokollieren. Historische Guards, Additions-Reviews und Seals nicht ändern, um Dokumentationsdrift zu akzeptieren. Die Repo-Anweisung setzt den Pflegeprozess für abgeschlossene Tasks fest. Ein abgebrochener Prozess kann den Eintrag hinterlassen oder ihn unerledigt lassen.
 
+Bei entfernten historischen Datenartefakten den damaligen Nachweis, seine Bindungen und die heute fehlenden Prüfpfade im aktuellen Projektstand festhalten. Die unveränderte Baseline dokumentiert ihren ursprünglichen Beobachtungszeitpunkt.
+

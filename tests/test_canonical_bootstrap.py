@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 
 from trading_system.data import canonical_bootstrap as clean
-from trading_system.data import canonical_migration
 from trading_system.data.canonical_facts import (
     CONTRACT,
     Admission,
@@ -353,15 +352,12 @@ def test_existing_writer_with_bound_origin_and_revisions(target):
     ) == [(2, "10"), (3, "20")]
 
 
-def test_legacy_default_and_migration_entrypoint(tmp_path):
+def test_legacy_default(tmp_path):
     db = Database(tmp_path / "legacy.sqlite")
     db.initialize()
     assert rows(db, "SELECT type FROM sqlite_master WHERE name='fundamental_facts'") == [("table",)]
     assert rows(db, "SELECT * FROM fundamental_facts") == []
     assert rows(db, "SELECT name FROM sqlite_master WHERE name='fact_contract'") == []
-    assert not canonical_migration.EXECUTION_ENABLED
-    with pytest.raises(RuntimeError, match="COPY_REHEARSAL_DISABLED"):
-        canonical_migration.migrate_work({})
 
 
 def test_script_preflight_and_authorized_fixture(target, tmp_path):

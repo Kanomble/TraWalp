@@ -15,7 +15,7 @@ from pathlib import Path
 # The default preflight must not write bytecode to the checkout.
 sys.dont_write_bytecode = True
 
-from prepare_f01_migration import REPO, repository_evidence  # noqa: E402
+from f01_research_evidence import REPO, repository_evidence  # noqa: E402
 
 from trading_system.data.canonical_bootstrap import (  # noqa: E402
     MANIFEST_MAX_BYTES,
