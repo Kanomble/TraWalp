@@ -8,7 +8,7 @@ Der neue Canonical-A-V1-Pfad funktioniert für einen real verifizierten Sieben-E
 
 ## 2. Current Status
 
-**Aktualisiert am 24.11.2026 · Task 9.** Geprüfter Branch `SEC-integration`, Basis-HEAD `ec6a8158564bdf864295dea1479f132104d12543`. Der Ausgangsbaum war sauber und enthielt D.11. Task 9 liegt uncommittet vor. [Task-9-Belegsatz](</G:/TraWalpResearch/import-artifacts/f01-task9-ingestion-preparation-v1>) · [Eingefrorene D.10-Baseline](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1>)
+**Aktualisiert am 24.11.2026 · Task 9.1.** Geprüfter Branch `SEC-integration`, Basis-HEAD `7c984f46f6859b17a952a00a2b6de90f0002b3bd`. Der Ausgangsbaum war sauber und enthielt Task 9. Task 9.1 liegt uncommittet vor. [Task-9-Belegsatz](</G:/TraWalpResearch/import-artifacts/f01-task9-ingestion-preparation-v1>) · [Eingefrorene D.10-Baseline](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1>)
 
 | Gegenstand | Implementierung | Belegte Validierung | Freigabe oder Grenze |
 | --- | --- | --- | --- |
@@ -23,6 +23,7 @@ Der neue Canonical-A-V1-Pfad funktioniert für einen real verifizierten Sieben-E
 | Historische Security und SIP | `IMPLEMENTED` für Adapter, Referenzen und Diagnose | `VALIDATED_REAL_DATA` für begrenzte lokale Stichproben | `PARTIAL`; Handelbarkeit, Vollständigkeit, Lizenz und Warm-up separat |
 | 50-Issuer-Preflight | `F01_HISTORICAL_50_BATCH_PREPARATION_READY` | Offline-Regressionen, 50 CIKs und erster Review-Batch mit 20 Accessions | Acquisition und Import separat gesperrt. 0/50 historisch trading-qualifiziert. |
 | Task 9 Filing-Pipeline | `TASK9_MANUAL_EXECUTION_READY` im V1-Scope | 85 gezielte Offline-Tests, inklusive synthetischer Arelle-, Import-/Replay-, Recovery- und E.13-Proben | `REAL_DATA_ACQUISITION_AND_INGESTION_PENDING_MANUAL_EXECUTION`. Ein NKE-Filing als erster Vorschlag. |
+| NKE-DTS-Reparatur | Tatsächlich geladene DTS-URIs aus gebundener Quarantäne fließen in die lokale Closure ein. | Vier gezielte Offline-Tests und lesender Realabgleich von 22 auf 23 externe Abhängigkeiten. | Neue Selection im bestehenden Job. Reale Extraktion, Zulassungen und Import stehen aus. |
 | Produktiver Cutover | `PLANNED` als gesonderte Entscheidung | `UNKNOWN` | `BLOCKED`; V2-D `NOT_RELEASED` |
 
 Die letzten vorhandenen Real-Gates wurden für diese Baseline nicht erneut gestartet. Der aktuelle Betriebszustand eines eventuell extern betriebenen Journals oder Brokerkontos ist `UNKNOWN`. [Freigabematrix](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1/status_matrix.csv>) · [Acceptance V2](f01_acceptance_v2.md) · [Observation-Gate](../reports/shadow_pre_inception_final_audit.md)
@@ -78,7 +79,7 @@ Der aktive produktive Pfad und das E.11-Research-Paket teilen Teile der Fachlogi
 
 ## 7. SEC, Arelle & Fundamental Research
 
-**Task 9 Erstfall.** Die D.6-gebundenen Submissions-Member bestätigen NKE, CIK `0000320187`, Accession `0000320187-16-000242`, Filing-Datum 06.01.2016, Acceptance 22:17:58 UTC, Primärdokument `nke-11302015x10q.htm` und Report-Datum 30.11.2015. Das Originalverzeichnis fehlt im geprüften Cache. Abruf, DTS und die getrennten Source-/Accounting-Reviews stehen aus. [Auswahl](</G:/TraWalpResearch/import-artifacts/f01-task9-ingestion-preparation-v1/batch_scope_review.json>)
+**Task 9 Erstfall.** NKE `0000320187-16-000242` liegt im manuellen Job mit `SOURCE_VERIFIED` vor. Der frühere Arelle-Lauf wählte die separate XBRL-Instanz und blockierte auf `UNBOUND_ACTUAL_DTS`. Task 9.1 replizierte die korrigierte Closure rein lesend mit 23 externen Abhängigkeiten. Der erneute reale Arelle-Lauf und die getrennten Source-/Accounting-Reviews stehen aus. [Offline-Wiederanlauf](f01_historical_50_manual_ingestion_runbook.md)
 
 **Bulk.** Das real vorhandene finalisierte Source-Manifest bindet `pilot01-20261121-175840` und die Originalarchive. Der historische Strukturcensus nennt 20.609 Companyfacts-Members, davon 18.136 strukturell gültig und 2.473 kontrolliert ausgeschlossen. Submissions enthält 999.458 geprüfte Members einschließlich des explizit nicht importierbaren Platzhalters. Die Archive sind aktuelle Provider-Rekonstruktionen; ihre Strukturfreigabe belegt keine historischen Provider-Wertversionen oder fachliche Admission. [Bulk-Finalisierung](../reports/f01_sec_bulk_finalization_audit.md) · [Finales Source-Manifest](</G:/TraWalpResearch/sec-originals/pilot01-20261121-175840/f01_sec_bulk_source_manifest.json>)
 
@@ -191,7 +192,7 @@ Die [Task-Timeline](</G:/TraWalpResearch/import-artifacts/f01-project-state-base
 
 | Reihenfolge | Prio und Arbeit | Abhängigkeit und prüfbares Ergebnis | Freigabe / offline |
 | --- | --- | --- | --- |
-| 1 | P0 **NKE-Auswahl manuell vorprüfen und Abruf autorisieren** | Ein Filing aus den 20 Accessions mit gebundenen Submissions und kontrolliertem Cache. | Task-9-Preflight und Runbook liegen vor. Reale Akquisition benötigt eine ausdrückliche Freigabe. |
+| 1 | P0 **NKE-Extraktion offline wiederholen** | Neue Selection mit aktuellem Candidate-Fingerprint im bestehenden Job verifizieren, neue 23er-Closure publizieren und ausgewählte XBRL-Instanz extrahieren. | Vorhandene Originale wiederverwenden. Source- und Accounting-Review folgen separat. |
 | 2 | P0 **Ersten realen Filing-Receipt und PIT-Witness abnehmen** | Original bytes, DTS, Source und Accounting fachlich prüfen. Isoliert bootstrappen, atomar importieren und identisch wiederholen. | Schreibende Schritte einzeln freigeben. Duplicate Assurance und E.13-Grenze dokumentieren. |
 | 3 | P0 **Markt- und Security-Evidence vorbereiten** | Basic/Lizenz, SPY mit Vorlauf, historisch belegte Security-Epochen, Exits, Split/Adjustment. Separaten Raw/All-SIP-Runner-Plan an die Datenverträge binden. | Offline-Artefaktprüfung möglich. Jeder neue Provider-Call braucht ausdrückliche Freigabe. |
 | 4 | P1 **Isolierten 50er-Aufbau und fachliche Qualifikation** | SEC/Arelle/Accounting wiederverwenden, eigene Canonical-Lineage und Marktshards prüfen, E.13-Erweiterung und reproduzierbaren PIT-Join abnehmen. | Neue Datenbank-/Import- und Review-Freigabe. Bereits vorhandene Evidenz offline prüfen. |
@@ -255,6 +256,20 @@ Historische Task-IDs und Commit-/Auditbindungen stehen in der [vollständigen Ti
 - **Nächster Schritt:** Read-only `scripts/run_f01_historical_50_manual.py select --accession 0000320187-16-000242` ausführen. Danach die Auswahl für den separat genehmigten ersten Abruf prüfen.
 - **Evidenz:** [Runbook](f01_historical_50_manual_ingestion_runbook.md) · [Task-9-Belegsatz](</G:/TraWalpResearch/import-artifacts/f01-task9-ingestion-preparation-v1/task9_final_report.md>).
 
+#### Task 9.1 – Repair Actual DTS Dependency Closure (NKE)
+
+- **Datum:** 2026-11-24
+- **Git-Stand:** `SEC-integration`, Basis-HEAD `7c984f46f6859b17a952a00a2b6de90f0002b3bd`, sauberer Ausgangsbaum, Reparatur uncommittet.
+- **Status:** COMPLETED für die DTS-Korrektur.
+- **Ziel:** Den NKE-Blocker beheben und die vollständig gebundene DTS-Closure wiederholbar machen.
+- **Änderungen:** Passende, hashbenannte Quarantäne liefert die tatsächlichen DTS-URIs zur lokalen Byteprüfung. Extraktion verlangt URI und SHA-256 gemeinsam. Eine neue Selection kann im selben Job einen eigenen Verifikationsbericht erhalten.
+- **Tests:** Vier gezielte Offline-Tests, Ruff, `git diff --check`, lesender Abgleich der NKE-Closure und bestehender Report-Hashes. Kein erneuter realer Arelle-Lauf, Download oder Datenbankzugriff.
+- **Ergebnis:** 23 externe Abhängigkeiten mit lokalem Hash-Nachweis. Die 22 gemeinsamen Hashes und die drei geprüften historischen Reports blieben gleich.
+- **Neue Blocker:** Der Candidate-Fingerprint erfordert eine neue Selection. Erneute reale Extraktion sowie Source-/Accounting-Admission stehen aus.
+- **Geschlossene Blocker:** Der Preflight kann die zuvor übersehene Abhängigkeit `xbrldi-2006.xsd` aus dem vorhandenen Quarantänebericht ableiten.
+- **Nächster Schritt:** Offline-Wiederanlauf mit neuer Selection und demselben NKE-Job.
+- **Evidenz:** [Runbook](f01_historical_50_manual_ingestion_runbook.md) · [Pipeline](../scripts/run_f01_historical_50_manual.py) · [Regressionen](../tests/test_f01_task9_manual_ingestion.py).
+
 ## 18. Evidence & Source Index
 
 | Thema | Maßgebliche Quellen |
@@ -279,5 +294,5 @@ Die D.10-Baseline prüfte die fünf kleinen Originalseals gegen V2. Historische 
 
 ## 20. Next Recommended Task
 
-**Task 9 · Erster manueller NKE-Durchlauf.** Schritt 1 des Runbooks als Read-only-Preflight ausführen. Danach NKE `0000320187-16-000242` als separaten Abrufauftrag reviewen. Vergleichbare Replays und reale E.13-Witnesses bleiben erst nach genehmigtem Bootstrap, Source-/Accounting-Admission und Import prüfbar. [PowerShell-Runbook](f01_historical_50_manual_ingestion_runbook.md)
+**Task 9.1 · NKE offline fortsetzen.** Neue Selection für `0000320187-16-000242` erzeugen. Im bestehenden Job die Originale neu binden, die 23er-Closure publizieren und die Extraktion offline wiederholen. Erst danach die getrennten Zulassungen prüfen. [PowerShell-Runbook](f01_historical_50_manual_ingestion_runbook.md)
 

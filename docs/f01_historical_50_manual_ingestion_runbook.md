@@ -123,6 +123,28 @@ $ReviewScope = $SourceScope + @('--extraction-sha256',$Extraction.manifest_sha25
 
 Der Worker bleibt offline. Er schreibt temporäre Filing-Kopien für Arelle und publiziert pro Filing einen Shard mit Dokumentmodus, Original-SHA, QName, Kontext, Dimensionen, Unit, Decimals, Wert, Alternativen, DTS-Dokumenten und Findings. `extraction-manifest.json` bindet die Shards und erscheint nach vollständig erfolgreicher Verarbeitung. Bei einem fehlenden oder nicht hashgebundenen DTS werden Findings in `<accession>-quarantine-*.json` abgelegt. Aus der Quarantäne entdeckte Taxonomie-URLs fließen in einen erneuten Taxonomie-Preflight ein. Erstelle bei geänderter Evidenz einen neuen Taxonomie-Report und führe die betroffene Extraktion erneut aus. Gleich gebundene erfolgreich publizierte Shards sind Resume-Punkte.
 
+### Task 9.1 · NKE nach `UNBOUND_ACTUAL_DTS` fortsetzen
+
+Der Preflight verwendet auch die tatsächlich geladenen DTS-URIs des ausgewählten Dokuments aus einer hashbenannten Quarantäne desselben Filings, derselben Originale und derselben Arelle-Version. Die beobachteten Pfade sind reine Diagnose. Nur lokal nach dem bestehenden Cache- oder Wheel-Vertrag verifizierte Bytes können die Closure ergänzen. Beim NKE-Erstfall ergänzte der lesende Abgleich `http://www.xbrl.org/2006/xbrldi-2006.xsd` mit SHA-256 `03bbb0a8df76c9b6c309991c7a898ff67ae5356d12c74ca824f5c2ddc93f1045`. Die 22 früher gebundenen Hashes stimmten überein. Die separate XBRL-Instanz bleibt der Extraktionspfad.
+
+Nach dem Fix **eine neue Selection**, aber **denselben Job** verwenden. Die alte Selection bleibt als historischer Beleg. Die erneute Verifikation schreibt bei geänderter Selection ein zusätzliches `verified-originals-<selection-sha256>.json`. Alte Quarantäne, Closure und Verifikationsberichte bleiben verfügbar. Mit den PowerShell-Helfern aus Schritt 2:
+
+```powershell
+$Job = Join-Path $Artifacts 'f01-task9-nke-01'
+$Selection = Join-Path $Artifacts 'nke-01-selection-task91.json'
+$Plan = Invoke-Task9 @('select','--accession','0000320187-16-000242')
+Save-NewTask9Json $Plan $Selection
+$Common = @('--job',$Job,'--selection',$Selection,'--selection-sha256',(Get-Task9Sha $Selection))
+$Verified = Invoke-Task9 (@('verify') + $Common + @('--execute'))
+$SourceScope = $Common + @('--source-sha256',$Verified.manifest_sha256)
+$Tax = Invoke-Task9 (@('taxonomy') + $SourceScope + @('--execute'))
+$TaxScope = $SourceScope + @('--taxonomy-report',$Tax.path,'--taxonomy-sha256',$Tax.report_sha256)
+Invoke-Task9 (@('extract') + $TaxScope)
+$Extraction = Invoke-Task9 (@('extract') + $TaxScope + @('--execute'))
+```
+
+Bei `TAXONOMY_PENDING` oder einem Hashfehler anhalten. Dieser Wiederanlauf setzt keine Netzwerkfreigabe und führt keine Source-/Accounting-Admission aus.
+
 ## 7 · Source Admission
 
 ```powershell

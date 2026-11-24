@@ -364,6 +364,10 @@ def verify_sources(job, selection, selection_sha):
     }
 
 
+def actual_dependencies(documents):
+    return [dep for doc in documents if doc["selected"] for dep in doc["taxonomy_documents"]]
+
+
 def taxonomy_seeds(job, row, source):
     from pathlib import PurePosixPath
     from urllib.parse import urlsplit
@@ -385,11 +389,28 @@ def taxonomy_seeds(job, row, source):
                 or taxonomy.parts(url)
             ):
                 seeds.add(url)
+    discovered = defaultdict(set)
+    original_urls = {record["url"] for record in source["documents"]}
     for diagnostic in sorted(job.glob(f"{row['accession']}-quarantine-*.json")):
-        _, info = checked(diagnostic, limit=filing.SHARD_LIMIT)
-        if info["source_documents"] == source["documents"]:
-            seeds.update(taxonomy.issue_urls(info["issues"]))
-    return seeds
+        raw, info = checked(diagnostic, limit=filing.SHARD_LIMIT)
+        if (
+            info["contract"] != "F01_TASK9_ARELLE_FILING_V1"
+            or info["status"] != "TAXONOMY_PENDING"
+            or info["filing"] != review.filing_key(row)
+            or info["source_documents"] != source["documents"]
+            or info["runtime"]["version"] != filing.ARELLE_VERSION
+        ):
+            continue
+        require(
+            diagnostic.name == f"{row['accession']}-quarantine-{sha(raw)[:12]}.json",
+            "DTS_QUARANTINE_HASH_MISMATCH",
+        )
+        seeds.update(taxonomy.issue_urls(info["issues"]))
+        for dependency in actual_dependencies(info["documents"]):
+            url, _ = urldefrag(dependency["uri"])
+            if urlsplit(url).scheme in {"http", "https"} and url not in original_urls:
+                discovered[url].add(dependency.get("sha256"))
+    return seeds, discovered
 
 
 def taxonomy_report(job, selection, verified, source_sha, *, client=None):
@@ -398,10 +419,23 @@ def taxonomy_report(job, selection, verified, source_sha, *, client=None):
     results = {}
     for row in selection["filings"]:
         key = review.filing_key(row)
-        seeds = taxonomy_seeds(job, row, verified["filings"][key])
-        results[key] = taxonomy.coverage(
-            seeds, lambda url: taxonomy.bound_input(root, url), acquire
-        )
+        seeds, discovered = taxonomy_seeds(job, row, verified["filings"][key])
+
+        def read(url):
+            return taxonomy.bound_input(root, url)
+
+        # A quarantine is only a discovery hint. Resolve it through the
+        # local cache/wheel trust contract, never through an observed path.
+        results[key] = taxonomy.coverage(seeds, read, acquire)
+        actual = taxonomy.coverage(discovered, read)
+        for url, hashes in discovered.items():
+            entry = actual[url]
+            if entry["status"] == "BOUND":
+                require(
+                    hashes - {None} <= {entry["source"]["sha256"]},
+                    f"DISCOVERED_DTS_HASH_MISMATCH: {url}",
+                )
+        results[key].update(actual)
     plugin = filing.verified_sec_plugin(root)
     complete = plugin and all(
         status["status"] == "BOUND" for urls in results.values() for status in urls.values()
@@ -444,12 +478,27 @@ def extract_filing(job, row, source, closure, code, processor):
         "EXTRACTION_SOURCE_SET_CHANGED",
     )
     selected = [record for record in documents if record["selected"]]
-    actual_dts = [dep for record in selected for dep in record["taxonomy_documents"]]
-    known = {entry["source"]["sha256"] for entry in closure.values()}
-    staged = {entry["sha256"] for entry in sources}
+    actual_dts = actual_dependencies(documents)
+    known = {
+        (url, entry["source"]["sha256"])
+        for url, entry in closure.items()
+        if entry["status"] == "BOUND"
+    }
+    known.update((entry["url"], entry["sha256"]) for entry in sources)
     # Only dependencies proved by the original files or reviewed taxonomy inventory are valid.
-    if not actual_dts or any(dep.get("sha256") not in known | staged for dep in actual_dts):
-        issues.append({"code": "UNBOUND_ACTUAL_DTS", "reason": "Dependency hash not bound"})
+    unbound = [
+        {"uri": dep["uri"], "sha256": dep.get("sha256")}
+        for dep in actual_dts
+        if not dep.get("sha256") or (urldefrag(dep["uri"])[0], dep["sha256"]) not in known
+    ]
+    if not actual_dts or unbound:
+        issues.append(
+            {
+                "code": "UNBOUND_ACTUAL_DTS",
+                "reason": "Dependency URI or hash not bound",
+                "dependencies": unbound,
+            }
+        )
     fatal = [issue for issue in issues if issue.get("category") != "INCOMPATIBLE_DOCUMENT_FORMAT"]
     complete = len(selected) == 1 and bool(observations) and not fatal
     shard = {
@@ -495,9 +544,16 @@ def auth_template(phase, binding):
     }
 
 
+def original_report_path(job, selection_sha):
+    legacy = job / "verified-originals.json"
+    if not bulk.exists(legacy) or checked(legacy)[1]["selection_sha256"] == selection_sha:
+        return legacy
+    return job / f"verified-originals-{selection_sha}.json"
+
+
 def original_record(job, selection_sha, source_sha):
     require(source_sha, "EXPECTED_VERIFIED_ORIGINALS_SHA256_REQUIRED")
-    raw, record = checked(job / "verified-originals.json", source_sha)
+    raw, record = checked(original_report_path(job, selection_sha), source_sha)
     require(
         record["contract"] == "F01_TASK9_VERIFIED_ORIGINALS_V1"
         and record["selection_sha256"] == selection_sha
@@ -802,7 +858,7 @@ def run_job(args, job, selection, selection_sha):
             }
             return {"status": "PREFLIGHT_READY", "cache_lookup": states}
         result = verify_sources(job, selection, selection_sha)
-        path = job / "verified-originals.json"
+        path = original_report_path(job, selection_sha)
         return result | {"manifest_sha256": publish(path, result), "path": str(path)}
     _, source = original_record(job, selection_sha, args.source_sha256)
     if args.phase == "taxonomy":

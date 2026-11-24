@@ -557,3 +557,121 @@ def test_task9_with_pinned_arelle_worker(tmp_path):
     assert shard["status"] == "EXTRACTION_COMPLETE"
     assert len(shard["observations"]) == 1
     assert shard["observations"][0]["source"]["filename"] == "sample.htm"
+
+
+DTS_URI = "http://www.xbrl.org/2006/xbrldi-2006.xsd"
+DTS_BYTES = b"<schema/>"
+
+
+@pytest.fixture
+def actual_dts_case(cache, monkeypatch):
+    selection = {"filings": [ROW], "source_generation": "0" * 64}
+    verified = pipeline.verify_sources(cache, selection, SELECTION_SHA)
+    source = verified["filings"][KEY]
+    runtime = cache / "runtime"
+    runtime.mkdir()
+    local = pipeline.taxonomy.local_cache_path(runtime, DTS_URI)
+    local.parent.mkdir(parents=True)
+    local.write_bytes(DTS_BYTES)
+    binding = local.with_name(local.name + pipeline.taxonomy.FILE_BINDING)
+    pipeline.publish(binding, pipeline.taxonomy.metadata(DTS_URI, DTS_BYTES, {}))
+    monkeypatch.setattr(pipeline.filing, "ARELLE_ROOT", runtime)
+    monkeypatch.setattr(pipeline.filing, "verified_sec_plugin", lambda root: True)
+    return cache, selection, verified, source, local
+
+
+def test_actual_dts_legacy_quarantine_repairs_offline_closure(actual_dts_case):
+    job, selection, verified, source, local = actual_dts_case
+    old = pipeline.taxonomy_report(job, selection, verified, BINDING["source_sha256"])
+    assert old["filings"][KEY] == {}
+
+    # The old finding mentions no URL. The selected document retains the actual DTS.
+    dependency = {
+        "uri": DTS_URI,
+        "sha256": pipeline.sha(DTS_BYTES),
+        "resolved_path": str(job / "untrusted-observed-location.xsd"),
+    }
+    diagnostic = {
+        "contract": "F01_TASK9_ARELLE_FILING_V1",
+        "status": "TAXONOMY_PENDING",
+        "filing": KEY,
+        "runtime": {"version": pipeline.filing.ARELLE_VERSION},
+        "source_documents": source["documents"],
+        "issues": [{"code": "UNBOUND_ACTUAL_DTS", "reason": "Dependency hash not bound"}],
+        "documents": [
+            {"selected": False, "format": "ORDINARY_HTML"},
+            {"selected": True, "format": "XBRL_DOCUMENT", "taxonomy_documents": [dependency]},
+        ],
+    }
+    old_bytes = pipeline.d6.json_bytes(diagnostic)
+    quarantine = job / f"{ROW['accession']}-quarantine-{pipeline.sha(old_bytes)[:12]}.json"
+    pipeline.publish(quarantine, diagnostic)
+    report = pipeline.taxonomy_report(job, selection, verified, BINDING["source_sha256"])
+    assert report["status"] == "TAXONOMY_CLOSURE_READY"
+    assert report["filings"][KEY][DTS_URI]["source"]["sha256"] == pipeline.sha(local.read_bytes())
+    assert report != old
+    new_path = job / f"taxonomy-{pipeline.sha(pipeline.d6.json_bytes(report))[:12]}.json"
+    assert pipeline.publish(new_path, report) == pipeline.publish(new_path, report)
+    assert pipeline.taxonomy_report(job, selection, verified, BINDING["source_sha256"]) == report
+    assert quarantine.read_bytes() == old_bytes
+
+    local.write_bytes(b"<tampered/>")
+    with pytest.raises(ValueError, match="TAXONOMY_CACHE_BINDING_MISMATCH"):
+        pipeline.taxonomy_report(job, selection, verified, BINDING["source_sha256"])
+    local.unlink()
+    missing = pipeline.taxonomy_report(job, selection, verified, BINDING["source_sha256"])
+    assert missing["status"] == "TAXONOMY_PENDING"
+    assert missing["filings"][KEY][DTS_URI]["status"] == "MISSING_EVIDENCE"
+
+
+def test_actual_dts_runtime_requires_matching_uri_and_verified_hash(actual_dts_case, monkeypatch):
+    job, selection, verified, source, _ = actual_dts_case
+    raw_obs = observed(source["documents"][1])
+    dependency = {"uri": DTS_URI, "sha256": pipeline.sha(DTS_BYTES)}
+
+    def extract(row, folder, listing, processor, **kwargs):
+        return (
+            [raw_obs],
+            [{"selected": True, "taxonomy_documents": [dependency]}],
+            [{"code": "ORDINARY_HTML", "category": "INCOMPATIBLE_DOCUMENT_FORMAT"}],
+            source["documents"][1:],
+        )
+
+    monkeypatch.setattr(pipeline.filing, "extract_cached", extract)
+    processor = SimpleNamespace(release={"version": pipeline.filing.ARELLE_VERSION})
+    # A hash-authorized copy for a different URL cannot qualify the actual URI.
+    wrong_url = {
+        "http://www.xbrl.org/others.xsd": {
+            "status": "BOUND",
+            "source": {"sha256": dependency["sha256"]},
+        }
+    }
+    with pytest.raises(ValueError, match="EXTRACTION_OR_DTS_INCOMPLETE"):
+        pipeline.extract_filing(job, ROW, source, wrong_url, CODE, processor)
+    quarantine = next(job.glob("*quarantine*.json"))
+    before = quarantine.read_bytes()
+    assert json.loads(before)["issues"][-1]["dependencies"] == [dependency]
+    report = pipeline.taxonomy_report(job, selection, verified, BINDING["source_sha256"])
+    shard = pipeline.extract_filing(job, ROW, source, report["filings"][KEY], CODE, processor)
+    assert shard["status"] == "EXTRACTION_COMPLETE"
+    assert (
+        pipeline.extract_filing(job, ROW, source, report["filings"][KEY], CODE, processor) == shard
+    )
+    assert quarantine.read_bytes() == before
+
+
+def test_actual_dts_reselection_preserves_verified_original_report(tmp_path):
+    legacy = tmp_path / "verified-originals.json"
+    previous = {
+        "contract": "F01_TASK9_VERIFIED_ORIGINALS_V1",
+        "status": "SOURCE_VERIFIED",
+        "selection_sha256": SELECTION_SHA,
+    }
+    original = pipeline.publish(legacy, previous)
+    current = "e" * 64
+    path = pipeline.original_report_path(tmp_path, current)
+    assert path != legacy
+    new_hash = pipeline.publish(path, previous | {"selection_sha256": current})
+    assert pipeline.original_record(tmp_path, SELECTION_SHA, original)[1] == previous
+    assert pipeline.original_record(tmp_path, current, new_hash)[1]["selection_sha256"] == current
+    assert pipeline.sha(legacy.read_bytes()) == original
