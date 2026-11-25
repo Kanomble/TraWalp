@@ -8,7 +8,7 @@ Der neue Canonical-A-V1-Pfad funktioniert für einen real verifizierten Sieben-E
 
 ## 2. Current Status
 
-**Aktualisiert am 24.11.2026 · Task 9.1.** Geprüfter Branch `SEC-integration`, Basis-HEAD `7c984f46f6859b17a952a00a2b6de90f0002b3bd`. Der Ausgangsbaum war sauber und enthielt Task 9. Task 9.1 liegt uncommittet vor. [Task-9-Belegsatz](</G:/TraWalpResearch/import-artifacts/f01-task9-ingestion-preparation-v1>) · [Eingefrorene D.10-Baseline](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1>)
+**Aktualisiert am 24.11.2026 · Task 9.2.** Geprüfter Branch `SEC-integration`, Basis-HEAD `20fc366dcffb3cdfb3cd95ae3cba4104d58e82db`. Der Ausgangsbaum war sauber und enthielt Task 9.1. Task 9.2 liegt uncommittet vor. [Task-9-Belegsatz](</G:/TraWalpResearch/import-artifacts/f01-task9-ingestion-preparation-v1>) · [Eingefrorene D.10-Baseline](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1>)
 
 | Gegenstand | Implementierung | Belegte Validierung | Freigabe oder Grenze |
 | --- | --- | --- | --- |
@@ -24,6 +24,7 @@ Der neue Canonical-A-V1-Pfad funktioniert für einen real verifizierten Sieben-E
 | 50-Issuer-Preflight | `F01_HISTORICAL_50_BATCH_PREPARATION_READY` | Offline-Regressionen, 50 CIKs und erster Review-Batch mit 20 Accessions | Acquisition und Import separat gesperrt. 0/50 historisch trading-qualifiziert. |
 | Task 9 Filing-Pipeline | `TASK9_MANUAL_EXECUTION_READY` im V1-Scope | 85 gezielte Offline-Tests, inklusive synthetischer Arelle-, Import-/Replay-, Recovery- und E.13-Proben | `REAL_DATA_ACQUISITION_AND_INGESTION_PENDING_MANUAL_EXECUTION`. Ein NKE-Filing als erster Vorschlag. |
 | NKE-DTS-Reparatur | Tatsächlich geladene DTS-URIs aus gebundener Quarantäne fließen in die lokale Closure ein. | Vier gezielte Offline-Tests und lesender Realabgleich von 22 auf 23 externe Abhängigkeiten. | Neue Selection im bestehenden Job. Reale Extraktion, Zulassungen und Import stehen aus. |
+| Auto-Admission V1 | Separate Maschinenentscheidung mit Evidence-Digest, erneuter Prüfung und unabhängigem Importgate. | NKE-Originale, Closure und Shard lesend geprüft. Zwei Facts gleichen dem manuellen Review. | Historische NKE-Selection dient nur dem Preflight. DB-Inhalt und nutzerberichtete Receipt-/Reader-Ergebnisse bleiben unabhängig unverifiziert. |
 | Produktiver Cutover | `PLANNED` als gesonderte Entscheidung | `UNKNOWN` | `BLOCKED`; V2-D `NOT_RELEASED` |
 
 Die letzten vorhandenen Real-Gates wurden für diese Baseline nicht erneut gestartet. Der aktuelle Betriebszustand eines eventuell extern betriebenen Journals oder Brokerkontos ist `UNKNOWN`. [Freigabematrix](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1/status_matrix.csv>) · [Acceptance V2](f01_acceptance_v2.md) · [Observation-Gate](../reports/shadow_pre_inception_final_audit.md)
@@ -79,7 +80,7 @@ Der aktive produktive Pfad und das E.11-Research-Paket teilen Teile der Fachlogi
 
 ## 7. SEC, Arelle & Fundamental Research
 
-**Task 9 Erstfall.** NKE `0000320187-16-000242` liegt im manuellen Job mit `SOURCE_VERIFIED` vor. Der frühere Arelle-Lauf wählte die separate XBRL-Instanz und blockierte auf `UNBOUND_ACTUAL_DTS`. Task 9.1 replizierte die korrigierte Closure rein lesend mit 23 externen Abhängigkeiten. Der erneute reale Arelle-Lauf und die getrennten Source-/Accounting-Reviews stehen aus. [Offline-Wiederanlauf](f01_historical_50_manual_ingestion_runbook.md)
+**Task 9 Erstfall.** NKE `0000320187-16-000242` liegt mit `SOURCE_VERIFIED`, 23 externen DTS-Abhängigkeiten, `EXTRACTION_COMPLETE` und veröffentlichten manuellen Reviews vor. Task 9.2 verifizierte die Original-/DTS- und Artefaktbindungen lesend. Assets 22.583.000.000 USD und Cash 3.851.000.000 USD samt Observation-IDs stimmen exakt mit dem manuellen Review überein. Der Nutzer meldete Import in Dataset `f01-research-d2a3d4ecbe8947b8a3be4a15dbbac08b` Version 2, erfolgreichen identischen Replay und E.13 mit zwei Treffern. Die Datenbank blieb in Task 9.2 geschlossen. [Offline-Preflight](f01_historical_50_manual_ingestion_runbook.md)
 
 **Bulk.** Das real vorhandene finalisierte Source-Manifest bindet `pilot01-20261121-175840` und die Originalarchive. Der historische Strukturcensus nennt 20.609 Companyfacts-Members, davon 18.136 strukturell gültig und 2.473 kontrolliert ausgeschlossen. Submissions enthält 999.458 geprüfte Members einschließlich des explizit nicht importierbaren Platzhalters. Die Archive sind aktuelle Provider-Rekonstruktionen; ihre Strukturfreigabe belegt keine historischen Provider-Wertversionen oder fachliche Admission. [Bulk-Finalisierung](../reports/f01_sec_bulk_finalization_audit.md) · [Finales Source-Manifest](</G:/TraWalpResearch/sec-originals/pilot01-20261121-175840/f01_sec_bulk_source_manifest.json>)
 
@@ -192,7 +193,7 @@ Die [Task-Timeline](</G:/TraWalpResearch/import-artifacts/f01-project-state-base
 
 | Reihenfolge | Prio und Arbeit | Abhängigkeit und prüfbares Ergebnis | Freigabe / offline |
 | --- | --- | --- | --- |
-| 1 | P0 **NKE-Extraktion offline wiederholen** | Neue Selection mit aktuellem Candidate-Fingerprint im bestehenden Job verifizieren, neue 23er-Closure publizieren und ausgewählte XBRL-Instanz extrahieren. | Vorhandene Originale wiederverwenden. Source- und Accounting-Review folgen separat. |
+| 1 | P0 **Auto-Admission mit neuem disjunkten Teilbatch erproben** | NKE bleibt historische Referenz. Bei einem neuen Filing desselben D.11-Elternbatches neue Selection und gebundene Extraktion prüfen. Batchreport und Ausschlüsse fachlich abnehmen. | Separat autorisierter Research-Append erst nach Preflight. Duplicate Assurance und E.13 bleiben Pflicht. |
 | 2 | P0 **Ersten realen Filing-Receipt und PIT-Witness abnehmen** | Original bytes, DTS, Source und Accounting fachlich prüfen. Isoliert bootstrappen, atomar importieren und identisch wiederholen. | Schreibende Schritte einzeln freigeben. Duplicate Assurance und E.13-Grenze dokumentieren. |
 | 3 | P0 **Markt- und Security-Evidence vorbereiten** | Basic/Lizenz, SPY mit Vorlauf, historisch belegte Security-Epochen, Exits, Split/Adjustment. Separaten Raw/All-SIP-Runner-Plan an die Datenverträge binden. | Offline-Artefaktprüfung möglich. Jeder neue Provider-Call braucht ausdrückliche Freigabe. |
 | 4 | P1 **Isolierten 50er-Aufbau und fachliche Qualifikation** | SEC/Arelle/Accounting wiederverwenden, eigene Canonical-Lineage und Marktshards prüfen, E.13-Erweiterung und reproduzierbaren PIT-Join abnehmen. | Neue Datenbank-/Import- und Review-Freigabe. Bereits vorhandene Evidenz offline prüfen. |
@@ -270,6 +271,20 @@ Historische Task-IDs und Commit-/Auditbindungen stehen in der [vollständigen Ti
 - **Nächster Schritt:** Offline-Wiederanlauf mit neuer Selection und demselben NKE-Job.
 - **Evidenz:** [Runbook](f01_historical_50_manual_ingestion_runbook.md) · [Pipeline](../scripts/run_f01_historical_50_manual.py) · [Regressionen](../tests/test_f01_task9_manual_ingestion.py).
 
+#### Task 9.2 – Automated Evidence-Based Admission
+
+- **Datum:** 2026-11-24
+- **Git-Stand:** `SEC-integration`, Basis-HEAD `20fc366dcffb3cdfb3cd95ae3cba4104d58e82db`, sauberer Ausgangsbaum, Änderungen uncommittet.
+- **Status:** COMPLETED im V1-Scope, neuer realer Auto-Import ausstehend.
+- **Ziel:** Einen separaten deterministischen Admission-Pfad mit belegbarer Original-Provenienz schaffen.
+- **Änderungen:** `F01_AUTOMATED_ADMISSION_V1` bindet Original-, DTS- und Extraction-Evidenz, Code und Ruleset. Der Preflight publiziert auf Wunsch einen unveränderlichen Batchbericht. Auto-Import und Reader nutzen denselben Canonical-Pfad und erfordern eine aktuelle Auswahl sowie ein separates Importgate.
+- **Tests:** 24 gezielte Offline-Tests, Ruff und `git diff --check`. Lesender NKE-Abgleich mit zwei identischen Observation-IDs und Fact-Modellen. Zwölf Altdateien blieben hashgleich. Kein Netzwerk, Bootstrap, Import oder Datenbankzugriff.
+- **Ergebnis:** Ein NKE-Filing und zwei von zehn V1-Kandidaten auto-qualifiziert. Acht historische oder dimensionierte Alternativen ausgeschlossen. Der NKE-Beleg ist wegen der historischen Auswahl nur für Read-only-Audit geeignet.
+- **Neue Blocker:** Ein neuer disjunkter Batch benötigt neue aktuelle Selection/Extraktion und eine separate Importfreigabe. DB-Receipt, Version und Reader-PASS des manuellen Laufs bleiben nutzerberichtete Baseline.
+- **Geschlossene Blocker:** Evidence-Based Admission als eigenständige, maschinell nachvollziehbare Entscheidung vorhanden.
+- **Nächster Schritt:** Einen neuen D.11-Teilbatch offline prüfen, Quarantäne bewerten und erst nach separater Freigabe den isolierten Append und E.13 prüfen.
+- **Evidenz:** [Runbook](f01_historical_50_manual_ingestion_runbook.md) · [Ruleset](../scripts/f01_task9_auto_admission.py) · [Tests](../tests/test_f01_task9_auto_admission.py).
+
 ## 18. Evidence & Source Index
 
 | Thema | Maßgebliche Quellen |
@@ -294,5 +309,5 @@ Die D.10-Baseline prüfte die fünf kleinen Originalseals gegen V2. Historische 
 
 ## 20. Next Recommended Task
 
-**Task 9.1 · NKE offline fortsetzen.** Neue Selection für `0000320187-16-000242` erzeugen. Im bestehenden Job die Originale neu binden, die 23er-Closure publizieren und die Extraktion offline wiederholen. Erst danach die getrennten Zulassungen prüfen. [PowerShell-Runbook](f01_historical_50_manual_ingestion_runbook.md)
+**Task 9.2 · Nächster disjunkter D.11-Teilbatch.** Auto-Admission mit aktueller Selection und neuen gebundenen Filings vorprüfen. Quarantäne fachlich untersuchen und geeignete Filings erst nach separater Freigabe in der isolierten Lineage aufnehmen. Vor einer Ausweitung auf weitere D.6-Filings den Parent-Scope versioniert erweitern. [PowerShell-Runbook](f01_historical_50_manual_ingestion_runbook.md)
 

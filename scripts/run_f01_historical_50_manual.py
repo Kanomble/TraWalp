@@ -54,6 +54,7 @@ PHASES = (
     "extract",
     "source-template",
     "accounting-template",
+    "auto-admit",
     "bootstrap-manifest",
     "import",
     "reader",
@@ -732,9 +733,80 @@ def verify_originals_unchanged(job, selection, selection_sha, source):
     require(verify_sources(job, selection, selection_sha) == source, "VERIFIED_ORIGINALS_CHANGED")
 
 
+def automated_report(args, job, selection, selection_sha, source, shards, binding):
+    import f01_task9_auto_admission as auto
+
+    require(args.taxonomy_report and args.taxonomy_sha256, "EXPECTED_TAXONOMY_REPORT_REQUIRED")
+    _, extraction = extraction_record(job, selection, args.source_sha256, args.extraction_sha256)
+    _, closure = checked(args.taxonomy_report, args.taxonomy_sha256)
+    require(
+        extraction["taxonomy_sha256"] == args.taxonomy_sha256
+        and source["source_generation"] == selection["source_generation"]
+        and set(source["filings"])
+        == set(extraction["filings"])
+        == set(closure["filings"])
+        == {review.filing_key(row) for row in selection["filings"]}
+        and closure["status"] == "TAXONOMY_CLOSURE_READY",
+        "AUTO_ADMISSION_EVIDENCE_BINDING_MISMATCH",
+    )
+    verify_originals_unchanged(job, selection, selection_sha, source)
+    require(
+        taxonomy_report(job, selection, source, args.source_sha256) == closure,
+        "AUTO_ADMISSION_LOCAL_DTS_CHANGED",
+    )
+    historical_code = selection["candidate"]["fingerprint"]
+    results = {}
+    for row in selection["filings"]:
+        key = review.filing_key(row)
+        filing_source, dts = source["filings"][key], closure["filings"][key]
+        shard_binding = {"source": filing_source, "taxonomy": dts, "code": historical_code}
+        require(
+            shards[key]["binding_sha256"] == sha(d6.json_bytes(shard_binding)),
+            "AUTO_ADMISSION_SHARD_BINDING_MISMATCH",
+        )
+        index, _ = filing.cache_read(
+            Path(filing_source["directory"]) / "index.json", row, "index.json"
+        )
+        results[key] = auto.evaluate_filing(
+            row, filing_source, shards[key], dts, filing.documents(row, json.loads(index))
+        )
+    return auto.batch_report(
+        results,
+        binding
+        | {
+            "taxonomy_sha256": args.taxonomy_sha256,
+            "shards": extraction["filings"],
+            "extraction_code_fingerprint": historical_code,
+            "decision_candidate": args.current_candidate,
+            "current_selection": selection["candidate"] == args.current_candidate,
+        },
+    )
+
+
 def import_or_reader(args, job, selection, selection_sha, source, shards, binding):
-    source_review = reviewed_input(args.source_review, args.source_review_sha256)
-    accounting = reviewed_input(args.accounting_review, args.accounting_review_sha256)
+    automatic = args.auto_admission is not None
+    if automatic:
+        from f01_task9_auto_admission import require_current_report
+
+        from trading_system.models.fundamentals import FundamentalFact
+
+        require(
+            args.append and args.phase in {"import", "reader"},
+            "AUTOMATED_ADMISSION_REQUIRES_EXISTING_LINEAGE_APPEND",
+        )
+        report = reviewed_input(args.auto_admission, args.auto_admission_sha256)
+        require_current_report(
+            report,
+            automated_report(args, job, selection, selection_sha, source, shards, binding),
+        )
+        admission_binding = {"auto_admission_sha256": args.auto_admission_sha256}
+    else:
+        source_review = reviewed_input(args.source_review, args.source_review_sha256)
+        accounting = reviewed_input(args.accounting_review, args.accounting_review_sha256)
+        admission_binding = {
+            "source_review_sha256": args.source_review_sha256,
+            "accounting_review_sha256": args.accounting_review_sha256,
+        }
     code = selection["candidate"]["fingerprint"]
     items = []
     for row in selection["filings"]:
@@ -742,36 +814,52 @@ def import_or_reader(args, job, selection, selection_sha, source, shards, bindin
         shard = shards[key]
         documents = source["filings"][key]["documents"]
         require(documents == shard["source_documents"], "ADMISSION_SOURCE_SHARD_MISMATCH")
-        facts = review.admitted_facts(row, shard, source_review, accounting, binding)
-        request_binding = binding | {
-            "source_review_sha256": args.source_review_sha256,
-            "accounting_review_sha256": args.accounting_review_sha256,
-            "filing": key,
-            "retrieved_at": max(
-                review.instant(v["download_completed"]) for v in documents
-            ).isoformat(),
-        }
+        if automatic:
+            facts = {}
+            for record in report["filings"][key]["accounting"].values():
+                if admitted := record["admitted"]:
+                    digest = admitted["original"]["observation_sha256"]
+                    facts[digest] = (
+                        FundamentalFact.model_validate(admitted["fact"]),
+                        f"automated:{report['evidence_sha256']}:{digest}",
+                    )
+        else:
+            facts = review.admitted_facts(row, shard, source_review, accounting, binding)
+        request_binding = (
+            binding
+            | admission_binding
+            | {
+                "filing": key,
+                "retrieved_at": max(
+                    review.instant(v["download_completed"]) for v in documents
+                ).isoformat(),
+            }
+        )
         items.append((row, facts, request_binding))
-    boot = bootstrap_manifest(
-        selection,
-        binding
-        | {
-            "source_review_sha256": args.source_review_sha256,
-            "accounting_review_sha256": args.accounting_review_sha256,
-        },
-    )
+    boot = bootstrap_manifest(selection, binding | admission_binding)
     if args.phase == "bootstrap-manifest":
         return boot
     require(
         args.bootstrap_manifest and args.bootstrap_sha256, "EXPECTED_BOOTSTRAP_MANIFEST_REQUIRED"
     )
     _, provided = checked(args.bootstrap_manifest, args.bootstrap_sha256)
+    if automatic:
+        # The existing lineage retains its original bootstrap code binding.
+        code = json.loads(provided["research_scope"])["code_fingerprint"]
+        boot = bootstrap_manifest(
+            selection | {"candidate": {"fingerprint": code}},
+            binding | admission_binding,
+        )
     predecessors = compatible_bootstrap(provided, boot, args.append)
     if args.phase == "import":
-        operation = auth_binding("import", selection_sha, args.accounting_review_sha256) | {
-            "source_review_sha256": args.source_review_sha256,
-            "bootstrap_sha256": args.bootstrap_sha256,
-        }
+        if automatic:
+            operation = auth_binding("import", selection_sha, args.auto_admission_sha256)
+            operation |= admission_binding | {"bootstrap_sha256": args.bootstrap_sha256}
+        else:
+            operation = auth_binding("import", selection_sha, args.accounting_review_sha256) | {
+                "source_review_sha256": args.source_review_sha256,
+                "bootstrap_sha256": args.bootstrap_sha256,
+            }
         if args.execute:
             check_authorization(args.approval, args.approval_sha256, "import", operation)
             verify_originals_unchanged(job, selection, selection_sha, source)
@@ -902,6 +990,14 @@ def run_job(args, job, selection, selection_sha):
             },
         )
     shards = load_shards(job, selection, extraction)
+    if args.phase == "auto-admit":
+        report = automated_report(args, job, selection, selection_sha, source, shards, binding)
+        if args.execute:
+            digest = sha(d6.json_bytes(report))
+            path = job / f"auto-admission-{digest}.json"
+            publish(path, report)
+            return report | {"path": str(path), "manifest_sha256": digest}
+        return report
     if args.phase == "accounting-template":
         approved = reviewed_input(args.source_review, args.source_review_sha256)
         review.approved_review(approved, review.SOURCE, binding)
@@ -933,6 +1029,7 @@ def main(argv=None):
         "source-review",
         "accounting-review",
         "bootstrap-manifest",
+        "auto-admission",
     ):
         parser.add_argument(f"--{option}", type=Path)
     for option in (
@@ -944,6 +1041,7 @@ def main(argv=None):
         "source-review",
         "accounting-review",
         "bootstrap",
+        "auto-admission",
     ):
         parser.add_argument(f"--{option}-sha256")
     parser.add_argument("--execute", action="store_true", help="Explicitly execute this phase only")
@@ -961,6 +1059,21 @@ def main(argv=None):
             "NETWORK_FLAG_ONLY_FOR_TAXONOMY_PHASE",
         )
         require(not args.append or args.phase in {"import", "reader"}, "APPEND_PHASE_INVALID")
+        if args.auto_admission or args.auto_admission_sha256:
+            require(
+                args.auto_admission
+                and args.auto_admission_sha256
+                and args.phase in {"import", "reader"}
+                and not any(
+                    (
+                        args.source_review,
+                        args.accounting_review,
+                        args.source_review_sha256,
+                        args.accounting_review_sha256,
+                    )
+                ),
+                "MANUAL_AND_AUTOMATED_ADMISSION_ARE_EXCLUSIVE",
+            )
         if args.phase == "select":
             require(not args.execute, "SELECTION_IS_READ_ONLY")
             result = build_selection(args.accession or [DEFAULT])
@@ -970,14 +1083,25 @@ def main(argv=None):
                 "HASH_BOUND_SELECTION_REQUIRED",
             )
             _, selection = checked(args.selection, args.selection_sha256)
-            require(
-                selection == build_selection([row["accession"] for row in selection["filings"]]),
-                "SELECTION_OR_CODE_BINDING_CHANGED",
-            )
+            current = build_selection([row["accession"] for row in selection["filings"]])
+            args.current_candidate = current["candidate"]
+            compared = selection
+            if args.phase == "auto-admit":
+                compared = selection | {"candidate": current["candidate"]}
+            require(compared == current, "SELECTION_OR_CODE_BINDING_CHANGED")
             job = job_path(args.job)
             if args.execute:
                 require(
-                    args.phase in {"download", "verify", "taxonomy", "extract", "import", "reader"},
+                    args.phase
+                    in {
+                        "download",
+                        "verify",
+                        "taxonomy",
+                        "extract",
+                        "import",
+                        "reader",
+                        "auto-admit",
+                    },
                     "PHASE_IS_READ_ONLY",
                 )
                 if args.phase == "download":
@@ -999,7 +1123,7 @@ def main(argv=None):
             else:
                 result = run_job(args, job, selection, args.selection_sha256)
         print(json.dumps(result, indent=2, ensure_ascii=True))
-        return int(result.get("status") == "TAXONOMY_PENDING") * 3
+        return int(result.get("status") in {"TAXONOMY_PENDING", "BLOCKED"}) * 3
     except (ValueError, TypeError, KeyError, InvalidOperation) as error:
         print(f"BLOCKED: {error}", file=sys.stderr)
         return 3

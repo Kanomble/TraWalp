@@ -173,6 +173,34 @@ Ein fachlicher Reviewer bewertet jede Observation anhand ihrer ursprünglichen B
 
 ## 9 · Isolierten Bootstrap autorisieren
 
+### Task 9.2 · Automatische Admission als Offline-Preflight
+
+Die neue Phase `auto-admit` prüft Selection, Source-Manifest, Originalbytes, lokale DTS-Closure und Extraction-Shards und gibt einen Batchbericht aus. `F01_AUTOMATED_ADMISSION_V1` trägt `decision_authority=AUTOMATED`, Ruleset-ID und -Version, Ruleset-SHA, Code- und Artefaktbindungen, Befunde und einen Evidence-Digest. Die unveränderten manuellen Reviews bleiben ein eigener Freigabepfad.
+
+Für den bereits importierten NKE-Referenzfall mit den PowerShell-Helfern aus Schritt 2:
+
+```powershell
+$Job = Join-Path $Artifacts 'f01-task9-nke-01'
+$Selection = Join-Path $Artifacts 'nke-01-selection-task91.json'
+$AutoNke = Invoke-Task9 @(
+    'auto-admit','--job',$Job,'--selection',$Selection,
+    '--selection-sha256',(Get-Task9Sha $Selection),
+    '--source-sha256','6d6fa7de33e163b997b81fbadee9b54de2f15da599eaf5da324cdadefaacf109',
+    '--taxonomy-report',(Join-Path $Job 'taxonomy-e788dadc6d1a.json'),
+    '--taxonomy-sha256','e788dadc6d1a781b9a171b604ef95432b79896fe2a788346bfc60fa82759e3c7',
+    '--extraction-sha256','d13d83502f935b5ab6b7098f2f7d71629a73602eb6ca94d9259855cc3d58cea6'
+)
+$AutoNke.summary
+```
+
+Für NKE dient der ursprüngliche Candidate ausschließlich der historischen Prüfung. `current_selection=false` sperrt diesen Beleg für den Auto-Import. Die numerischen Werte und Observation-IDs können mit dem damaligen Review abgeglichen werden. Den existierenden NKE-Job und Receipt für einen Audit lesend verwenden. Die bereits initial importierte Accession ist zudem durch die Disjunktheitsprüfung vom automatischen Append ausgeschlossen.
+
+Für neue Filings dieselbe Phase mit aktueller Selection, frischen gebundenen Shards und lokalen Originalen verwenden. `auto-admit --execute` publiziert ausschließlich einen neuen, nach vollständigem Datei-SHA benannten Maschinenbericht im Job. Gleich gebundene Wiederholung verwendet denselben Bericht. Fehlende oder widersprüchliche Quellen blockieren; nicht qualifizierte Fact-Kandidaten und mehrdeutige Metriken bleiben mit Befund sichtbar. V1 berücksichtigt nur positive, finite USD-Instant-Werte für Assets und Cash am Report-Date, mit dokumentierter konsolidierter Bilanzrolle und ohne Fallback. Code- oder Ruleset-Wechsel erfordern einen neu berechneten Bericht. Für Aufnahme unter einem neuen Code-Fingerprint braucht es außerdem eine neue Selection und entsprechend gebundene Extraktion.
+
+Für einen später separat autorisierten neuen Teilbatch nehmen `import --append` und `reader --append` die Argumente `--auto-admission <Pfad>` und `--auto-admission-sha256 <SHA>` anstelle der menschlichen Review-Argumente. Die Source-, Extraction-, Taxonomy- und Bootstrap-Bindungen bleiben erforderlich. Der Import berechnet die Maschinenentscheidung erneut, vergleicht den gesamten Bericht und prüft initiale Receipts und exaktes Research-Ziel. Der Schreibmodus verlangt weiterhin die separate Importfreigabe mit Hash. Duplicate Assurance und E.13-Grenzprüfung folgen wie bei der manuellen Aufnahme. Der bestehende einmalige NKE-Import wird für den Rollout nicht wiederholt.
+
+### Manueller Bootstrap-Befehl
+
 ```powershell
 $Bootstrap = Join-Path $Artifacts 'nke-01-bootstrap-reviewed.json'
 Save-NewTask9Json (Invoke-Task9 (@('bootstrap-manifest') + $Admitted)) $Bootstrap
