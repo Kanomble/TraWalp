@@ -8,7 +8,7 @@ Der neue Canonical-A-V1-Pfad funktioniert für einen real verifizierten Sieben-E
 
 ## 2. Current Status
 
-**Aktualisiert am 24.11.2026 · Task 9.2.** Geprüfter Branch `SEC-integration`, Basis-HEAD `20fc366dcffb3cdfb3cd95ae3cba4104d58e82db`. Der Ausgangsbaum war sauber und enthielt Task 9.1. Task 9.2 liegt uncommittet vor. [Task-9-Belegsatz](</G:/TraWalpResearch/import-artifacts/f01-task9-ingestion-preparation-v1>) · [Eingefrorene D.10-Baseline](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1>)
+**Aktualisiert am 25.11.2026 · Task 9.3.** Geprüfter Branch `SEC-integration`, Basis-HEAD `15d02c5b9d1ae31f1ad8363839d6eb66ac2a8097`. Der Ausgangsbaum war sauber und enthielt Task 9.2. Task 9.3 liegt uncommittet vor. [Task-9-Belegsatz](</G:/TraWalpResearch/import-artifacts/f01-task9-ingestion-preparation-v1>) · [Eingefrorene D.10-Baseline](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1>)
 
 | Gegenstand | Implementierung | Belegte Validierung | Freigabe oder Grenze |
 | --- | --- | --- | --- |
@@ -25,6 +25,7 @@ Der neue Canonical-A-V1-Pfad funktioniert für einen real verifizierten Sieben-E
 | Task 9 Filing-Pipeline | `TASK9_MANUAL_EXECUTION_READY` im V1-Scope | 85 gezielte Offline-Tests, inklusive synthetischer Arelle-, Import-/Replay-, Recovery- und E.13-Proben | `REAL_DATA_ACQUISITION_AND_INGESTION_PENDING_MANUAL_EXECUTION`. Ein NKE-Filing als erster Vorschlag. |
 | NKE-DTS-Reparatur | Tatsächlich geladene DTS-URIs aus gebundener Quarantäne fließen in die lokale Closure ein. | Vier gezielte Offline-Tests und lesender Realabgleich von 22 auf 23 externe Abhängigkeiten. | Neue Selection im bestehenden Job. Reale Extraktion, Zulassungen und Import stehen aus. |
 | Auto-Admission V1 | Separate Maschinenentscheidung mit Evidence-Digest, erneuter Prüfung und unabhängigem Importgate. | NKE-Originale, Closure und Shard lesend geprüft. Zwei Facts gleichen dem manuellen Review. | Historische NKE-Selection dient nur dem Preflight. DB-Inhalt und nutzerberichtete Receipt-/Reader-Ergebnisse bleiben unabhängig unverifiziert. |
+| Zweites NKE-Filing | Auswahl und Job `f01-task9-nke-02` gebunden. | Read-only bestätigt: isolierte Lineage, Version 2, zwei Facts, zwei Occurrences, ein initialer Receipt. Neue Accession fehlt in Facts und Receipts. | `BLOCKED_PENDING_ORIGINALS_AND_ADMISSION`. DTS des Folgefilings und Auto-Admission stehen aus. |
 | Produktiver Cutover | `PLANNED` als gesonderte Entscheidung | `UNKNOWN` | `BLOCKED`; V2-D `NOT_RELEASED` |
 
 Die letzten vorhandenen Real-Gates wurden für diese Baseline nicht erneut gestartet. Der aktuelle Betriebszustand eines eventuell extern betriebenen Journals oder Brokerkontos ist `UNKNOWN`. [Freigabematrix](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1/status_matrix.csv>) · [Acceptance V2](f01_acceptance_v2.md) · [Observation-Gate](../reports/shadow_pre_inception_final_audit.md)
@@ -46,7 +47,7 @@ Historische Strategieaussagen setzen geprüfte Inputs und einen dokumentierten U
 | Forward und Shadow | [`forward_market.py`](../src/trading_system/data/forward_market.py), [Readiness](../src/trading_system/shadow/readiness.py), [Admission](../src/trading_system/shadow/admission.py), [Runner](../src/trading_system/shadow/runner.py), [Journal](../src/trading_system/shadow/journal.py) | Separates Alpaca SIP/all/1d-Archiv → STRICT und Inception-Admission → lokales Journal. Observation und Economic haben unterschiedliche Readiness. Shadow erzeugt interne Beobachtungen bzw. modellierte Intents/Fills innerhalb seiner Verträge. |
 | Research-Fundamentals | [Bulk-Runbook](f01_sec_bulk_download.md), [Filing Evidence](f01_original_filing_evidence.md), [`canonical_facts.py`](../src/trading_system/data/canonical_facts.py), [`canonical_research.py`](../src/trading_system/fundamentals/canonical_research.py) | Originale / Companyfacts → Parser/Arelle und geprüfte Semantik → isolierter Canonical-Writer/Receipts → beleggebundener E.13-Reader. Legacy ist weiterhin ein eigener, kompatibler Laufzeitpfad. |
 | Historische Identitäten | [`security_identity.py`](../src/trading_system/data/security_identity.py), [`security_lifecycle.py`](../src/trading_system/data/security_lifecycle.py), [Security Reference](security-reference.md) | CIK ist die Reporting-Entity. Handelbare Klassen/Security-IDs werden über zeitgebundene Belege, Symbole und Corporate Actions zugeordnet. Punktbeobachtungen bleiben Punkte. |
-| 50er-Erweiterung | [Offline-Preflight und Ziel-Lineage](f01_historical_50_research_preparation.md), [Task-9-Architektur](f01_historical_50_ingestion_architecture.md) | D.6/D.11-Bindung → einzeln freigegebene SEC-/DTS-/Arelle-Phasen → getrennte Source-/Accounting-Reviews → bestehender Bootstrap/Canonical-Writer → Duplicate Assurance und E.13-Grenzprobe. |
+| 50er-Erweiterung | [Offline-Preflight und Ziel-Lineage](f01_historical_50_research_preparation.md), [Task-9-Architektur](f01_historical_50_ingestion_architecture.md) | D.6/D.11-Bindung → SEC-/DTS-/Arelle-Phasen → manuelle oder evidenzbasierte Admission → separat autorisierter Canonical-Append → Duplicate Assurance und E.13-Grenzprobe. Der zweite NKE-Fall nutzt den vorhandenen Bootstrap. |
 
 Der aktive produktive Pfad und das E.11-Research-Paket teilen Teile der Fachlogik. Die operative Readiness und Provenienz jeder Datenquelle bleiben separate Verträge. [Code-Inventar mit SHA-256](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1/architecture_inventory.json>)
 
@@ -79,6 +80,8 @@ Der aktive produktive Pfad und das E.11-Research-Paket teilen Teile der Fachlogi
 - **Wartung:** D.9 erstellte Repository-/Storage-Inventar, Dependency-Graph und Cleanup-Manifest. D.11 entfernte den ausschließlich migrationsbezogenen Rehearsal-Code und verlagerte gemeinsame Research-Fingerprints. [D.9 Abschluss](</G:/TraWalpResearch/import-artifacts/f01-comprehensive-audit-20261123-v1/final_audit.md>) · [Retirement](f01_legacy_migration_retirement.md)
 
 ## 7. SEC, Arelle & Fundamental Research
+
+**Task 9.3 Folgefiling.** NKE `0000320187-16-000264` ist der nächste Original-10-Q mit derselben Reporting-CIK. Companyfacts liefert für den 29.02.2016 passende Hinweise auf Assets und Cash. Originale fehlen in den geprüften Caches. Die 23 externen Abhängigkeiten des Referenzfilings wurden erneut lokal gebunden. Die neue Closure erfordert die eigenen Originale. [PowerShell-Runbook](f01_task93_nke_append_runbook.md)
 
 **Task 9 Erstfall.** NKE `0000320187-16-000242` liegt mit `SOURCE_VERIFIED`, 23 externen DTS-Abhängigkeiten, `EXTRACTION_COMPLETE` und veröffentlichten manuellen Reviews vor. Task 9.2 verifizierte die Original-/DTS- und Artefaktbindungen lesend. Assets 22.583.000.000 USD und Cash 3.851.000.000 USD samt Observation-IDs stimmen exakt mit dem manuellen Review überein. Der Nutzer meldete Import in Dataset `f01-research-d2a3d4ecbe8947b8a3be4a15dbbac08b` Version 2, erfolgreichen identischen Replay und E.13 mit zwei Treffern. Die Datenbank blieb in Task 9.2 geschlossen. [Offline-Preflight](f01_historical_50_manual_ingestion_runbook.md)
 
@@ -193,7 +196,7 @@ Die [Task-Timeline](</G:/TraWalpResearch/import-artifacts/f01-project-state-base
 
 | Reihenfolge | Prio und Arbeit | Abhängigkeit und prüfbares Ergebnis | Freigabe / offline |
 | --- | --- | --- | --- |
-| 1 | P0 **Auto-Admission mit neuem disjunkten Teilbatch erproben** | NKE bleibt historische Referenz. Bei einem neuen Filing desselben D.11-Elternbatches neue Selection und gebundene Extraktion prüfen. Batchreport und Ausschlüsse fachlich abnehmen. | Separat autorisierter Research-Append erst nach Preflight. Duplicate Assurance und E.13 bleiben Pflicht. |
+| 1 | P0 **Zweites NKE-Filing nach separater Freigabe beschaffen** | Aktuelle Selection, Job und Read-only-Lineage-Preflight liegen vor. Originale verifizieren, DTS schließen, offline extrahieren und Auto-Admission prüfen. | Abruf und späterer Append verlangen getrennte Freigaben. Duplicate Assurance und E.13 bleiben Pflicht. |
 | 2 | P0 **Ersten realen Filing-Receipt und PIT-Witness abnehmen** | Original bytes, DTS, Source und Accounting fachlich prüfen. Isoliert bootstrappen, atomar importieren und identisch wiederholen. | Schreibende Schritte einzeln freigeben. Duplicate Assurance und E.13-Grenze dokumentieren. |
 | 3 | P0 **Markt- und Security-Evidence vorbereiten** | Basic/Lizenz, SPY mit Vorlauf, historisch belegte Security-Epochen, Exits, Split/Adjustment. Separaten Raw/All-SIP-Runner-Plan an die Datenverträge binden. | Offline-Artefaktprüfung möglich. Jeder neue Provider-Call braucht ausdrückliche Freigabe. |
 | 4 | P1 **Isolierten 50er-Aufbau und fachliche Qualifikation** | SEC/Arelle/Accounting wiederverwenden, eigene Canonical-Lineage und Marktshards prüfen, E.13-Erweiterung und reproduzierbaren PIT-Join abnehmen. | Neue Datenbank-/Import- und Review-Freigabe. Bereits vorhandene Evidenz offline prüfen. |
@@ -285,6 +288,20 @@ Historische Task-IDs und Commit-/Auditbindungen stehen in der [vollständigen Ti
 - **Nächster Schritt:** Einen neuen D.11-Teilbatch offline prüfen, Quarantäne bewerten und erst nach separater Freigabe den isolierten Append und E.13 prüfen.
 - **Evidenz:** [Runbook](f01_historical_50_manual_ingestion_runbook.md) · [Ruleset](../scripts/f01_task9_auto_admission.py) · [Tests](../tests/test_f01_task9_auto_admission.py).
 
+#### Task 9.3 – Next Real Filing Auto-Admission & Append Preparation
+
+- **Datum:** 2026-11-25
+- **Git-Stand:** `SEC-integration`, Basis-HEAD `15d02c5b9d1ae31f1ad8363839d6eb66ac2a8097`, sauberer Ausgangsbaum. Dokumentation uncommittet.
+- **Status:** COMPLETED für die Vorbereitung.
+- **Ziel:** Einen zweiten, disjunkten D.11-Originalfall und seine sichere spätere Aufnahme vorbereiten.
+- **Änderungen:** NKE `0000320187-16-000264` ausgewählt. Neue Selection und hashbenannter Beleg im eigenen Job `f01-task9-nke-02`. Keine Codeänderung.
+- **Tests:** Vier gezielte Offline-Tests, Ruff, `git diff --check`, Hashvergleich und read-only CLI-Preflights. Isolierte Lineage mit Dateisperre, `mode=ro&immutable=1` und `query_only` geprüft.
+- **Ergebnis:** Bootstrap-SHA, initialer Receipt, Version 2, zwei Facts, zwei Occurrences, null Storage-Verletzungen und fehlende neue Accession bestätigt. Keine Mutation. E.13 bleibt nutzerberichtete Baseline.
+- **Neue Blocker:** Originale fehlen. Exact DTS, Source- und Accounting-Evidenz für das neue Filing stehen aus. Kein Abruf, Bootstrap, Import oder Replay ausgeführt.
+- **Geschlossene Blocker:** Konkreter zweiter Scope, gebundene Selection und überprüfte strukturelle Append-Voraussetzungen liegen vor.
+- **Nächster Schritt:** Abruffreigabe separat einholen. Danach Verification, Offline-DTS, Arelle und Auto-Admission ausführen.
+- **Evidenz:** [Task-9.3-Runbook](f01_task93_nke_append_runbook.md) · [Job und Belege](</G:/TraWalpResearch/import-artifacts/f01-task9-ingestion-preparation-v1/f01-task9-nke-02>).
+
 ## 18. Evidence & Source Index
 
 | Thema | Maßgebliche Quellen |
@@ -294,6 +311,7 @@ Historische Task-IDs und Commit-/Auditbindungen stehen in der [vollständigen Ti
 | Inception, Forward und Economic | [Shadow-Vertrag](f-shadow-execution-v1.md), [Forward](../reports/f_forward_sip_shadow_contract_audit.md), [Reales Observation-Gate](../reports/shadow_pre_inception_final_audit.md), [Policy B](../reports/shadow_policy_b_implementation_audit.md) |
 | D.11 Retirement und Expansion | [Retirement](f01_legacy_migration_retirement.md), [Canonical-Vertrag](f01_canonical_deduplication_contract.md), [50er-Vorbereitung](f01_historical_50_research_preparation.md) |
 | Task 9 manuelle Aufnahme | [Runbook](f01_historical_50_manual_ingestion_runbook.md), [Architektur](f01_historical_50_ingestion_architecture.md), [Source Review](f01_historical_50_source_admission.md), [Accounting Review](f01_historical_50_accounting_admission.md) |
+| Task 9.3 zweites NKE-Filing | [PowerShell-Ablauf](f01_task93_nke_append_runbook.md), [Selection und Read-only-Belege](</G:/TraWalpResearch/import-artifacts/f01-task9-ingestion-preparation-v1/f01-task9-nke-02>) |
 | G0–G6 historisch | [Copy-Preparation](f01_migration_preparation_script.md), [G3](f01_migration_rehearsal_script.md), [G4–G6 V1](f01_migration_acceptance_script.md), [Acceptance V2](f01_acceptance_v2.md), [Approval](f01_acceptance_v2_approval.json) |
 | SEC, Arelle, Canonical und E.13 | [Bulk](f01_sec_bulk_download.md), [Filing](f01_original_filing_evidence.md), [Pilotimport](f01_sec_bulk_pilot_import.md), [E.13](../reports/f01_canonical_research_reader_audit.md), [E.5](../reports/f01_historical_pit_qualification_audit.md) |
 | Historical Market und Security | [D.6](../reports/f01_historical_security_50_issuer_preflight_audit.md), [D.7](../reports/f01_historical_market_feasibility_audit.md), [D.8](f01_alpaca_historical_sip_coverage.md), [U1](../reports/f_u1_research_parked_status.md) |
@@ -309,5 +327,5 @@ Die D.10-Baseline prüfte die fünf kleinen Originalseals gegen V2. Historische 
 
 ## 20. Next Recommended Task
 
-**Task 9.2 · Nächster disjunkter D.11-Teilbatch.** Auto-Admission mit aktueller Selection und neuen gebundenen Filings vorprüfen. Quarantäne fachlich untersuchen und geeignete Filings erst nach separater Freigabe in der isolierten Lineage aufnehmen. Vor einer Ausweitung auf weitere D.6-Filings den Parent-Scope versioniert erweitern. [PowerShell-Runbook](f01_historical_50_manual_ingestion_runbook.md)
+**Task 9.3 · Zweiten NKE-Fall manuell vorbereiten.** Die publizierte Selection für `0000320187-16-000264` verwenden und den konkreten Abruf separat autorisieren. Nach Originalverifikation und Auto-Admission den Append lesend vorprüfen. [PowerShell-Runbook](f01_task93_nke_append_runbook.md)
 
