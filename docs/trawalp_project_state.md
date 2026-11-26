@@ -8,7 +8,7 @@ Der neue Canonical-A-V1-Pfad funktioniert für einen real verifizierten Sieben-E
 
 ## 2. Current Status
 
-**Aktualisiert am 26.11.2026 · Task 9.6.1.** Branch `SEC-integration`, sauberer Ausgangs-HEAD `406a7aa04d05b099b8359a537b6d6a69afa32fdc`, Implementierung im uncommitteten Arbeitsstand. Der SEC-Pilot-Receipt für COST und ORCL weist 16 Requests und 8.762.917 archivierte Bytes aus. Beide Originalsets wurden revalidiert und warten auf die 2012er-Taxonomien. [Task-9.6.1-Manifest](</G:/TraWalpResearch/import-artifacts/f01-task961-taxonomy-resolution-v1/095e37465b3727a96a3080063c04cb5452a2565cde9fb502ddf320c6a880bbe9/manifest.json>)
+**Aktualisiert am 26.11.2026 · Task 9.6.2.** Branch `SEC-integration`, sauberer Ausgangs-HEAD `1cb7638fa0c9edb382f16afdedc6c608824281f8`, Implementierung im uncommitteten Arbeitsstand. Der neue One-Shot-Einstieg ist offline geprüft. Task 9.6.1 bleibt der jüngste reale DTS-Nachweis für COST und ORCL. Beide Filings stehen dort auf `DTS_INCOMPLETE`. [One-Shot-Einstieg](../scripts/run_f01_task962.py) · [Task-9.6.1-Manifest](</G:/TraWalpResearch/import-artifacts/f01-task961-taxonomy-resolution-v1/095e37465b3727a96a3080063c04cb5452a2565cde9fb502ddf320c6a880bbe9/manifest.json>)
 
 | Gegenstand | Implementierung | Belegte Validierung | Freigabe oder Grenze |
 | --- | --- | --- | --- |
@@ -28,7 +28,7 @@ Der neue Canonical-A-V1-Pfad funktioniert für einen real verifizierten Sieben-E
 | Zweites NKE-Filing | Job f01-task9-nke-02 mit lokaler Source-, DTS- und Extraction-Evidenz. | Task 9.5 bestätigte vier Facts, vier Occurrences, zwei Receipts und die höchste Dataset-Version 3. | Reales Replay und E.13-Erfolg für das Folgefiling stammen aus der Nutzerbaseline. Task 9.5 prüfte den Storage lesend. |
 | Companyfacts Bulk-Staging | F01_D6_COMPANYFACTS_STAGING_V1 veröffentlicht. | SQLite-SHA-256 und 120.477 retrospektive Kandidaten bestätigt. | UNVERIFIED_COMPANYFACTS_RESEARCH_STAGING. Original-PIT und Canonical separat. |
 | Historische Readiness | AUDIT_COMPLETE_PLAN_ONLY | D.6 und SPY lesend inventarisiert. | Vollständiger technischer oder PIT-qualifizierter D.6-Start unbelegt. [Task-9.5-Audit](f01_task95_historical_data_readiness.md) |
-| Historische Beschaffung | SEC-Pilot `SEC_BLOCK_COMPLETE`, Taxonomie-Resolver offline geprüft | 341 verifizierte Originalsets und 339 gebundene ältere Shards. COST und ORCL haben `DTS_INCOMPLETE`. | Separate Taxonomie-Freigaben erforderlich. [Task-9.6.1-Runbook](f01_task961_taxonomy_resolution_runbook.md) |
+| Historische Beschaffung | SEC-Pilot `SEC_BLOCK_COMPLETE`, One-Shot offline geprüft | 341 verifizierte Originalsets und 339 gebundene ältere Shards. COST und ORCL haben `DTS_INCOMPLETE`. | Der explizite Aufruf von Task 9.6.2 autorisiert den begrenzten Taxonomie-Scope. [One-Shot-Einstieg](../scripts/run_f01_task962.py) |
 | Produktiver Cutover | `PLANNED` als gesonderte Entscheidung | `UNKNOWN` | `BLOCKED`; V2-D `NOT_RELEASED` |
 
 Die letzten vorhandenen Real-Gates wurden für diese Baseline nicht erneut gestartet. Der aktuelle Betriebszustand eines eventuell extern betriebenen Journals oder Brokerkontos ist `UNKNOWN`. [Freigabematrix](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1/status_matrix.csv>) · [Acceptance V2](f01_acceptance_v2.md) · [Observation-Gate](../reports/shadow_pre_inception_final_audit.md)
@@ -88,6 +88,7 @@ Der aktive produktive Pfad und das E.11-Research-Paket teilen Teile der Fachlogi
 - **Historische Daten-Readiness:** Die CLI inventarisiert 50 CIKs und SPY schreibgeschützt und veröffentlicht Coverage, Fundamental-Gaps, C1-Readiness und den priorisierten Backfill-Plan. [Task-9.5-Audit](f01_task95_historical_data_readiness.md)
 - **Historisches Reuse und Backfill:** Der neue Runner trennt Datei-, XBRL-, Accounting- und Reader-Nachweise. Er sichert rohe SPY-Seiten und SEC-Dokumente separat. Nur der ausgewählte autorisierte Block kann schreiben. [Task-9.6-Runbook](f01_task96_historical_acquisition_runbook.md)
 - **Historische Taxonomien:** `process` löst exakte URIs rekursiv gegen die vorhandene Arelle-Bindung und einen SHA-256-adressierten Cache auf. Native Kataloge und geprüfte Zuordnungen für herkömmliche ZIPs liefern Paketprovenienz. Der separat autorisierte Beschaffungsschritt nutzt Response-Receipts und atomare Checkpoints. Arelle 2.47.5 lädt die geprüften Bytes aus einer isolierten Offline-Cache-Ansicht. [Task-9.6.1-Runbook](f01_task961_taxonomy_resolution_runbook.md)
+- **One-Shot für COST/ORCL:** Der Task-9.6.2-Aufruf bindet die Original-Receipts und den Task-9.6.1-Belegsatz. Er prüft offizielle 2012er-Quellen per HTTPS, speichert Antworten und Request-Journale und übergibt den vollständigen DTS an die bestehende Offline-Verarbeitung. Die Task-9.6-Berichtssicht liest die neuen Processing-Reports aus dem separaten Output. [One-Shot-Einstieg](../scripts/run_f01_task962.py)
 - **Wartung:** D.9 erstellte Repository-/Storage-Inventar, Dependency-Graph und Cleanup-Manifest. D.11 entfernte den ausschließlich migrationsbezogenen Rehearsal-Code und verlagerte gemeinsame Research-Fingerprints. [D.9 Abschluss](</G:/TraWalpResearch/import-artifacts/f01-comprehensive-audit-20261123-v1/final_audit.md>) · [Retirement](f01_legacy_migration_retirement.md)
 
 ## 7. SEC, Arelle & Fundamental Research
@@ -197,7 +198,7 @@ Die [Task-Timeline](</G:/TraWalpResearch/import-artifacts/f01-project-state-base
 | Historisch | **G0–G6-Reproduzierbarkeit.** Alte Bindungen und Resultate bleiben dokumentiert. Prüfungen mit entfernten Originaldatenbankbytes sind lokal nicht mehr ausführbar. |
 | Historisch | **Reale G5-Abnahme.** Der historische 8F.3C-Gate bleibt unbelegt. Die neue Lineage braucht ihre eigene Receipt-/Resume-Abnahme. |
 | P1 | **Original-Accessions.** Nach dem SEC-Pilot für COST und ORCL fehlen 2.611 Originale. Task 9.6 dokumentiert die ursprüngliche Blockaufteilung und die getrennte Metadata-/Amendment-Prüfung. [Historischer Restbedarf](</G:/TraWalpResearch/import-artifacts/f01-task96-historical-acquisition-v1/81950c9139bb87880983c70bd1f89e6d2260ed7880c6583191b0209d6c90fa7e/sec_remaining_downloads.json>) |
-| P1 | **COST-/ORCL-DTS.** Beide Filings benötigen US-GAAP, US-Types, COUNTRY und DEI vom 31.01.2012. COST benötigt zusätzlich INVEST. Paketverfügbarkeit, tatsächliche Downloadgrößen und transitive Abhängigkeiten brauchen eigene Beschaffungs- und Prüfnachweise. [Task-9.6.1-Runbook](f01_task961_taxonomy_resolution_runbook.md) |
+| P1 | **COST-/ORCL-DTS.** Beide Filings benötigen US-GAAP, US-Types, COUNTRY und DEI vom 31.01.2012. COST benötigt zusätzlich INVEST. Der One-Shot-Lauf muss die tatsächlich erreichbaren Quellen, die transitive Closure und Arelle pro Filing belegen. [One-Shot-Einstieg](../scripts/run_f01_task962.py) |
 | P0 | **Accounting-Lücken.** CAT-DTS und OCF, ACN Issuer Shares, NVDA PPE-only, Debt/ROIC sowie betroffene Filing-Versionen mit passenden Quellen klären. |
 | P0 | **Provider- und Speicherrechte.** Kostenfreien Alpaca-Scope, Archive-Rights und konkreten authorized Batch dokumentieren. |
 | P0 | **SIP und Warm-up.** SPY, 300 Mindest-/320 Ladevorlaufsessions und nach Security qualifizierte Daily-Lücken schließen. Geeignete Quellen vor 2016 und aktuelle Rechte bleiben unklar. |
@@ -229,7 +230,7 @@ Die [Task-Timeline](</G:/TraWalpResearch/import-artifacts/f01-project-state-base
 | 0 | P0 **Task 9.6 Offline-Meilenstein** | Quellenabgleich, Shares-Diagnose, SEC- und SPY-Preflights veröffentlicht. [Task-9.6-Manifest](</G:/TraWalpResearch/import-artifacts/f01-task96-historical-acquisition-v1/81950c9139bb87880983c70bd1f89e6d2260ed7880c6583191b0209d6c90fa7e/manifest.json>) | Keine Provideranfrage. |
 | 1 | P0 **Erster autorisierter SPY-Block** | Historische SIP/all-Berechtigung, Aufbewahrung und Backup klären. 2016er Block mit Rohseiten und Checkpoints ausführen. [Task-9.6-Runbook](f01_task96_historical_acquisition_runbook.md) | Separate Genehmigung. |
 | 2 | P0 **Task 9.6 Security und Issuer-Daily** | Epochen, Actions und Exits klären. Daily-Plan darauf begrenzen. [Task-9.5-Audit](f01_task95_historical_data_readiness.md) | Separate Autorisierung je Datenblock. |
-| 3 | P1 **Taxonomien für den abgeschlossenen SEC-Pilot binden** | FASB- und SEC-Ausgaben prüfen, die fünf Schemas samt Folgedateien binden und `taxonomy-report` für COST/ORCL erneut ausführen. Realen Arelle-Shard und Accounting-Evidence pro Filing abnehmen. [Task-9.6.1-Runbook](f01_task961_taxonomy_resolution_runbook.md) | Separate Taxonomie-Freigaben je Quelle. |
+| 3 | P1 **COST/ORCL per One-Shot verarbeiten** | Der Aufruf prüft FASB-/SEC-Quellen, archiviert Teilfortschritt und verarbeitet jedes Filing mit vollständiger Closure offline. Die reale Abnahme folgt anhand der erzeugten DTS-, Extraktions- und Accounting-Belege. [One-Shot-Einstieg](../scripts/run_f01_task962.py) | Expliziter Skriptaufruf für maximal 30 Requests und 128 MiB pro Lauf. |
 | 4 | P1 **Isolierten 50er-Aufbau und fachliche Qualifikation** | SEC/Arelle/Accounting wiederverwenden, eigene Canonical-Lineage und Marktshards prüfen, E.13-Erweiterung und reproduzierbaren PIT-Join abnehmen. | Neue Datenbank-/Import- und Review-Freigabe. Bereits vorhandene Evidenz offline prüfen. |
 | 5 | P1 **Strategien und operative Entscheidung** | Erforderliche Coverage und Universe/PIT bestanden. Fixierte A–F-/F-Scopes, costs, echtes neues OOS/Robustheit, auf spätere Readiness begrenzter Entscheidungsauftrag. | Kein Replay oder Betrieb ohne separaten Scope und Gates. |
 
@@ -391,6 +392,20 @@ Historische Task-IDs und Commit-/Auditbindungen stehen in der [vollständigen Ti
 - **Nächster Schritt:** FASB- und SEC-Beschaffungsblöcke separat prüfen und genehmigen oder geprüfte lokale Pakete registrieren. Danach `taxonomy-report` erneut ausführen.
 - **Evidenz:** [Runbook](f01_task961_taxonomy_resolution_runbook.md) · [Manifest und SHA-256-Bindungen](</G:/TraWalpResearch/import-artifacts/f01-task961-taxonomy-resolution-v1/095e37465b3727a96a3080063c04cb5452a2565cde9fb502ddf320c6a880bbe9/manifest.json>)
 
+#### Task 9.6.2 – One-Shot Taxonomy Acquisition & COST/ORCL Arelle Completion
+
+- **Datum:** 2026-11-26
+- **Git-Stand:** `SEC-integration` bei `1cb7638fa0c9edb382f16afdedc6c608824281f8`, uncommitteter Arbeitsstand.
+- **Status:** COMPLETED im Implementierungs- und Offline-Testscope. Realer Taxonomieabruf und Extraktion ausstehend.
+- **Ziel:** Wiederholbarer Ein-Befehl-Ablauf für die 2012er-Taxonomien und die vorhandenen COST-/ORCL-Filings.
+- **Änderungen:** Der neue Einstieg bindet Task-9.6.1-Evidenz, beide Originalsets und einen eigenen Ausführungsvertrag. Er teilt 30 Requests, 128 MiB Payload und 30 Requests pro Minute über die offiziellen Quellen und persistiert Limiter, Resume-Belege und einen Status je Lauf. Er nutzt den vorhandenen Resolver, Cache, Arelle 2.47.5 und die bestehenden Accounting-Regeln. Neue Processing-Reports sind für die Task-9.6-Berichtssicht lesbar.
+- **Tests:** 72 fokussierte Offline-Tests mit Arelle 2.47.5 bestanden. Der Offline-Smoke-Test revalidierte die echten Originalsets mit 16 Dokumenten und erzeugte bei zehn gemockten HEAD-404-Antworten `PARTIAL_BLOCKED` für beide Filings. Ruff und `git diff --check` bestanden.
+- **Ergebnis:** Der One-Shot-Pfad ist einsatzbereit. Der Smoke-Test belegt den blockierten Pfad auf den echten Eingaben. Der vollständige Pfad ist mit synthetischen Taxonomie- und Extraktionsbelegen geprüft. Canonical-Import und PIT-Trading sind gesperrt.
+- **Neue Blocker:** Verfügbarkeit und Bytes der historischen Quellen sowie die tatsächliche DTS-Closure sind bis zum autorisierten Lauf offen.
+- **Geschlossene Blocker:** Der One-Shot-Aufruf übernimmt die begrenzte Taxonomie-Autorisierung und das Resume.
+- **Nächster Schritt:** `.\.venv\Scripts\python.exe -B scripts/run_f01_task962.py` einmal bewusst ausführen und den erzeugten Status je Filing abnehmen.
+- **Evidenz:** [One-Shot-Einstieg](../scripts/run_f01_task962.py) · [Offline-Tests](../tests/test_f01_task962.py). Das Laufmanifest entsteht unter `G:/TraWalpResearch/import-artifacts/f01-task962-taxonomy-completion-v1`.
+
 ## 18. Evidence & Source Index
 
 | Thema | Maßgebliche Quellen |
@@ -405,6 +420,7 @@ Historische Task-IDs und Commit-/Auditbindungen stehen in der [vollständigen Ti
 | Task 9.5 Historische Readiness | [Task-9.5-Audit](f01_task95_historical_data_readiness.md), [v2-Manifest](</G:/TraWalpResearch/import-artifacts/f01-task95-historical-data-readiness-v2/manifest.json>), [Task-9.6-Plan](</G:/TraWalpResearch/import-artifacts/f01-task95-historical-data-readiness-v2/acquisition_plan.json>) |
 | Task 9.6 Historische Beschaffung | [Task-9.6-Runbook](f01_task96_historical_acquisition_runbook.md), [Task-9.6-Manifest](</G:/TraWalpResearch/import-artifacts/f01-task96-historical-acquisition-v1/81950c9139bb87880983c70bd1f89e6d2260ed7880c6583191b0209d6c90fa7e/manifest.json>), [Restbedarf](</G:/TraWalpResearch/import-artifacts/f01-task96-historical-acquisition-v1/81950c9139bb87880983c70bd1f89e6d2260ed7880c6583191b0209d6c90fa7e/sec_remaining_downloads.json>) |
 | Task 9.6.1 Historische DTS | [Task-9.6.1-Runbook](f01_task961_taxonomy_resolution_runbook.md), [Manifest](</G:/TraWalpResearch/import-artifacts/f01-task961-taxonomy-resolution-v1/095e37465b3727a96a3080063c04cb5452a2565cde9fb502ddf320c6a880bbe9/manifest.json>) |
+| Task 9.6.2 One-Shot | [Einstieg](../scripts/run_f01_task962.py), [Tests](../tests/test_f01_task962.py) |
 | G0–G6 historisch | [Copy-Preparation](f01_migration_preparation_script.md), [G3](f01_migration_rehearsal_script.md), [G4–G6 V1](f01_migration_acceptance_script.md), [Acceptance V2](f01_acceptance_v2.md), [Approval](f01_acceptance_v2_approval.json) |
 | SEC, Arelle, Canonical und E.13 | [Bulk](f01_sec_bulk_download.md), [Filing](f01_original_filing_evidence.md), [Pilotimport](f01_sec_bulk_pilot_import.md), [E.13](../reports/f01_canonical_research_reader_audit.md), [E.5](../reports/f01_historical_pit_qualification_audit.md) |
 | Historical Market und Security | [D.6](../reports/f01_historical_security_50_issuer_preflight_audit.md), [D.7](../reports/f01_historical_market_feasibility_audit.md), [D.8](f01_alpaca_historical_sip_coverage.md), [U1](../reports/f_u1_research_parked_status.md) |
@@ -420,8 +436,8 @@ Die D.10-Baseline prüfte die fünf kleinen Originalseals gegen V2. Historische 
 
 ## 20. Next Recommended Task
 
-**COST-/ORCL-DTS vervollständigen.** Die FASB- und SEC-Quellen für 2012 prüfen und getrennt
-genehmigen oder geprüfte lokale Archive registrieren. Nach der Beschaffung die rekursive DTS mit
-`taxonomy-report` prüfen und bei vollständiger Closure die Extraktion abnehmen.
-Der SPY-Block 2016 und historische Security-Epochen haben eigene Freigabe- und Evidenzschritte.
-[Task-9.6.1-Runbook](f01_task961_taxonomy_resolution_runbook.md)
+**COST-/ORCL-DTS vervollständigen.** `.\.venv\Scripts\python.exe -B scripts/run_f01_task962.py`
+startet die begrenzte Taxonomie-Beschaffung, Wiederaufnahme und Offline-Verarbeitung. Der
+Konsolenstatus und das Laufmanifest unterscheiden vollständige Extraktion, Teilfortschritt
+und Ausführungsfehler. Der SPY-Block 2016 und historische Security-Epochen haben eigene
+Freigabe- und Evidenzschritte. [One-Shot-Einstieg](../scripts/run_f01_task962.py)

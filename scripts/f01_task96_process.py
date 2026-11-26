@@ -27,14 +27,15 @@ BLOCKERS = {
 }
 
 
-def progress_for(block_id, rows, evidence, *, process=False, taxonomy_cache=CACHE):
+def progress_for(block_id, rows, evidence, *, process=False, taxonomy_cache=CACHE, shard_root=None):
     code = current_code()
     produced = []
     resolver = None
+    shard_root = shard_root or SHARD_ROOT
     if process:
-        SHARD_ROOT.parent.mkdir(exist_ok=True)
-        task9.bulk.directory(SHARD_ROOT.parent)
-        task9.filing.safe_directory(SHARD_ROOT)
+        shard_root.parent.mkdir(exist_ok=True)
+        task9.bulk.directory(shard_root.parent)
+        task9.filing.safe_directory(shard_root)
     with read_database(STAGING / "companyfacts-staging.sqlite3", {}, STAGE_DATABASE) as db:
         for row in rows:
             pair = key(row)
@@ -73,7 +74,7 @@ def progress_for(block_id, rows, evidence, *, process=False, taxonomy_cache=CACH
                 source = checked_original(Path(proof["directory"]), row, proof["documents"])
                 if resolver is None:
                     resolver = Resolver(root=taxonomy_cache)
-                result = extract(row, source, block_id, code, resolver, db)
+                result = extract(row, source, block_id, code, resolver, db, shard_root=shard_root)
                 produced.append(result)
             except (*METADATA_EXCEPTIONS, ET.ParseError, subprocess.TimeoutExpired) as exc:
                 produced.append(
@@ -158,10 +159,11 @@ def verified_worker_output(run, **request):
     return result
 
 
-def extract(row, source, block_id, code, resolver, db):
+def extract(row, source, block_id, code, resolver, db, *, shard_root=None):
+    shard_root = shard_root or SHARD_ROOT
     filing_id = task9.review.filing_key(row)
     scope = {"block": block_id, "source": source, "row": row, "code": code}
-    job = task9.filing.safe_directory(SHARD_ROOT / fingerprint(scope))
+    job = task9.filing.safe_directory(shard_root / fingerprint(scope))
     source_sha = fingerprint(source)
     receipt = {"cik": row["cik"], "accession": row["accession"], "source_sha256": source_sha}
     plugin = task9.filing.verified_sec_plugin(resolver.arelle)
@@ -197,7 +199,7 @@ def extract(row, source, block_id, code, resolver, db):
             )
         extraction_job = task9.filing.safe_directory(job / f"dts-{closure_sha[:12]}")
         try:
-            with TemporaryDirectory(prefix="offline-", dir=SHARD_ROOT) as temp:
+            with TemporaryDirectory(prefix="offline-", dir=shard_root) as temp:
                 isolated = copy(processor)
                 isolated.directory = Path(temp)
                 isolated.cache = isolated.directory / "cache"
@@ -230,7 +232,8 @@ def extract(row, source, block_id, code, resolver, db):
         "shard_sha256": digest(job / f"{row['accession']}-extraction.json"),
     }
     report = auto.batch_report({filing_id: decision}, bindings)
-    report_sha = publish(job / f"accounting-{fingerprint(report)}.json", report)
+    accounting_path = job / f"accounting-{fingerprint(report)}.json"
+    report_sha = publish(accounting_path, report)
     facts = []
     for record in db.execute(
         """SELECT candidate_id,taxonomy,tag,unit,period_start,period_end,
@@ -270,6 +273,7 @@ def extract(row, source, block_id, code, resolver, db):
         "runtime": shard.get("runtime"),
         "facts_extracted": len(shard["observations"]),
         "accounting_sha256": report_sha,
+        "accounting_path": str(accounting_path),
         "v1_admitted_candidates": report["summary"]["facts_admitted"],
         "pit": "PIT_EVIDENCE_INCOMPLETE",
     }

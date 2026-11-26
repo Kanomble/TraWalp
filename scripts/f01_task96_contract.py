@@ -14,6 +14,7 @@ REPO = Path(__file__).resolve().parents[1]
 RESEARCH = Path("G:/TraWalpResearch")
 ARTIFACTS = RESEARCH / "import-artifacts"
 OUTPUT = ARTIFACTS / "f01-task96-historical-acquisition-v1"
+TASK962_OUTPUT = ARTIFACTS / "f01-task962-taxonomy-completion-v1"
 PARENT = ARTIFACTS / "f01-task95-historical-data-readiness-v2"
 STAGING = RESEARCH / "research-databases/f01-companyfacts-staging-historical50-v1"
 JOBS = RESEARCH / "sec-originals/f01-task96-acquisition-v1"

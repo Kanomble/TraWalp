@@ -391,6 +391,8 @@ class Resolver:
         for uri, required in expected.items():
             if uri in namespaces and required and required != {namespaces[uri]}:
                 results[uri].update(status="QUARANTINED", reason="IMPORT_NAMESPACE_MISMATCH")
+            elif uri in results and required and results[uri]["status"] != "BOUND":
+                results[uri]["import_namespaces"] = sorted(required)
         return results
 
     def materialize(self, folder, closure):

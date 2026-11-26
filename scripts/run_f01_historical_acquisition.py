@@ -18,6 +18,7 @@ from f01_task96_contract import (  # noqa: E402
     JOBS,
     MARKET,
     OUTPUT,
+    TASK962_OUTPUT,
     Plan,
     allocation,
     authorization,
@@ -401,10 +402,9 @@ def active_report():
 
 
 def local_processing_results(plan):
-    if not OUTPUT.is_dir():
-        return []
     results = []
-    for path in sorted(OUTPUT.glob("processing-*.json")):
+    sources = {p for root in (OUTPUT, TASK962_OUTPUT) for p in root.glob("processing-*.json")}
+    for path in sorted(sources):
         record = plan.inputs.json(path)
         require(
             path.name == f"processing-{fingerprint(record)}.json"
