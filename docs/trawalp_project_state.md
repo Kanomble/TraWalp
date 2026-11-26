@@ -8,7 +8,7 @@ Der neue Canonical-A-V1-Pfad funktioniert für einen real verifizierten Sieben-E
 
 ## 2. Current Status
 
-**Aktualisiert am 25.11.2026 · Task 9.5.** Geprüfter Branch SEC-integration, sauberer Ausgangs-HEAD b3a1944d0c64925f2cee6f2cdf7defcdd12932cf. Task 9.5 liegt uncommittet vor. Der Offline-Audit und der Task-9.6-Plan sind veröffentlicht. [Task-9.5-Audit](f01_task95_historical_data_readiness.md)
+**Aktualisiert am 25.11.2026 · Task 9.6.** Branch SEC-integration, sauberer Ausgangs-HEAD 5a7dd2b61a41b8306fdee8d144cd0a3065ab47c1. Task 9.6 liegt uncommittet vor. Lokaler Abgleich und beide Pilot-Preflights sind veröffentlicht. [Task-9.6-Manifest](</G:/TraWalpResearch/import-artifacts/f01-task96-historical-acquisition-v1/81950c9139bb87880983c70bd1f89e6d2260ed7880c6583191b0209d6c90fa7e/manifest.json>)
 
 | Gegenstand | Implementierung | Belegte Validierung | Freigabe oder Grenze |
 | --- | --- | --- | --- |
@@ -28,6 +28,7 @@ Der neue Canonical-A-V1-Pfad funktioniert für einen real verifizierten Sieben-E
 | Zweites NKE-Filing | Job f01-task9-nke-02 mit lokaler Source-, DTS- und Extraction-Evidenz. | Task 9.5 bestätigte vier Facts, vier Occurrences, zwei Receipts und die höchste Dataset-Version 3. | Reales Replay und E.13-Erfolg für das Folgefiling stammen aus der Nutzerbaseline. Task 9.5 prüfte den Storage lesend. |
 | Companyfacts Bulk-Staging | F01_D6_COMPANYFACTS_STAGING_V1 veröffentlicht. | SQLite-SHA-256 und 120.477 retrospektive Kandidaten bestätigt. | UNVERIFIED_COMPANYFACTS_RESEARCH_STAGING. Original-PIT und Canonical separat. |
 | Historische Readiness | AUDIT_COMPLETE_PLAN_ONLY | D.6 und SPY lesend inventarisiert. | Vollständiger technischer oder PIT-qualifizierter D.6-Start unbelegt. [Task-9.5-Audit](f01_task95_historical_data_readiness.md) |
+| Historische Beschaffung | OFFLINE_REUSE_AND_PILOT_PREFLIGHT_COMPLETE | Alle 17 Reuse-Blöcke abgeglichen. 339 Originalsets und Shards wiederverwendbar. SEC-/SPY-Resume offline getestet. | Netzwerkfreigaben für die einzelnen Pilotblöcke offen. [Task-9.6-Runbook](f01_task96_historical_acquisition_runbook.md) |
 | Produktiver Cutover | `PLANNED` als gesonderte Entscheidung | `UNKNOWN` | `BLOCKED`; V2-D `NOT_RELEASED` |
 
 Die letzten vorhandenen Real-Gates wurden für diese Baseline nicht erneut gestartet. Der aktuelle Betriebszustand eines eventuell extern betriebenen Journals oder Brokerkontos ist `UNKNOWN`. [Freigabematrix](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1/status_matrix.csv>) · [Acceptance V2](f01_acceptance_v2.md) · [Observation-Gate](../reports/shadow_pre_inception_final_audit.md)
@@ -52,6 +53,7 @@ Historische Strategieaussagen setzen geprüfte Inputs und einen dokumentierten U
 | 50er-Erweiterung | [Offline-Preflight und Ziel-Lineage](f01_historical_50_research_preparation.md), [Task-9-Architektur](f01_historical_50_ingestion_architecture.md) | D.6/D.11-Bindung → SEC-/DTS-/Arelle-Phasen → manuelle oder evidenzbasierte Admission → separat autorisierter Canonical-Append → Duplicate Assurance und E.13-Grenzprobe. Der zweite NKE-Fall nutzt den vorhandenen Bootstrap. |
 | Companyfacts-Staging | [Task-9.4-Vertrag](f01_task94_historical50_bulk_staging.md) | Gebundene D.6-Member → Rohbeobachtungen und konservative Metrikzuordnung → eigener SQLite-Zielordner mit `retrospective_fundamentals` und Coverage pro CIK, Jahr und Metrik. Historische Originale und PIT bleiben eigene Evidenz. |
 | Historische Readiness | [Task-9.5-Audit](f01_task95_historical_data_readiness.md) | Gebundene Quellen → Offline-Coverage und Gap-Katalog → separat autorisierbare Beschaffungsblöcke. |
+| Beschaffung und Reuse | [Runner](../scripts/run_f01_historical_acquisition.py) | Gebundener 9.5-Plan → Offline-Evidence, Coverage und neuer Preflight je Block → separat autorisierte SEC-/SPY-Operation mit Checkpoint → lokale Original-/DTS-/Accounting-Evidenz. Canonical-Import folgt einem eigenen Vertrag. |
 
 Der aktive produktive Pfad und das E.11-Research-Paket teilen Teile der Fachlogik. Die operative Readiness und Provenienz jeder Datenquelle bleiben separate Verträge. [Code-Inventar mit SHA-256](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1/architecture_inventory.json>)
 
@@ -71,6 +73,7 @@ Der aktive produktive Pfad und das E.11-Research-Paket teilen Teile der Fachlogi
 | 24.11. | D.11 legt den aktiven Copy-Rehearsal-Pfad still, sichert gleichschlüsselige Canonical-Konflikte ab und erstellt den ersten Offline-Batch für die 50er-Erweiterung. | Neue Source-Gates, Datenbank und Trading bleiben offen. |
 | 24.11. | Task 9 übernimmt den zuvor als 8F.3D.12 geplanten Ausbau und implementiert die manuelle Filing-Pipeline. | Erstes NKE-Filing vorgeschlagen. Reale Downloads, Extraktion und Import bleiben manuell. |
 | 25.11. | Task 9.5 verifiziert das veröffentlichte Staging und quantifiziert Markt-, Security- und SEC-Lücken sowie die Eingangsanforderungen von C1. | Keine Download- oder Trading-Freigabe. |
+| 25.11. | Task 9.6 prüft vorhandene Originalbytes und Arelle-Shards, erweitert die retrospektive Shares-Sicht und bereitet SEC-/SPY-Piloten mit Resume vor. | Erste Providerläufe warten auf Scope-Freigaben. |
 
 [Vollständige Git-Chronologie](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1/git_chronology.csv>) · [Quellengebundene Task-Timeline](</G:/TraWalpResearch/import-artifacts/f01-project-state-baseline-v1/task_timeline.csv>)
 
@@ -83,9 +86,12 @@ Der aktive produktive Pfad und das E.11-Research-Paket teilen Teile der Fachlogi
 - **Canonical Deduplication:** Der A-V1-Key und seine partiellen Unique-Indizes gelten weiter. Widersprüchliche Inhalte für denselben Key innerhalb eines Requests werden atomar abgewiesen. Die isolierte Duplicate Assurance prüft Storage und optionale PIT-Zeugen. [Canonical-Vertrag](f01_canonical_deduplication_contract.md)
 - **Historische Filing-Aufnahme:** Die Task-9-CLI verbindet manuellen Erwerb und Byteverifikation, DTS, resümierbare Arelle-Shards, zwei typisierte Reviews und einen atomaren Filing-Receipt. Der erste Adapter lässt geprüfte konsolidierte USD-Instant-Facts für Assets und Cash zu. [Runbook](f01_historical_50_manual_ingestion_runbook.md)
 - **Historische Daten-Readiness:** Die CLI inventarisiert 50 CIKs und SPY schreibgeschützt und veröffentlicht Coverage, Fundamental-Gaps, C1-Readiness und den priorisierten Backfill-Plan. [Task-9.5-Audit](f01_task95_historical_data_readiness.md)
+- **Historisches Reuse und Backfill:** Der neue Runner trennt Datei-, XBRL-, Accounting- und Reader-Nachweise. Er sichert rohe SPY-Seiten und SEC-Dokumente separat. Nur der ausgewählte autorisierte Block kann schreiben. [Task-9.6-Runbook](f01_task96_historical_acquisition_runbook.md)
 - **Wartung:** D.9 erstellte Repository-/Storage-Inventar, Dependency-Graph und Cleanup-Manifest. D.11 entfernte den ausschließlich migrationsbezogenen Rehearsal-Code und verlagerte gemeinsame Research-Fingerprints. [D.9 Abschluss](</G:/TraWalpResearch/import-artifacts/f01-comprehensive-audit-20261123-v1/final_audit.md>) · [Retirement](f01_legacy_migration_retirement.md)
 
 ## 7. SEC, Arelle & Fundamental Research
+
+**Task 9.6.** 2.664 Dokumente aus 339 Originalsets stimmen mit den gebundenen Dateihashes überein. 337 waren im Task-9.5-Stand als lokal und byteunverifiziert ausgewiesen. 339 bestehende Arelle-Shards und ihre lokalen DTS-Bindungen wurden abgeglichen. 4.234 exakte Facts in 321 Filings sind an die vorhandene E.11/E.13-Evidenz gebunden. Vier NKE-Facts behalten die archivierten Zulassungen. Keine neuen Canonical- oder Original-PIT-Werte. [Lokaler Reuse](</G:/TraWalpResearch/import-artifacts/f01-task96-historical-acquisition-v1/81950c9139bb87880983c70bd1f89e6d2260ed7880c6583191b0209d6c90fa7e/local_reuse_report.json>)
 
 **Task 9.5.** Das reale Staging ist veröffentlicht und hashverifiziert. 2.613 der erwarteten 2.952 CIK-/Accession-Paare fehlen in den geprüften Caches. 337 lokale Einträge sind byteunverifiziert, zwei NKE-Originalsätze gegen ihre publizierten Hashes geprüft. [Task-9.5-Audit](f01_task95_historical_data_readiness.md)
 
@@ -107,6 +113,8 @@ Der aktive produktive Pfad und das E.11-Research-Paket teilen Teile der Fachlogi
 
 ## 8. Market Data & Historical Coverage
 
+**Task 9.6.** SEC- und SPY-Piloten sind ausführbar nach getrennter Autorisierung. Der erste SPY-Block bindet 252 SIP/all-Daily-Sessions vom 04.01.–30.12.2016. Insgesamt fehlen weiter 4.238 SPY-Sessions. Zehn Fenster warten auf Alpaca-Berechtigung, sieben auf eine geeignete Vor-2016-Quelle. 51 Security-/Action-Blöcke und 913 Issuer-Daily-Blöcke bleiben an historische Epochen gebunden. [Task-9.6-Runbook](f01_task96_historical_acquisition_runbook.md)
+
 **Task 9.5.** Ab 2010 umfasst der XNYS-Horizont 4.238 Sessions bis 06.11.2026. Der SIP/all-Plan enthält 217.076 Emittenten-Symbolsessions als Obergrenze und 4.238 fehlende SPY-Sessions einschließlich 320 exakter Vorlaufsessions. Historische Listing- und Exit-Grenzen bestimmen die Bestellmengen. [Task-9.5-Audit](f01_task95_historical_data_readiness.md)
 
 Der D.11 Fundamental-Batch plant ohne vorausgesetzte Trading-Freigabe. Feed, Adjustment, Corporate Actions, Security-Epochen und SPY-Warm-up bleiben eigenständige PIT-Evidence-Gates. [50er-Vorbereitung](f01_historical_50_research_preparation.md)
@@ -118,6 +126,8 @@ Der D.11 Fundamental-Batch plant ohne vorausgesetzte Trading-Freigabe. Feed, Adj
 **Provider.** Die protokollierte Alpaca-Probe vom 23.11.2026 weist 25 HTTP-Antworten und kleine historische SIP-Fenster aus 2016/2018/2019/2025 aus. Der historische Basic-Rahmen mit verzögertem SIP ist dokumentiert. Die Tarifzuordnung dieses Laufes und dauerhafte Archivierungsrechte sind in den Probe-Artefakten `UNVERIFIED`. Massive wies Bars aus 2018 und 2022 mit HTTP 403 ab und lieferte neuere Bars sowie einzelne ältere Referenzpunkte. Das ist kein Ersatz für eine lückenlose SIP-Reihe oder einen Security-Master. Die D.8-Schätzung von 73–146 Antwortseiten gilt nur für acht Kontrollsymbole. Der 50er-Download-Runner wurde im abgebrochenen Auftrag nicht erkennbar implementiert. [D.7 Audit](../reports/f01_historical_market_feasibility_audit.md) · [D.8 Vertragsauswertung](f01_alpaca_historical_sip_coverage.md)
 
 ## 9. Databases, Migration & Storage
+
+**Task 9.6.** Staging, drei Canonical-Lineages und der Forward-SPY-Eingang wurden gepinnt und lesend geprüft. Veröffentlichte Bestände bleiben unverändert. Neue Reports sind hashgebunden. Für spätere Downloads und Arelle-Evidence existieren separate Verzeichnisse und Budgets. [Task-9.6-Manifest](</G:/TraWalpResearch/import-artifacts/f01-task96-historical-acquisition-v1/81950c9139bb87880983c70bd1f89e6d2260ed7880c6583191b0209d6c90fa7e/manifest.json>)
 
 **Task 9.5.** Legacy-/Forward-Bars, U0, das Task-9.4-Staging und drei Canonical-Bestände wurden schreibgeschützt geöffnet. Der Backfill ist auf rund 104 GiB inklusive Reserve und rund 80 GiB Backup geschätzt. Freier Platz beim Audit mindestens 177 GiB auf G: und 118 GiB auf F:. Backup-Trennung und Restore separat belegen. [Task-9.5-Audit](f01_task95_historical_data_readiness.md)
 
@@ -136,6 +146,8 @@ Der gebundene V2-Bericht nennt 2.618 PIT-/Accounting-Vergleiche, zwölf unverän
 **Kapazität.** D.9 berichtete am 23.11.2026 **90,020 GiB** frei, **2,037 GiB** bedingt rückgewinnbar und **0 Bytes** zur Löschung freigegeben. Der neue Quellenlauf maß davon getrennt **96.656.535.552 freie Bytes** auf G: (rund 90,018 GiB). Eine erneute Speicherinventur des gesamten Datenträgers fand nicht statt. **75,37 GiB** zusätzlicher SEC-Arbeitsbedarf und **128,75 GiB** mit vollständiger neuer Kopie auf G: bleiben D.9-Schätzungen auf Basis des 339-Filing-Pilots, 2.352 Lücken und Reserve. Ein zweites physisches Laufwerk ist nach Projektvorgabe eine geplante Option; Buchstabe, Kapazität, Archivpfad, Dateisystem und geprüfte Restore-Strategie sind `UNKNOWN`. Pfadgebundene alte Verifikation kann eine reine Verschiebung verweigern. [D.9 Speicher](</G:/TraWalpResearch/import-artifacts/f01-comprehensive-audit-20261123-v1/final_audit.md>) · [Freigabeplan](</G:/TraWalpResearch/import-artifacts/f01-comprehensive-audit-20261123-v1/cleanup_authorization_plan.md>)
 
 ## 10. Historical Security & PIT Correctness
+
+**Task 9.6.** Die neue Sicht findet 2.555 DEI-Cover-Shares-Kandidaten in 659 Emittenten-Jahren. Share-Class- und Reporting-Scope bleiben zu prüfen. Die Diagnose findet keine hinreichende Folge von vier direkten, zeitlich zusammenpassenden OCF-Quartalen unter ihren Regeln. Staging-TTM, Debt-Synthesen, Quality/Valuation-Zusammensetzung und Handelbarkeit bleiben von Original- und PIT-Nachweisen abhängig.
 
 **Task 9.5.** Für die D.6-Erweiterung ist kein vollständiger technischer oder PIT-qualifizierter C1-Start belegt. Die 92 datierten Security-Zeugen tragen keine durchgehende Epoch- oder Corporate-Action-Freigabe. Die U0-Rekonstruktion 2022–2026 bleibt separat gebunden. [Task-9.5-Audit](f01_task95_historical_data_readiness.md)
 
@@ -183,7 +195,7 @@ Die [Task-Timeline](</G:/TraWalpResearch/import-artifacts/f01-project-state-base
 | P0 | **Kapazität der neuen Lineage.** Task 9 erfasste 190.956.511.232 freie Bytes auf G: und 127.081.201.664 auf F:. Physische Trennung und Restore-Fähigkeit von F: brauchen eine eigene Prüfung. |
 | Historisch | **G0–G6-Reproduzierbarkeit.** Alte Bindungen und Resultate bleiben dokumentiert. Prüfungen mit entfernten Originaldatenbankbytes sind lokal nicht mehr ausführbar. |
 | Historisch | **Reale G5-Abnahme.** Der historische 8F.3C-Gate bleibt unbelegt. Die neue Lineage braucht ihre eigene Receipt-/Resume-Abnahme. |
-| P1 | **Original-Accessions.** 2.613 fehlen im Task-9.4-Scope, davon 2.585 in 138 Task-9.6-Planblöcken. DTS, Accounting und PIT separat qualifizieren. |
+| P1 | **Original-Accessions.** Task 9.6 bestätigt nach Cache-/Evidence-Abgleich 2.613 fehlende Originale. Davon stehen 2.585 in 138 Beschaffungsblöcken. 28 bleiben in getrennter Metadata-/Amendment-Prüfung. Der erste SEC-Block umfasst je ein 10-Q für COST und ORCL. [Restbedarf](</G:/TraWalpResearch/import-artifacts/f01-task96-historical-acquisition-v1/81950c9139bb87880983c70bd1f89e6d2260ed7880c6583191b0209d6c90fa7e/sec_remaining_downloads.json>) |
 | P0 | **Accounting-Lücken.** CAT-DTS und OCF, ACN Issuer Shares, NVDA PPE-only, Debt/ROIC sowie betroffene Filing-Versionen mit passenden Quellen klären. |
 | P0 | **Provider- und Speicherrechte.** Kostenfreien Alpaca-Scope, Archive-Rights und konkreten authorized Batch dokumentieren. |
 | P0 | **SIP und Warm-up.** SPY, 300 Mindest-/320 Ladevorlaufsessions und nach Security qualifizierte Daily-Lücken schließen. Geeignete Quellen vor 2016 und aktuelle Rechte bleiben unklar. |
@@ -212,10 +224,10 @@ Die [Task-Timeline](</G:/TraWalpResearch/import-artifacts/f01-project-state-base
 
 | Reihenfolge | Prio und Arbeit | Abhängigkeit und prüfbares Ergebnis | Freigabe / offline |
 | --- | --- | --- | --- |
-| 0 | P0 **Task 9.5 abgeschlossen** | Realer Offline-Audit und Beschaffungsplan. [Task-9.5-Audit](f01_task95_historical_data_readiness.md) | Separate Autorisierung je Datenblock. |
-| 1 | P0 **Task 9.6 SPY und Provider** | Rechte, exakten Scope, Warm-up und Budget für den ersten Block binden. [Task-9.5-Audit](f01_task95_historical_data_readiness.md) | Separate Autorisierung je Datenblock. |
+| 0 | P0 **Task 9.6 Offline-Meilenstein** | Quellenabgleich, Shares-Diagnose, SEC- und SPY-Preflights veröffentlicht. [Task-9.6-Manifest](</G:/TraWalpResearch/import-artifacts/f01-task96-historical-acquisition-v1/81950c9139bb87880983c70bd1f89e6d2260ed7880c6583191b0209d6c90fa7e/manifest.json>) | Keine Provideranfrage. |
+| 1 | P0 **Erster autorisierter SPY-Block** | Historische SIP/all-Berechtigung, Aufbewahrung und Backup klären. 2016er Block mit Rohseiten und Checkpoints ausführen. [Task-9.6-Runbook](f01_task96_historical_acquisition_runbook.md) | Separate Genehmigung. |
 | 2 | P0 **Task 9.6 Security und Issuer-Daily** | Epochen, Actions und Exits klären. Daily-Plan darauf begrenzen. [Task-9.5-Audit](f01_task95_historical_data_readiness.md) | Separate Autorisierung je Datenblock. |
-| 3 | P1 **Task 9.6 SEC-Originalblöcke** | Lokal wiederverwenden, Accessions und SHA binden, Resume prüfen. [Task-9.5-Audit](f01_task95_historical_data_readiness.md) | Separate Autorisierung je Datenblock. |
+| 3 | P1 **Erster autorisierter SEC-Block** | COST und ORCL mit gebundenem Scope, Cache-Reuse und Resume abnehmen. Offline DTS/Arelle und Accounting-Evidence nachziehen. [Task-9.6-Runbook](f01_task96_historical_acquisition_runbook.md) | Separate Genehmigung. |
 | 4 | P1 **Isolierten 50er-Aufbau und fachliche Qualifikation** | SEC/Arelle/Accounting wiederverwenden, eigene Canonical-Lineage und Marktshards prüfen, E.13-Erweiterung und reproduzierbaren PIT-Join abnehmen. | Neue Datenbank-/Import- und Review-Freigabe. Bereits vorhandene Evidenz offline prüfen. |
 | 5 | P1 **Strategien und operative Entscheidung** | Erforderliche Coverage und Universe/PIT bestanden. Fixierte A–F-/F-Scopes, costs, echtes neues OOS/Robustheit, auf spätere Readiness begrenzter Entscheidungsauftrag. | Kein Replay oder Betrieb ohne separaten Scope und Gates. |
 
@@ -348,6 +360,21 @@ Historische Task-IDs und Commit-/Auditbindungen stehen in der [vollständigen Ti
 - **Folgetask** Task 9.6 mit lokalem Reuse und separat autorisiertem SPY-/Warm-up-Block beginnen.
   [Task-9.5-Audit](f01_task95_historical_data_readiness.md)
 
+#### Task 9.6 – Historical Data Acquisition, SEC Evidence Reuse & Automated Backfill
+
+- **Datum und Git** 2026-11-25, SEC-integration, sauberer Ausgangs-HEAD 5a7dd2b61a41b8306fdee8d144cd0a3065ab47c1.
+  Arbeitsänderungen uncommittet.
+- **Änderung** Hashgebundene Offline-Inventur aller 17 Reuse-Blöcke, konservative Shares-Normalisierung,
+  Arelle-/Accounting-Evidence-Adapter und getrennt autorisierbare SEC-/SPY-Runner mit Budgets und Resume.
+- **Tests** 15 neue fokussierte Offline-Fälle und gezielte Task-9-Regressionen. Ruff, git diff --check,
+  CLI- und Manifestprüfung. Realer Offline-Blocklauf mit 20 wiederverwendeten Shards.
+- **Ergebnis** 339 byteverifizierte Originalsets, 339 gebundene Shards, 4.234 historische E.11/E.13-Fact-Zeugen
+  in 321 Filings und 2.555 neue retrospektive Shares-Kandidaten. 2.613 Originale fehlen weiterhin, darunter
+  2.585 beschaffbare Plan-Accessions nach Freigabe. Kein Providerabruf, keine Datenbank- oder Strategiemutation.
+- **Blocker** 4.238 SPY-Sessions offen. Vor-2016-Quelle, Entitlements und Aufbewahrung, Security-Epochen,
+  OCF-TTM, Reporting-Scope und vollständige PIT-Evidence bleiben zu qualifizieren.
+- **Nächster Schritt** Pilot-Scope einzeln autorisieren, erst SPY 2016 und SEC für COST/ORCL prüfen. [Task-9.6-Runbook](f01_task96_historical_acquisition_runbook.md) · [Task-9.6-Manifest](</G:/TraWalpResearch/import-artifacts/f01-task96-historical-acquisition-v1/81950c9139bb87880983c70bd1f89e6d2260ed7880c6583191b0209d6c90fa7e/manifest.json>)
+
 ## 18. Evidence & Source Index
 
 | Thema | Maßgebliche Quellen |
@@ -360,6 +387,7 @@ Historische Task-IDs und Commit-/Auditbindungen stehen in der [vollständigen Ti
 | Task 9.3 zweites NKE-Filing | [PowerShell-Ablauf](f01_task93_nke_append_runbook.md), [Selection und Read-only-Belege](</G:/TraWalpResearch/import-artifacts/f01-task9-ingestion-preparation-v1/f01-task9-nke-02>) |
 | Task 9.4 Bulk Fundamentals | [Staging-Vertrag und PowerShell](f01_task94_historical50_bulk_staging.md), [50er-Preflight](</G:/TraWalpResearch/import-artifacts/f01-task94-historical50-preflight-v1/preflight.json>) |
 | Task 9.5 Historische Readiness | [Task-9.5-Audit](f01_task95_historical_data_readiness.md), [v2-Manifest](</G:/TraWalpResearch/import-artifacts/f01-task95-historical-data-readiness-v2/manifest.json>), [Task-9.6-Plan](</G:/TraWalpResearch/import-artifacts/f01-task95-historical-data-readiness-v2/acquisition_plan.json>) |
+| Task 9.6 Historische Beschaffung | [Task-9.6-Runbook](f01_task96_historical_acquisition_runbook.md), [Task-9.6-Manifest](</G:/TraWalpResearch/import-artifacts/f01-task96-historical-acquisition-v1/81950c9139bb87880983c70bd1f89e6d2260ed7880c6583191b0209d6c90fa7e/manifest.json>), [Restbedarf](</G:/TraWalpResearch/import-artifacts/f01-task96-historical-acquisition-v1/81950c9139bb87880983c70bd1f89e6d2260ed7880c6583191b0209d6c90fa7e/sec_remaining_downloads.json>) |
 | G0–G6 historisch | [Copy-Preparation](f01_migration_preparation_script.md), [G3](f01_migration_rehearsal_script.md), [G4–G6 V1](f01_migration_acceptance_script.md), [Acceptance V2](f01_acceptance_v2.md), [Approval](f01_acceptance_v2_approval.json) |
 | SEC, Arelle, Canonical und E.13 | [Bulk](f01_sec_bulk_download.md), [Filing](f01_original_filing_evidence.md), [Pilotimport](f01_sec_bulk_pilot_import.md), [E.13](../reports/f01_canonical_research_reader_audit.md), [E.5](../reports/f01_historical_pit_qualification_audit.md) |
 | Historical Market und Security | [D.6](../reports/f01_historical_security_50_issuer_preflight_audit.md), [D.7](../reports/f01_historical_market_feasibility_audit.md), [D.8](f01_alpaca_historical_sip_coverage.md), [U1](../reports/f_u1_research_parked_status.md) |
@@ -375,8 +403,8 @@ Die D.10-Baseline prüfte die fünf kleinen Originalseals gegen V2. Historische 
 
 ## 20. Next Recommended Task
 
-**Task 9.6 · Historical Data Acquisition & Resume.** Den Task-9.5-v2-Plan als Evidenzeingang binden.
-Vor dem ersten Provideraufruf Scope, Kosten, Rechte, Rate-Limits und Kapazität prüfen und separat
-freigeben. Zuerst lokale Belege und SPY/Warm-up, danach geklärte Security-Epochen und Issuer-Daily.
-Nach eigener Freigabe können SEC-Originalblöcke mit Cache-Reuse und Resume parallel vorbereitet werden.
-[Task-9.5-Audit](f01_task95_historical_data_readiness.md)
+**Task 9.6 · Separat genehmigter Pilotabruf.** Zuerst Providerrechte, Limits, Speicher und Backup prüfen.
+Den SPY-SIP/all-Block 2016 sowie den SEC-Block für COST und ORCL jeweils anhand ihrer Hashes separat
+autorisieren und ausführen. Anschließend Coverage-Gewinn, Resume und Original-/DTS-Evidence abnehmen.
+Security-Epochen, Vor-2016-Marktdaten und vollständige Champion-PIT-Qualifikation bleiben eigene Gates.
+[Task-9.6-Runbook](f01_task96_historical_acquisition_runbook.md) · [Task-9.6-Manifest](</G:/TraWalpResearch/import-artifacts/f01-task96-historical-acquisition-v1/81950c9139bb87880983c70bd1f89e6d2260ed7880c6583191b0209d6c90fa7e/manifest.json>)
