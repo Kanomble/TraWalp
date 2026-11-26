@@ -265,6 +265,22 @@ def verify_sec_listing(index, row):
     )
 
 
+def download_sec_filing(client, root, row):
+    """Download or resume one filing through the existing SEC document cache."""
+    from f01_task96_evidence import checked_original
+
+    listing, source = SEC.get_document(client, root, row, "index.json")
+    index = json.loads(listing)
+    verify_sec_listing(index, row)
+    names = dict.fromkeys(SEC.documents(row, index) + SEC.taxonomy_files(index))
+    require(len(names) <= task9.DOCUMENTS_PER_FILING - 1, "SEC_DOCUMENT_COUNT_LIMIT")
+    documents = [source]
+    for name in names:
+        _, item = SEC.get_document(client, root, row, name)
+        documents.append(item)
+    return checked_original(root.joinpath(*key(row)), row, documents)
+
+
 def sec_download(job, scope, budget, user_agent):
     from f01_task96_evidence import checked_original
 
@@ -301,18 +317,8 @@ def sec_download(job, scope, budget, user_agent):
             if original_elsewhere:
                 statuses.setdefault("_withheld", {})[filing_id] = "LOCAL_EVIDENCE_RECHECK_REQUIRED"
                 continue
-            documents = []
             try:
-                listing, source = SEC.get_document(client, root, row, "index.json")
-                index = json.loads(listing)
-                verify_sec_listing(index, row)
-                names = dict.fromkeys(SEC.documents(row, index) + SEC.taxonomy_files(index))
-                require(len(names) <= task9.DOCUMENTS_PER_FILING - 1, "SEC_DOCUMENT_COUNT_LIMIT")
-                documents = [source]
-                for name in names:
-                    _, item = SEC.get_document(client, root, row, name)
-                    documents.append(item)
-                statuses[filing_id] = checked_original(folder, row, documents)
+                statuses[filing_id] = download_sec_filing(client, root, row)
             except (ValueError, KeyError, TypeError) as exc:
                 failure = {
                     "status": "SEC_FILING_BLOCKED",

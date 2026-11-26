@@ -131,14 +131,30 @@ class RateLimiter(task9.PersistedSecOpener):
 
 
 class Downloads:
-    def __init__(self, run, responses, limiter, binding, *, opener=None):
+    def __init__(
+        self,
+        run,
+        responses,
+        limiter,
+        binding,
+        *,
+        opener=None,
+        budget=None,
+        endpoint_check=official_endpoint,
+        packages=PACKAGES,
+        user_agent=None,
+    ):
         self.run, self.responses = run, responses
-        self.budget = Budget(run / "budget.json", binding, LIMITS)
+        self.budget = budget or Budget(run / "budget.json", binding, LIMITS)
         self.opener = opener or RateLimiter(
             limiter, urllib.request.build_opener(task9.bulk.NoRedirect())
         )
-        self.agent = os.getenv("SEC_USER_AGENT") or "TraWalp Historical XBRL Research/1.0"
+        self.agent = (
+            user_agent or os.getenv("SEC_USER_AGENT") or "TraWalp Historical XBRL Research/1.0"
+        )
         self.hold = None
+        self.endpoint_check = endpoint_check
+        self.packages = packages
 
     def request(self, url, method, cap, consume):
         try:
@@ -155,7 +171,7 @@ class Downloads:
         return self.attempt(url, method, cap, consume)
 
     def attempt(self, url, method, cap, consume):
-        require(official_endpoint(url), f"TAXONOMY_ENDPOINT_OUTSIDE_CONTRACT: {url}")
+        require(self.endpoint_check(url), f"TAXONOMY_ENDPOINT_OUTSIDE_CONTRACT: {url}")
         require(not self.hold, self.hold or "PROVIDER_HOLD")
         self.budget.reserve(cap)
         journal = self.run / f"req-{self.budget.state['requests']:02}.json"
@@ -225,7 +241,7 @@ class Downloads:
         target = self.responses / fingerprint(url)[:24]
         binding = {"contract": CONTRACT, "url": url}
         if not target.exists():
-            maximum = tax.MAX_ARCHIVE if url in PACKAGES else 16 * tax.MIB
+            maximum = tax.MAX_ARCHIVE if url in self.packages else 16 * tax.MIB
             probe = self.request(
                 url,
                 "HEAD",
@@ -277,14 +293,14 @@ def content_length(response):
     return int(values[0]) if values else None
 
 
-def legacy_member(uri, family, members, single_family):
+def legacy_member(uri, family, members, single_family, *, release=tax.RELEASE):
     path = urlsplit(uri).path.lstrip("/")
-    relative = path.split("/", 2)[2]
-    version = f"{family}-{tax.RELEASE}"
-    paths = {path, f"2012/{path}", f"{version}/{relative}", f"{version}/{path}"}
+    _, year, relative = path.split("/", 2)
+    version = f"{family}-{release}"
+    paths = {path, f"{year}/{path}", f"{version}/{relative}", f"{version}/{path}"}
     paths.add(f"{family}/{relative}")
     if single_family:
-        paths.update({relative, f"{family}-2012/{relative}"})
+        paths.update({relative, f"{family}-{year}/{relative}"})
     names = paths & members.keys()
     require(len(names) <= 1, f"AMBIGUOUS_LEGACY_TAXONOMY_PATH: {uri}")
     return next(iter(names), None)
@@ -292,26 +308,29 @@ def legacy_member(uri, family, members, single_family):
 
 def package_entries(raw, url, gaps):
     """Find exact package members and recursively bind intra-release DTS references."""
-    families = PACKAGES[url]
+    return bind_release_archive(raw, url, gaps, PACKAGES[url], family_for, tax.RELEASE)
+
+
+def bind_release_archive(raw, url, gaps, families, family_lookup, release):
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         members = tax.archive_members(archive)
         package, rules = tax.package_catalog(archive, members)
         years = re.findall(r"\b(?:19|20)\d{2}\b", package.get("version") or "")
-        require(not years or set(years) == {"2012"}, "PACKAGE_VERSION_MISMATCH")
+        require(not years or set(years) == {release[:4]}, "PACKAGE_VERSION_MISMATCH")
         reviewed, seen = {}, set()
         expected = {uri: set(namespaces) for uri, namespaces in gaps.items()}
         pending = set(gaps)
         while pending:
             uri = min(pending)
             pending.remove(uri)
-            family = family_for(uri)
+            family = family_lookup(uri)
             if uri in seen or family not in families or not uri.endswith((".xsd", ".xml")):
                 continue
             seen.add(uri)
             require(len(seen) <= 1000, "RELEASE_DEPENDENCY_LIMIT")
             member = tax.member_for(uri, rules)
             if not member and package["kind"] == "LEGACY_ZIP":
-                member = legacy_member(uri, family, members, len(families) == 1)
+                member = legacy_member(uri, family, members, len(families) == 1, release=release)
             if not member:
                 continue
             data = tax.read_member(archive, members, member)

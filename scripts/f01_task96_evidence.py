@@ -351,13 +351,14 @@ def admission_archive(plan, pair, result, links, shard):
     return accepted
 
 
-def inventory(plan, *, progress=lambda _text: None):
+def inventory(plan, *, progress=lambda _text: None, metadata=None):
     parent = plan.inputs.json(PARENT / "manifest.json")
     jobs, sources, shards, dts = published_catalog(plan, parent)
     roots = [cache_root, *(job / "originals" for job in jobs)]
     if JOBS.is_dir():
         roots.extend(job / "originals" for job in sorted(JOBS.iterdir()) if job.is_dir())
-    metadata, _ = plan.metadata(plan.filings.values())
+    if metadata is None:
+        metadata, _ = plan.metadata(plan.filings.values())
     links, original_refs, scope, stored = canonical_links(plan)
     results, documents, stats = {}, [], Counter()
     for number, (pair, row) in enumerate(sorted(plan.filings.items()), 1):
