@@ -323,9 +323,15 @@ def test_dts_discovery_retries_before_accounting_and_match(tmp_path, monkeypatch
     monkeypatch.setattr(processor, "SHARD_ROOT", tmp_path)
     calls = SimpleNamespace(value=0)
     monkeypatch.setattr(
-        processor.task9,
-        "taxonomy_report",
-        lambda *a: {"status": "TAXONOMY_CLOSURE_READY", "filings": {f"{CIK}/{ACC}": {}}},
+        processor,
+        "closure_for",
+        lambda *a: {"http://www.xbrl.org/schema.xsd": {"status": "BOUND"}},
+    )
+    monkeypatch.setattr(processor.task9.filing, "verified_sec_plugin", lambda _: True)
+    monkeypatch.setattr(
+        processor.task9.filing,
+        "ArelleProcessor",
+        lambda _: SimpleNamespace(release={"version": "2.47.5"}, run=lambda **_: {}),
     )
 
     def extract_shard(job, *_):
@@ -343,7 +349,8 @@ def test_dts_discovery_retries_before_accounting_and_match(tmp_path, monkeypatch
         processor.auto, "batch_report", lambda *a: {"summary": {"facts_admitted": 0}}
     )
     db = SimpleNamespace(execute=lambda *a: [])
-    result = extract(FILING, {"directory": str(tmp_path)}, "block", "candidate", object(), db)
+    resolver = SimpleNamespace(arelle=tmp_path, materialize=lambda *_: None)
+    result = extract(FILING, {"directory": str(tmp_path)}, "block", "candidate", resolver, db)
     assert calls.value == 2 and result["status"] == "ACCOUNTING_REVIEW_REQUIRED"
     assert result["pit"] == "PIT_EVIDENCE_INCOMPLETE"
 

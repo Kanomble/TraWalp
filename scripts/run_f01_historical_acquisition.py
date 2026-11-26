@@ -37,6 +37,8 @@ from f01_task96_network import (  # noqa: E402
     spy_execution_scope,
 )  # noqa: E402
 from f01_task96_process import progress_for  # noqa: E402
+from f01_task96_taxonomy_acquisition import acquire, register  # noqa: E402
+from f01_task96_taxonomy_audit import pilot_audit  # noqa: E402
 
 from trading_system.data.canonical_facts import fingerprint  # noqa: E402
 
@@ -473,6 +475,9 @@ def main(argv=None):
             "execute",
             "resume",
             "report",
+            "taxonomy-report",
+            "taxonomy-acquire",
+            "taxonomy-register",
         ),
     )
     parser.add_argument("--block-id")
@@ -481,10 +486,31 @@ def main(argv=None):
     parser.add_argument("--authorization", type=Path)
     parser.add_argument("--authorization-sha256")
     parser.add_argument("--user-agent")
+    parser.add_argument("--taxonomy-archive", type=Path)
     args = parser.parse_args(argv)
-    plan = Plan()
     operation = args.operation
-    if operation == "status":
+    if operation == "taxonomy-acquire":
+        result = acquire(
+            args.preflight,
+            args.preflight_sha256,
+            args.authorization,
+            args.authorization_sha256,
+            args.user_agent,
+        )
+        print(encoding(result).decode(), end="")
+        return
+    if operation == "taxonomy-register":
+        require(
+            args.taxonomy_archive and args.preflight and args.preflight_sha256,
+            "TAXONOMY_ARCHIVE_AND_REVIEW_MANIFEST_REQUIRED",
+        )
+        result = register(args.taxonomy_archive, args.preflight, args.preflight_sha256)
+        print(encoding(result).decode(), end="")
+        return
+    plan = Plan()
+    if operation == "taxonomy-report":
+        result = pilot_audit(plan)
+    elif operation == "status":
         result = {
             "plan_binding": plan.binding(),
             "completed_or_resumable": read_progress(plan),
@@ -537,7 +563,11 @@ def main(argv=None):
         )
         path = cache_root() / f"processing-{fingerprint(result)}.json"
         publish(path, result)
-        result = {"path": str(path), "counts": result["counts"]}
+        result = {
+            "path": str(path),
+            "counts": result["counts"],
+            "taxonomy_acquisition": result["taxonomy_acquisition"],
+        }
     else:
         require(
             args.preflight
